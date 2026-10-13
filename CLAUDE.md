@@ -77,6 +77,17 @@ Formats in the two files differ, so keep them straight:
 - `~/.aws/credentials`: `[<profile>]` with `aws_access_key_id` / `aws_secret_access_key`.
 - `~/.aws/config`: `[profile <profile>]` (bare `[default]` for the default profile) with `endpoint_url` pointing at the RGW gateway, plus `region`. Ceph doesn't need a region, but the AWS SDKs do. AWS CLI v2 and current boto3 honor `endpoint_url` in the config file.
 
+## `tools/`: standalone croit scripts
+
+`tools/` holds admin scripts that use the croit API but are **not part of Bucketeer**. Keep them independent:
+- Single-file, executable, standard library only.
+- Configured through the shared `CROIT_*` environment variables (see `tools/README.md`), not Bucketeer's `.env`.
+- Never import anything from the app, and never import tools code into the app.
+
+`tools/croit-cert` installs the RGW/HAProxy TLS certificate through `PUT /config/rgw-ssl-cert`. When changing it:
+- Keep it idempotent and keep its exit codes stable (0 ok/unchanged, 1 error, 3 `--verify` mismatch), since it is meant to run from cron or a certbot hook.
+- Never call `/auth/logout`. croit allows one session per user, so logging out also ends that user's browser sessions.
+
 ## Open design decisions
 
 These are not settled yet. Confirm with the owner before you lock any of them in:

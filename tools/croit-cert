@@ -1,0 +1,459 @@
+#!/usr/bin/env python3
+"""Install a TLS certificate for the S3 gateways and HAProxy via the croit API.
+
+croit keeps one certificate for the object gateways (RGW); HAProxy groups in
+`http` proxy mode terminate client TLS with that same certificate. This script
+uploads a new certificate + private key (PUT /config/rgw-ssl-cert), waits for
+croit's rolling RGW restart, optionally restarts HAProxy on the HA group
+members, and can verify the certificate an endpoint actually serves.
+
+It is idempotent: when croit already has the exact certificate and key it
+exits 0 without changing anything, so it is safe to run from cron or as a
+certbot deploy hook.
+
+Standard library only; needs Python 3.8+.
+
+Examples:
+  croit-cert --cert fullchain.pem --key privkey.pem
+  croit-cert --pem haproxy.pem --restart-haproxy --verify s3.example.org
+  croit-cert --cert fullchain.pem --key privkey.pem --dry-run
+
+Environment:
+  CROIT_URL            croit API base URL, e.g. https://croit.example.org/api
+  CROIT_API_TOKEN      API token (preferred), sent as a Bearer token
+  CROIT_USERNAME       ...or a croit/LDAP user, used with CROIT_PASSWORD
+  CROIT_PASSWORD       password for CROIT_USERNAME (prompted if unset on a tty)
+  CROIT_CA_CERT_FILE   CA bundle for the croit endpoint
+  CROIT_TLS_VERIFY     set to false to skip croit TLS verification
+
+Exit codes: 0 success or already up to date, 1 error, 2 usage error,
+3 --verify found a different certificate being served.
+"""
+
+import argparse
+import base64
+import getpass
+import json
+import os
+import re
+import socket
+import ssl
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+PEM_BLOCK = re.compile(
+    r"-----BEGIN ([A-Z0-9 ]+)-----\s.*?-----END \1-----", re.DOTALL
+)
+TASK_POLL_SECONDS = 5
+EXPIRY_WARN_DAYS = 14
+
+quiet = False
+
+
+def log(msg):
+    if not quiet:
+        print(msg, flush=True)
+
+
+def die(msg, code=1):
+    print(f"croit-cert: error: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+# --- PEM handling -------------------------------------------------------------
+
+
+def pem_blocks(text):
+    """Return [(label, normalized_block)] for every PEM block in text."""
+    blocks = []
+    for m in PEM_BLOCK.finditer(text):
+        lines = [ln.strip() for ln in m.group(0).splitlines() if ln.strip()]
+        blocks.append((m.group(1), "\n".join(lines) + "\n"))
+    return blocks
+
+
+def split_bundle(text, source):
+    """Split PEM text into (certificates, private_key)."""
+    certs, keys = [], []
+    for label, block in pem_blocks(text):
+        if label == "CERTIFICATE":
+            certs.append(block)
+        elif label == "ENCRYPTED PRIVATE KEY" or "Proc-Type: 4,ENCRYPTED" in block:
+            die(f"{source}: the private key is encrypted; decrypt it first")
+        elif label.endswith("PRIVATE KEY"):
+            keys.append(block)
+    return certs, keys
+
+
+def read_file(path):
+    try:
+        with open(path, encoding="ascii") as f:
+            return f.read()
+    except (OSError, UnicodeDecodeError) as e:
+        die(f"cannot read {path}: {e}")
+
+
+def load_bundle(args):
+    """Build the croit/CivetWeb PEM: leaf certificate, chain, private key."""
+    if args.pem:
+        certs, keys = split_bundle(read_file(args.pem), args.pem)
+    else:
+        certs, _ = split_bundle(read_file(args.cert), args.cert)
+        _, keys = split_bundle(read_file(args.key), args.key)
+        if args.chain:
+            chain, _ = split_bundle(read_file(args.chain), args.chain)
+            certs += [c for c in chain if c not in certs]
+    if not certs:
+        die("no certificate found in the input")
+    if len(keys) != 1:
+        die(f"expected exactly one private key, found {len(keys)}")
+    return certs, keys[0]
+
+
+def check_bundle(certs, key):
+    """Verify the key matches the leaf certificate and the leaf is valid.
+
+    Returns the decoded leaf certificate (as the ssl module reports it).
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        leaf_path = os.path.join(tmp, "leaf.pem")
+        bundle_path = os.path.join(tmp, "bundle.pem")
+        with open(leaf_path, "w") as f:
+            f.write(certs[0])
+        with open(os.open(bundle_path, os.O_WRONLY | os.O_CREAT, 0o600), "w") as f:
+            f.write("".join(certs) + key)
+        try:
+            ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(bundle_path)
+        except ssl.SSLError as e:
+            die(f"the private key does not match the certificate ({e.reason})")
+        # Private but long-standing CPython helper; skip details if it is gone.
+        decode = getattr(ssl._ssl, "_test_decode_cert", None)
+        info = decode(leaf_path) if decode else {}
+
+    if "notAfter" in info:
+        remaining = ssl.cert_time_to_seconds(info["notAfter"]) - time.time()
+        if remaining <= 0:
+            die(f"the certificate expired on {info['notAfter']}")
+        if remaining < EXPIRY_WARN_DAYS * 86400:
+            print(
+                f"croit-cert: warning: the certificate expires on {info['notAfter']}",
+                file=sys.stderr,
+            )
+    return info
+
+
+def describe(info):
+    subject = dict(x[0] for x in info.get("subject", ()))
+    names = [v for k, v in info.get("subjectAltName", ()) if k == "DNS"]
+    parts = []
+    if subject.get("commonName"):
+        parts.append(f"CN={subject['commonName']}")
+    if names:
+        parts.append("SAN=" + ",".join(names))
+    if info.get("notAfter"):
+        parts.append(f"expires {info['notAfter']}")
+    return "; ".join(parts) or "details unavailable"
+
+
+# --- croit API ----------------------------------------------------------------
+
+
+class Croit:
+    def __init__(self, url, ca_file, verify, timeout):
+        self.base = url.rstrip("/")
+        self.timeout = timeout
+        if not verify:
+            self.ctx = ssl._create_unverified_context()
+        else:
+            self.ctx = ssl.create_default_context(cafile=ca_file or None)
+        self.auth = None
+
+    def request(self, method, path, body=None, form=None, headers=None):
+        hdrs = {"Accept": "application/json"}
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode()
+            hdrs["Content-Type"] = "application/json"
+        elif form is not None:
+            data = urllib.parse.urlencode(form).encode()
+            hdrs["Content-Type"] = "application/x-www-form-urlencoded"
+        if self.auth:
+            hdrs["Authorization"] = self.auth
+        hdrs.update(headers or {})
+        req = urllib.request.Request(self.base + path, data, hdrs, method=method)
+        try:
+            with urllib.request.urlopen(
+                req, timeout=self.timeout, context=self.ctx
+            ) as resp:
+                raw = resp.read()
+        except urllib.error.HTTPError as e:
+            die(f"{method} {path}: HTTP {e.code}: {self._error_text(e)}")
+        except (urllib.error.URLError, OSError) as e:
+            reason = getattr(e, "reason", e)
+            die(f"{method} {path}: cannot reach croit at {self.base}: {reason}")
+        return json.loads(raw) if raw else None
+
+    @staticmethod
+    def _error_text(err):
+        raw = err.read()
+        try:
+            msg = json.loads(raw)
+            text = msg.get("message", "")
+            if msg.get("details"):
+                text += f" ({msg['details']})"
+            return text or raw.decode(errors="replace")
+        except (ValueError, AttributeError):
+            return raw.decode(errors="replace")[:500] or err.reason
+
+    def login(self, token, username, password):
+        if token:
+            self.auth = f"Bearer {token}"
+            return
+        basic = base64.b64encode(f"{username}:{password}".encode()).decode()
+        reply = self.request(
+            "POST",
+            "/auth/login",
+            form={"grant_type": "client_credentials"},
+            headers={"Authorization": f"Basic {basic}"},
+        )
+        self.auth = f"Bearer {reply['access_token']}"
+        # No logout at the end: croit holds one session per user, so logging
+        # out here would also end that user's open browser sessions.
+
+    def wait_for_task(self, task, timeout):
+        """Poll a croit task until it ends; die unless it finished cleanly."""
+        task_id = task["id"]
+        deadline = time.monotonic() + timeout
+        while not task.get("done"):
+            if time.monotonic() > deadline:
+                die(f"task {task_id} still running after {timeout}s; check the croit UI")
+            time.sleep(TASK_POLL_SECONDS)
+            task = self.request("GET", f"/tasks/{task_id}")
+        if task.get("state") != "FINISHED" or task.get("statusCode") not in (0, None):
+            output = (task.get("output") or "").strip()
+            die(
+                f"task {task_id} ({task.get('name')}) ended {task.get('state')}"
+                + (f":\n{output}" if output else "")
+            )
+        return task
+
+
+# --- HAProxy ------------------------------------------------------------------
+
+
+def http_mode_haproxy_servers(croit):
+    """Map server id -> hostname for nodes running HAProxy in http mode."""
+    servers = {}
+    for group in croit.request("GET", "/servers/ha-groups") or []:
+        if group.get("haproxy") and group.get("proxyMode") == "http":
+            for member in group.get("servers", []):
+                sid = member["server"]
+                servers[sid] = member.get("serverHostname") or f"server {sid}"
+    return servers
+
+
+def haproxy_running(croit, server_id):
+    states = [
+        m.get("haproxyRunning")
+        for g in croit.request("GET", "/servers/ha-groups") or []
+        if g.get("haproxy")
+        for m in g.get("servers", [])
+        if m["server"] == server_id
+    ]
+    return bool(states) and all(states)
+
+
+def restart_haproxy(croit, settle, timeout):
+    """Restart HAProxy one node at a time so the VIPs stay served."""
+    servers = http_mode_haproxy_servers(croit)
+    if not servers:
+        log("No HA group uses HAProxy in http mode; nothing to restart.")
+        return
+    for sid, name in sorted(servers.items()):
+        log(f"Restarting HAProxy on {name} ...")
+        croit.request("POST", f"/servers/ha-groups/servers/{sid}/haproxy/restart")
+        # The restart is queued for croitd's next poll and the reported status
+        # lags, so give it time before trusting "running" again.
+        time.sleep(settle)
+        deadline = time.monotonic() + timeout
+        while not haproxy_running(croit, sid):
+            if time.monotonic() > deadline:
+                die(f"HAProxy on {name} not reported running after {timeout}s; "
+                    "stopping before touching the remaining nodes")
+            time.sleep(TASK_POLL_SECONDS)
+        log(f"HAProxy on {name} is running.")
+
+
+# --- Verification -------------------------------------------------------------
+
+
+def served_cert_der(host, port, timeout):
+    ctx = ssl._create_unverified_context()
+    with socket.create_connection((host, port), timeout=timeout) as sock:
+        with ctx.wrap_socket(sock, server_hostname=host) as tls:
+            return tls.getpeercert(binary_form=True)
+
+
+def verify_endpoints(targets, leaf_pem, timeout):
+    want = ssl.PEM_cert_to_DER_cert(leaf_pem)
+    ok = True
+    for target in targets:
+        host, _, port = target.rpartition(":") if ":" in target else (target, "", "443")
+        port = int(port)
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                got = served_cert_der(host, port, 10)
+            except OSError as e:
+                got, err = None, e
+            if got == want:
+                log(f"Verified: {host}:{port} serves the new certificate.")
+                break
+            if time.monotonic() > deadline:
+                detail = "a different certificate" if got else f"no answer ({err})"
+                print(f"croit-cert: {host}:{port} serves {detail}", file=sys.stderr)
+                ok = False
+                break
+            time.sleep(TASK_POLL_SECONDS)
+    return ok
+
+
+# --- Main ---------------------------------------------------------------------
+
+
+def env_bool(name, default=True):
+    value = os.environ.get(name, "").strip().lower()
+    return default if not value else value not in ("0", "false", "no", "off")
+
+
+def parse_args():
+    p = argparse.ArgumentParser(
+        prog="croit-cert",
+        description="Install a TLS certificate for the S3 gateways and HAProxy "
+        "via the croit API.",
+        epilog="Credentials come from CROIT_API_TOKEN, or CROIT_USERNAME and "
+        "CROIT_PASSWORD. See the script header for all environment variables.",
+    )
+    src = p.add_argument_group("certificate input (use --cert/--key or --pem)")
+    src.add_argument("--cert", help="certificate file, ideally the full chain")
+    src.add_argument("--key", help="unencrypted private key file")
+    src.add_argument("--chain", help="extra intermediate certificates, if not in --cert")
+    src.add_argument("--pem", help="one PEM file holding certificate(s) and key")
+
+    p.add_argument("--url", default=os.environ.get("CROIT_URL"),
+                   help="croit API base URL (default: $CROIT_URL)")
+    p.add_argument("--username", default=os.environ.get("CROIT_USERNAME"),
+                   help="croit user when no API token is set (default: $CROIT_USERNAME)")
+    p.add_argument("--ca-file", default=os.environ.get("CROIT_CA_CERT_FILE"),
+                   help="CA bundle for the croit endpoint (default: $CROIT_CA_CERT_FILE)")
+    p.add_argument("--insecure", action="store_true",
+                   help="do not verify croit's TLS certificate")
+    p.add_argument("--timeout", type=int, default=30,
+                   help="seconds per croit API request (default: 30)")
+
+    p.add_argument("--no-rolling-restart", action="store_true",
+                   help="do not restart the gateways; they keep serving the old "
+                   "certificate until restarted")
+    p.add_argument("--restart-haproxy", action="store_true",
+                   help="afterwards restart HAProxy, one node at a time, on members "
+                   "of HA groups in http proxy mode")
+    p.add_argument("--haproxy-settle", type=int, default=15,
+                   help="seconds to wait after each HAProxy restart (default: 15)")
+    p.add_argument("--task-timeout", type=int, default=1800,
+                   help="seconds to wait for croit tasks/restarts (default: 1800)")
+    p.add_argument("--verify", action="append", default=[], metavar="HOST[:PORT]",
+                   help="check that HOST serves the new certificate afterwards; "
+                   "repeatable (port defaults to 443)")
+    p.add_argument("--verify-timeout", type=int, default=120,
+                   help="seconds to keep retrying --verify (default: 120)")
+
+    p.add_argument("--force", action="store_true",
+                   help="upload even if croit already has this certificate")
+    p.add_argument("--dry-run", action="store_true",
+                   help="validate and compare only; change nothing")
+    p.add_argument("-q", "--quiet", action="store_true",
+                   help="print only warnings and errors (for cron)")
+
+    args = p.parse_args()
+    if args.pem and (args.cert or args.key or args.chain):
+        p.error("use either --pem or --cert/--key, not both")
+    if not args.pem and not (args.cert and args.key):
+        p.error("--cert and --key are required (or use --pem)")
+    if not args.url:
+        p.error("no croit URL: set CROIT_URL or pass --url")
+    return args
+
+
+def main():
+    global quiet
+    args = parse_args()
+    quiet = args.quiet
+
+    certs, key = load_bundle(args)
+    info = check_bundle(certs, key)
+    log(f"Certificate: {describe(info)}; {len(certs)} certificate(s) in chain.")
+
+    token = os.environ.get("CROIT_API_TOKEN")
+    password = os.environ.get("CROIT_PASSWORD")
+    if not token:
+        if not args.username:
+            die("no credentials: set CROIT_API_TOKEN, or CROIT_USERNAME and CROIT_PASSWORD")
+        if not password:
+            if not sys.stdin.isatty():
+                die("CROIT_PASSWORD is not set")
+            password = getpass.getpass(f"croit password for {args.username}: ")
+
+    verify_tls = env_bool("CROIT_TLS_VERIFY") and not args.insecure
+    croit = Croit(args.url, args.ca_file, verify_tls, args.timeout)
+    croit.login(token, args.username, password)
+
+    current_certs, current_keys = split_bundle(
+        croit.request("GET", "/config/rgw-ssl-cert") or "", "croit"
+    )
+    unchanged = current_certs == certs and current_keys == [key]
+
+    if unchanged and not args.force:
+        log("croit already has this certificate and key; nothing to upload.")
+    elif args.dry_run:
+        log("Dry run: would upload the certificate"
+            + ("" if args.no_rolling_restart else " and restart the gateways one by one")
+            + ".")
+    else:
+        log("Uploading the certificate to croit ...")
+        task = croit.request(
+            "PUT",
+            "/config/rgw-ssl-cert",
+            body={
+                "certificate": "".join(certs) + key,
+                "doRollingRestart": not args.no_rolling_restart,
+            },
+        )
+        if task and "id" in task:
+            log(f"Waiting for croit task {task['id']} ({task.get('name', 'update')}) ...")
+            croit.wait_for_task(task, args.task_timeout)
+        log("Certificate installed.")
+
+    if args.restart_haproxy:
+        if args.dry_run:
+            servers = http_mode_haproxy_servers(croit)
+            log("Dry run: would restart HAProxy on: "
+                + (", ".join(sorted(servers.values())) or "no servers"))
+        elif unchanged and not args.force:
+            log("Skipping the HAProxy restart: the certificate did not change.")
+        else:
+            restart_haproxy(croit, args.haproxy_settle, args.task_timeout)
+
+    if args.verify and not args.dry_run:
+        if not verify_endpoints(args.verify, certs[0], args.verify_timeout):
+            sys.exit(3)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)
