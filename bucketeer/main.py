@@ -19,6 +19,7 @@ from . import (
     profile,
     rgw_user,
     s3client,
+    share_links,
 )
 from .config import Settings
 from .croit import CroitClient
@@ -140,6 +141,7 @@ def create_app(
     api.include_router(buckets.router)
     api.include_router(bucket_keys.router)
     api.include_router(lifecycle.router)
+    api.include_router(share_links.router)
     api.include_router(admin.router)
     api.include_router(admin_settings.router)
     app.include_router(api)

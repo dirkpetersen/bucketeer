@@ -87,6 +87,13 @@ export const setBucketVersioning = (name, enabled) =>
 export const getBucketLifecycle = (name) => api(`/buckets/${encodeURIComponent(name)}/lifecycle`);
 export const setBucketLifecycle = (name, rules) =>
   api(`/buckets/${encodeURIComponent(name)}/lifecycle`, { method: "PUT", json: rules });
+// Share links. objects (read-only autocomplete, one page, NOT a browser) -> {prefix, entries:
+// [{key, size, lastModified}], prefixes: [{prefix}], truncated}. shareLink -> {url, expiresAt};
+// expiresIn is 60..604800 seconds. The url is a secret-bearing link: keep it in memory only.
+export const listBucketObjects = (name, prefix, limit = 20) =>
+  api(`/buckets/${encodeURIComponent(name)}/objects?prefix=${encodeURIComponent(prefix)}&limit=${limit}`);
+export const createShareLink = (name, key, expiresIn) =>
+  api(`/buckets/${encodeURIComponent(name)}/share-link`, { method: "POST", json: { key, expiresIn } });
 export const deleteBucket = (name, confirmName) =>
   api(`/buckets/${encodeURIComponent(name)}`, { method: "DELETE", json: confirmName ? { confirmName } : {} });
 

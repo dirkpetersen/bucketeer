@@ -7,6 +7,7 @@ import { confirmDialog, nameSpan } from "../components/confirm-dialog.js";
 import { createBucketDialog } from "../components/create-bucket-dialog.js";
 import { bucketKeysDialog } from "../components/bucket-keys-dialog.js";
 import { lifecycleDialog } from "../components/lifecycle-dialog.js";
+import { shareLinkDialog } from "../components/share-link-dialog.js";
 
 // The Buckets card on the home page: the user's own buckets with usage, quota and
 // budget number; create and delete. `isAdvanced()` tells whether the global
@@ -61,7 +62,7 @@ function usageBlock(b) {
   return out;
 }
 
-function row(b, onDelete, onToggle, onKeys, onLifecycle, busy) {
+function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, busy) {
   const created = b.createdAt ? new Date(b.createdAt) : null;
   const meta = h("div", { class: "bk-meta" });
   if (created && !Number.isNaN(created.getTime())) {
@@ -86,13 +87,18 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, busy) {
     title: "Delete old files or unfinished uploads automatically",
     on: { click: () => onLifecycle(b) },
   }, icon("refresh"), h("span", { class: "bk-del-l", text: "Lifecycle" }));
+  const shareBtn = h("button", {
+    class: "btn btn-sm", type: "button", disabled: busy, "aria-label": `Share link for bucket ${b.name}`,
+    title: "Create a temporary download link for one file",
+    on: { click: () => onShare(b) },
+  }, icon("download"), h("span", { class: "bk-del-l", text: "Share link" }));
   const vsw = versionSwitch(b, onToggle);
   budget.classList.add("bk-budget-slot");
   return h("li", { class: "bk-row", "data-busy": String(!!busy) },
     h("span", { class: "bk-ic", "aria-hidden": "true" }, icon("bucket")),
     h("div", { class: "bk-main" }, h("b", { class: "bk-name", text: b.name }), meta),
     usageBlock(b),
-    h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, vsw, lcBtn, keysBtn, del)));
+    h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, vsw, shareBtn, lcBtn, keysBtn, del)));
 }
 
 export function bucketsCard({ isAdvanced = () => false } = {}) {
@@ -119,7 +125,7 @@ export function bucketsCard({ isAdvanced = () => false } = {}) {
         h("div", { class: "empty-acts" }, h("button", { class: "btn btn-primary", type: "button", on: { click: create } }, icon("plus"), "Create your first bucket"))));
       return;
     }
-    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
+    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
   }
 
   function failed(err) {
@@ -205,6 +211,10 @@ export function bucketsCard({ isAdvanced = () => false } = {}) {
   async function manageLifecycle(b) {
     const res = await lifecycleDialog({ bucket: b.name });
     if (res.error && res.error.status !== 401) toast.error(res.error.message);
+  }
+
+  async function manageShare(b) {
+    await shareLinkDialog({ bucket: b.name });
   }
 
   async function toggleVersioning(b) {

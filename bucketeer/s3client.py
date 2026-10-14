@@ -64,6 +64,10 @@ class S3Clients:
     ):
         self.croit, self.settings, self.endpoints = croit, settings, endpoints
         self.factory = factory
+        # botocore logs canonical requests and SigV4 signatures at DEBUG (also for
+        # presigned URLs): keep them out of the log whatever LOG_LEVEL is.
+        for name in ("botocore", "boto3", "urllib3.connectionpool"):
+            logging.getLogger(name).setLevel(logging.WARNING)
 
     async def client_for(self, uid: str) -> Any:
         """A boto3 client signed with the first access key of RGW user `uid`.
