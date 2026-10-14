@@ -56,7 +56,7 @@ skips them too.
   reveal and copy) and the `~/.aws/config` + `~/.aws/credentials` snippets,
   with copy and download. Endpoint comes from `S3_ENDPOINT_URL` or the croit
   `.s3cfg`.
-- [ ] Stop sending the AD email to croit when auto-creating an RGW user (Q5):
+- [x] Stop sending the AD email to croit when auto-creating an RGW user (Q5):
   pass only uid and display name. Remove the `email_conflict` path and its
   message, and update the tests and CLAUDE.md.
 - [ ] Key management: create an additional key, rotate (add new, then remove
@@ -135,8 +135,8 @@ available, and fix the client and the mock if reality differs:
   rejects them, switch to id-based Sids mapped to uids in SQLite.
 - [ ] (needs cluster) Resource ARN form for buckets in a tenant
   (`arn:aws:s3:::<bucket>` vs `arn:aws:s3::<tenant>:<bucket>`).
-- [ ] (needs cluster) Duplicate-email error on `POST /s3/users`: status code and
-  wording. The resolver looks for "email" in the error text.
+- [x] (needs cluster) Duplicate-email error on `POST /s3/users`. No longer needed:
+  Bucketeer never sends an email to croit (Q5).
 - [ ] (needs cluster) Creating a uid that already exists: 409, or an idempotent
   200?
 - [ ] (needs cluster) Tenant users in `/s3/user-names` and `/s3/users`: is it

@@ -12,12 +12,13 @@ session (never from request input, never from an email address). Order:
    and refused rather than guessed. A uid that is the target of an admin mapping
    or a bucket key's RGW user is never given out by this rule (`uid_taken`,
    audit): only the mapping reaches it.
-3. Otherwise the user is created in croit (name and email from AD) and gets the
-   default user quota: the admin Settings value, else 1 TiB (Q4). Audited.
+3. Otherwise the user is created in croit with only the uid and the AD display name (never an
+   email, Q5) and gets the default user quota: the admin Settings value, else 1 TiB (Q4). Audited.
 
 Statuses (`RgwAccount.status`): `ready`, `suspended` (resolved; callers must
-refuse to act), `creation_failed` (`reason`: `email_conflict` (Q5 placeholder:
-no retry without email), `invalid_username`, `ambiguous_uid`, `uid_taken`,
+refuse to act), `creation_failed` (`reason`: `croit_rejected` (croit refused
+the create with a 4xx; not retried until the cache expires), `invalid_username`,
+`ambiguous_uid`, `uid_taken`,
 `mapping_target_missing`; shown as "contact your administrator") and
 `unavailable` (croit trouble; never cached).
 
@@ -54,7 +55,7 @@ READY, SUSPENDED = "ready", "suspended"
 CREATION_FAILED, UNAVAILABLE = "creation_failed", "unavailable"
 
 MESSAGES = {
-    "email_conflict": "Your S3 account couldn't be created, contact your administrator.",
+    "croit_rejected": "Your S3 account couldn't be created, contact your administrator.",
     "invalid_username": "Your S3 account couldn't be created, contact your administrator.",
     "ambiguous_uid": "Your S3 account couldn't be created, contact your administrator.",
     "uid_taken": "Your S3 account couldn't be created, contact your administrator.",
@@ -83,7 +84,7 @@ class RgwAccount:
         """For the browser: no keys, and no uid unless it is resolved."""
         message = None
         if self.status == CREATION_FAILED:
-            message = MESSAGES.get(self.reason or "", MESSAGES["email_conflict"])
+            message = MESSAGES.get(self.reason or "", MESSAGES["croit_rejected"])
         elif self.status == UNAVAILABLE:
             message = MSG_UNAVAILABLE
         return {
@@ -190,7 +191,7 @@ class RgwResolver:
         async def run() -> None:
             try:
                 await asyncio.wait_for(
-                    self.resolve(user.username, user.display_name, user.email), WARM_TIMEOUT
+                    self.resolve(user.username, user.display_name), WARM_TIMEOUT
                 )
             except Exception as e:  # noqa: BLE001 - best effort
                 log.warning("post-login RGW resolution for %s failed: %r", user.username, e)
@@ -201,7 +202,7 @@ class RgwResolver:
 
     # -- resolution --------------------------------------------------------
 
-    async def resolve(self, username: str, display_name: str = "", email: str = "") -> RgwAccount:
+    async def resolve(self, username: str, display_name: str = "") -> RgwAccount:
         key = username.lower()
         if (hit := self._cached(key)) is not None:
             return hit
@@ -209,7 +210,7 @@ class RgwResolver:
             if (hit := self._cached(key)) is not None:  # resolved while we waited
                 return hit
             try:
-                acct = await self._resolve(username, display_name, email)
+                acct = await self._resolve(username, display_name)
             except CroitClientError as e:
                 log.warning("RGW resolution for %s: croit unavailable (%s)", username, e)
                 return RgwAccount(username, None, UNAVAILABLE, display_name)
@@ -243,7 +244,7 @@ class RgwResolver:
     async def _get(self, uid: str) -> dict | None:
         return await self.croit.get_user(uid)
 
-    async def _resolve(self, username: str, display_name: str, email: str) -> RgwAccount:
+    async def _resolve(self, username: str, display_name: str) -> RgwAccount:
         db = self._db()
         mapping = await db.run(db.uid_mappings.get, username)
         if mapping:
@@ -299,7 +300,7 @@ class RgwResolver:
         user = await self._get(uid)
         created = False
         if user is None:
-            user = await self._create(username, uid, display_name, email)
+            user = await self._create(username, uid, display_name)
             if isinstance(user, RgwAccount):  # a refusal
                 return user
             created = True
@@ -313,13 +314,11 @@ class RgwResolver:
             quota_summary(user.get("userQuota")), created=created, source=source,
         )
 
-    async def _create(
-        self, username: str, uid: str, display_name: str, email: str
-    ) -> dict | RgwAccount:
+    async def _create(self, username: str, uid: str, display_name: str) -> dict | RgwAccount:
         tenant, bare = split_uid(uid)
         name = display_name or username
         try:
-            await self.croit.create_user(bare, name, email or None, tenant or None)
+            await self.croit.create_user(bare, name, None, tenant or None)
         except CroitUnavailable:
             raise
         except CroitError as e:
@@ -328,14 +327,12 @@ class RgwResolver:
             # Lost a race with another creator, or croit refused the request.
             if uid in await self.croit.list_user_names():
                 return await self._get(uid) or {"uid": uid}
-            if "email" in f"{e.message} {e.details or ''}".lower():
-                await self._audit(
-                    username, "rgw.user.create_failed", uid,
-                    {"reason": "email_conflict", "email": email, "croit_status": e.status},
-                )
-                return RgwAccount(username, None, CREATION_FAILED, display_name,
-                                  reason="email_conflict")
-            raise
+            await self._audit(
+                username, "rgw.user.create_failed", uid,
+                {"reason": "croit_rejected", "croit_status": e.status},
+            )
+            return RgwAccount(username, None, CREATION_FAILED, display_name,
+                              reason="croit_rejected")
         await self._apply_default_quota(username, uid, user_created=True)
         return await self._get(uid) or {"uid": uid, "name": name}
 
@@ -383,7 +380,7 @@ async def current_account(
     user: Annotated[SessionUser, Depends(require_user)], resolver: Resolver
 ) -> RgwAccount:
     """The session user's account in whatever state it is in (never raises)."""
-    return await resolver.resolve(user.username, user.display_name, user.email)
+    return await resolver.resolve(user.username, user.display_name)
 
 
 async def require_rgw_user(
