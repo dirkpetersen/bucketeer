@@ -45,6 +45,9 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "PUT /api/buckets/{name}/cors": ("bucket.cors",),
     "PUT /api/buckets/{name}/tags": ("bucket.tags",),
     "PUT /api/buckets/{name}/budget": ("bucket.budget",),
+    "PUT /api/buckets/{name}/object-lock": ("bucket.object_lock",),
+    "PUT /api/buckets/{name}/objects/retention": ("object.retention",),
+    "PUT /api/buckets/{name}/objects/legal-hold": ("object.legal_hold",),
     "PUT /api/buckets/{name}/policy": ("bucket.policy",),
     "DELETE /api/buckets/{name}/policy": ("bucket.policy_delete",),
     "POST /api/buckets/{name}/share-link": ("bucket.share_link",),
@@ -246,6 +249,21 @@ def run(tmp_path_factory, moto_server):
             {"key": "team", "value": "genomics"}]}))
     r.step("PUT /api/buckets/{name}/budget", lambda: a.put(
         "/api/buckets/alice-tag/budget", headers=H, json={"budgetNumber": "WT-999"}))
+    # object lock: default retention, then retention and legal hold of one object
+    ok(a.post("/api/buckets", headers=H, json={
+        "name": "alice-olock", "budgetNumber": "WT-4", "objectLock": True}))
+    et = a.get("/api/buckets/alice-olock/object-lock").json()["etag"]
+    r.step("PUT /api/buckets/{name}/object-lock", lambda: a.put(
+        "/api/buckets/alice-olock/object-lock", headers=H, json={
+            "etag": et, "defaultRetention": {"mode": "GOVERNANCE", "days": 1}}))
+    env.moto().put_object(Bucket="alice-olock", Key="k.txt", Body=b"x")
+    until = (datetime.now(UTC) + timedelta(days=9)).isoformat()
+    r.step("PUT /api/buckets/{name}/objects/retention", lambda: a.put(
+        "/api/buckets/alice-olock/objects/retention", params={"key": "k.txt"}, headers=H,
+        json={"mode": "GOVERNANCE", "retainUntil": until}))
+    r.step("PUT /api/buckets/{name}/objects/legal-hold", lambda: a.put(
+        "/api/buckets/alice-olock/objects/legal-hold", params={"key": "k.txt"}, headers=H,
+        json={"status": "ON"}))
     # ACLs: bucket (moto keeps these) and object (moto ignores object ACL documents)
     et = a.get("/api/buckets/alice-data/acl").json()["etag"]
     r.step("PUT /api/buckets/{name}/acl", lambda: a.put(

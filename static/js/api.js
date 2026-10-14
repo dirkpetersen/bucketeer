@@ -188,3 +188,21 @@ export const setBucketBudget = (name, budgetNumber) =>
 export const getBucketCors = (name) => api(`/buckets/${encodeURIComponent(name)}/cors`);
 export const putBucketCors = (name, body) =>
   api(`/buckets/${encodeURIComponent(name)}/cors`, { method: "PUT", json: body });
+
+// Object lock (Advanced). Default retention: get -> {enabled, defaultRetention: {mode, days|years}|null,
+// etag}; put sends {defaultRetention|null, etag, confirm?}; a COMPLIANCE default answers 409
+// {requiresConfirmation} until confirm is true, a stale etag 409 {etagMismatch, current}.
+export const getObjectLockDefault = (name) => api(`/buckets/${encodeURIComponent(name)}/object-lock`);
+export const putObjectLockDefault = (name, body) =>
+  api(`/buckets/${encodeURIComponent(name)}/object-lock`, { method: "PUT", json: body });
+// One object, chosen by key (versionId optional = latest). get -> {key, versionId, retention:
+// {mode, retainUntil}|null, legalHold: "ON"|"OFF"}. Retention put sends {mode|null, retainUntil,
+// confirm?, bypassGovernance?}; 409 carries requiresConfirmation / requiresBypass / locked.
+const lockQuery = (key, versionId) =>
+  `key=${encodeURIComponent(key)}${versionId ? `&versionId=${encodeURIComponent(versionId)}` : ""}`;
+export const getObjectLock = (name, key, versionId) =>
+  api(`/buckets/${encodeURIComponent(name)}/objects/lock?${lockQuery(key, versionId)}`);
+export const putObjectRetention = (name, key, versionId, body) =>
+  api(`/buckets/${encodeURIComponent(name)}/objects/retention?${lockQuery(key, versionId)}`, { method: "PUT", json: body });
+export const putObjectLegalHold = (name, key, versionId, status) =>
+  api(`/buckets/${encodeURIComponent(name)}/objects/legal-hold?${lockQuery(key, versionId)}`, { method: "PUT", json: { status } });

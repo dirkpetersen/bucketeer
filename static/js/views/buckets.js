@@ -16,6 +16,7 @@ import { shareLinkDialog } from "../components/share-link-dialog.js";
 import { menuButton } from "../components/menu-button.js";
 import { shareDialog } from "../components/share-dialog.js";
 import { aclDialog } from "../components/acl-dialog.js";
+import { objectLockDialog } from "../components/object-lock-dialog.js";
 
 // The Buckets card on the home page: the user's own buckets with usage, quota and
 // budget number; create and delete. `isAdvanced()` tells whether the global
@@ -70,7 +71,7 @@ function usageBlock(b) {
   return out;
 }
 
-function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPolicy, onAcl, onCors, onTags, onBudget, busy) {
+function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPolicy, onAcl, onCors, onTags, onLock, onBudget, busy) {
   const created = b.createdAt ? new Date(b.createdAt) : null;
   const meta = h("div", { class: "bk-meta" });
   if (created && !Number.isNaN(created.getTime())) {
@@ -97,6 +98,9 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPo
       { label: "Share link", icon: "download", hint: "Temporary download link for one file", onSelect: () => onShare(b) },
       ...(isAdvanced() ? [
         { label: "Bucket policy…", icon: "shield", hint: "Edit the raw access policy (JSON)", onSelect: () => onPolicy(b) },
+        ...(b.objectLock === true ? [
+          { label: "Object lock…", icon: "lock", hint: "Default retention, or retention and legal hold of one file", onSelect: () => onLock(b) },
+        ] : []),
         { label: "Tags…", icon: "tag", hint: "Label the bucket with key and value pairs", onSelect: () => onTags(b) },
         { label: "CORS rules…", icon: "sliders", hint: "Let websites use this bucket from visitors' browsers", onSelect: () => onCors(b) },
         { label: "Bucket permissions (ACL)…", icon: "users", hint: "Legacy permissions of the bucket itself", onSelect: () => onAcl(b, false) },
@@ -138,7 +142,7 @@ export function bucketsCard() {
         h("div", { class: "empty-acts" }, h("button", { class: "btn btn-primary", type: "button", on: { click: create } }, icon("plus"), "Create your first bucket"))));
       return;
     }
-    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, managePolicy, manageAcl, manageCors, manageTags, manageBudget, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
+    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, managePolicy, manageAcl, manageCors, manageTags, manageLock, manageBudget, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
   }
 
   function failed(err) {
@@ -243,6 +247,11 @@ export function bucketsCard() {
 
   async function manageTags(b) {
     const res = await tagsDialog({ bucket: b.name });
+    if (res.error && res.error.status !== 401) toast.error(res.error.message);
+  }
+
+  async function manageLock(b) {
+    const res = await objectLockDialog({ bucket: b.name });
     if (res.error && res.error.status !== 401) toast.error(res.error.message);
   }
 

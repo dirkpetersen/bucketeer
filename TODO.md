@@ -139,7 +139,7 @@ skips them too.
 - [x] Bucket and object ACLs.
 - [x] CORS rules editor.
 - [x] Bucket tagging.
-- [ ] Object lock: default retention, plus legal hold and retention for a given
+- [x] Object lock: default retention, plus legal hold and retention for a given
   object key.
 - [ ] Full lifecycle editor: transitions, prefix and tag filters.
 - [ ] Bucket notifications, with endpoints from the admin allowlist only
@@ -174,6 +174,9 @@ available, and fix the client and the mock if reality differs:
 - [ ] (needs cluster) Sharing: RGW honours a `bucketeer-share-*` statement for the
   recipient's own keys (read vs readwrite), and the cross-tenant address
   `tenant:bucket` works with the AWS CLI.
+- [ ] (needs cluster) Object lock: RGW accepts removing GOVERNANCE retention (an
+  empty `Retention` with `BypassGovernanceRetention`) and honours the bypass
+  only for the bucket owner.
 - [ ] (needs cluster) User quota: `maxObjects` null means unlimited and
   `maxSize` is in bytes (1 TiB default).
 - [ ] (needs cluster) RGW uids are case-sensitive (`Alice` and `alice` are

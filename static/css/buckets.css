@@ -297,3 +297,36 @@
   .tg-m { grid-template-columns: auto minmax(0, 1fr); }
   .tg-m-v { grid-column: 2; }
 }
+
+/* Object lock dialog (builds on .cd, .qd, .bkd and the admin .tabs) */
+.olk { width: min(40rem, calc(100vw - 2 * var(--gutter))); }
+.olk-tabs { border-bottom: 1px solid var(--border); margin-inline: calc(-1 * var(--sp-1)); }
+.olk-body { display: grid; gap: var(--sp-4); min-width: 0; }
+.cd .olk-form { padding: 0; }
+.olk-form, .olk-object, .olk-panel, .olk-rform { display: grid; gap: var(--sp-3); grid-template-columns: minmax(0, 1fr); min-width: 0; }
+.olk-form[hidden], .olk-object[hidden], .olk-panel[hidden] { display: none; }
+.olk-now { color: var(--text-muted); font-size: var(--fs-sm); }
+.bkd-opt[data-danger="true"]:has(input:checked) { border-color: var(--danger); background: var(--danger-bg); }
+.olk-period { display: grid; gap: var(--sp-2); }
+.olk-period[hidden] { display: none; }
+.olk-period-in { display: flex; gap: var(--sp-2); align-items: center; }
+.olk-unit, .olk-mode, .olk-date { width: auto; min-width: 8rem; }
+.olk-panel { padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
+.olk-status { display: grid; gap: var(--sp-1); font-size: var(--fs-sm); }
+.olk-file { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.olk-file code { font-family: var(--font-mono); font-size: var(--fs-xs); overflow-wrap: anywhere; min-width: 0; }
+.olk-file svg { width: 1rem; height: 1rem; color: var(--text-muted); flex: none; }
+.olk-line { color: var(--text-muted); }
+.olk-line b { color: var(--text); font-weight: 600; }
+.olk-hint { color: var(--text-muted); font-size: var(--fs-xs); }
+.olk-rrow { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+.olk-rrow .field { flex: 1 1 10rem; min-width: 0; }
+.olk-rrow .input { width: 100%; }
+.olk-ra { flex-wrap: wrap; }
+.olk-holdrow { display: grid; gap: var(--sp-2); justify-items: start; padding-top: var(--sp-3); border-top: 1px solid var(--border); }
+.olk-holdrow .switch-label { display: inline; }
+.olk h3 { font-size: var(--fs-md); font-weight: 650; }
+@media (max-width: 36em) {
+  .olk .bkd-body { padding: var(--sp-4); }
+  .olk-panel { padding: var(--sp-3); }
+}

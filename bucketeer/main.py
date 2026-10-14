@@ -19,6 +19,7 @@ from . import (
     cors,
     credentials,
     lifecycle,
+    object_lock,
     policy_editor,
     profile,
     rgw_user,
@@ -152,6 +153,7 @@ def create_app(
     api.include_router(policy_editor.router)
     api.include_router(cors.router)
     api.include_router(tags.router)
+    api.include_router(object_lock.router)
     api.include_router(share_links.router)
     api.include_router(acl.router)
     api.include_router(sharing.router)
