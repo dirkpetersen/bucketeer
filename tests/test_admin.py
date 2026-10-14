@@ -155,7 +155,7 @@ def test_set_user_quota(env):
     assert sent["enabled"] and sent["maxSize"] == 5 * 1024**3 and sent["maxObjects"] == -1
     (entry,) = env.audit()
     assert entry["actor"] == "bob" and entry["action"] == "admin.user.quota"
-    assert entry["target_type"] == "user" and entry["target"] == "alice"
+    assert entry["target_type"] == "rgw_user" and entry["target"] == "alice"
     d = json.loads(entry["details"]) if isinstance(entry["details"], str) else entry["details"]
     assert d["before"]["enabled"] is False and d["after"]["maxSize"] == 5 * 1024**3
 

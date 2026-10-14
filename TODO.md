@@ -100,7 +100,7 @@ skips them too.
   rules that use a legacy top-level Prefix or Filter And/Tag.
 - [x] Presigned share links, 7 days at most. Choose the object with a key field
   plus prefix autocomplete from a read-only listing (Q1); no tree browser.
-- [ ] Audit log entries for every bucket, key and share change.
+- [x] Audit log entries for every bucket, key and share change.
 
 ## Phase 3: Admin
 

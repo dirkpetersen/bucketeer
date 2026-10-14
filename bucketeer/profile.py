@@ -55,6 +55,6 @@ async def put_profile(
     old = (await db.run(db.profiles.get, user.username))["default_budget_number"]
     if value != old:
         await db.run(db.profiles.set_default_budget_number, user.username, value)
-        await db.run(db.audit.add, user.username, "profile.update", "user_profile",
+        await db.run(db.audit.add, user.username, "profile.update", "profile",
                      user.username, {"field": "default_budget_number", "old": old, "new": value})
     return _view(user, value)

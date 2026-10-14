@@ -141,7 +141,7 @@ async def set_naming(body: Body_, admin: Admin, db: Db):
         raise _bad(e) from e
     before = await db.run(load_naming, db.settings)
     await db.run(db.settings.set, NAMING_KEY, new, admin.username)
-    await _audit(db, admin, "admin.settings.naming", "settings", NAMING_KEY,
+    await _audit(db, admin, "admin.settings.naming", "setting", NAMING_KEY,
                  {"before": before, "after": new})
     return new
 
@@ -176,7 +176,7 @@ async def set_placement(body: Body_, admin: Admin, croit: Croit, db: Db):
         raise _bad(e) from e
     before = await db.run(load_placement, db.settings)
     await db.run(db.settings.set, PLACEMENT_KEY, new, admin.username)
-    await _audit(db, admin, "admin.settings.placement", "settings", PLACEMENT_KEY,
+    await _audit(db, admin, "admin.settings.placement", "setting", PLACEMENT_KEY,
                  {"before": before, "after": new})
     return _placement_view(new, rows, croit_default, None)
 
@@ -192,7 +192,7 @@ async def set_default_quota(body: Body_, admin: Admin, db: Db):
         raise _bad(e) from e
     before = await db.run(load_default_quota, db.settings)
     await db.run(db.settings.set, QUOTA_KEY, new, admin.username)
-    await _audit(db, admin, "admin.settings.default_quota", "settings", QUOTA_KEY,
+    await _audit(db, admin, "admin.settings.default_quota", "setting", QUOTA_KEY,
                  {"before": before, "after": new})
     return {"isSet": True, "quota": new}
 
@@ -203,7 +203,7 @@ async def unset_default_quota(admin: Admin, db: Db):
     if before is None:
         return {"isSet": False, "quota": None}
     await db.run(db.settings.delete, QUOTA_KEY)
-    await _audit(db, admin, "admin.settings.default_quota", "settings", QUOTA_KEY,
+    await _audit(db, admin, "admin.settings.default_quota", "setting", QUOTA_KEY,
                  {"before": before, "after": None})
     return {"isSet": False, "quota": None}
 

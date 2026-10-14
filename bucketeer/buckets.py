@@ -168,6 +168,20 @@ def _write_budget_tag(s3, bucket: str, value: str) -> None:
     )
 
 
+async def _audit_unsure(request: Request, actor: str, action: str, target: str, acct,
+                        exc: Exception, **details) -> None:
+    """Audit a failed croit mutation whose outcome is unknown (timeout, failed task, croit
+    down, 5xx): the bucket may or may not have changed. A plain refusal (croit 4xx) changed
+    nothing and is not audited. Never raises."""
+    if isinstance(exc, CroitError) and exc.status < 500:
+        return
+    try:
+        await _audit(request, actor, action, target, uid=acct.uid,
+                     error=type(exc).__name__, **details)
+    except Exception:
+        log.exception("could not audit %s for %s", action, target)
+
+
 async def _try_tag(request: Request, uid: str, short: str, value: str) -> bool:
     try:
         await request.app.state.s3.call(uid, _write_budget_tag, short, value)
@@ -372,10 +386,13 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
         except CroitError as e:
             if e.status == 409:
                 raise HTTPException(409, taken) from None
+            await _audit_unsure(request, user.username, "bucket.create_failed", full, acct, e)
             raise croit_http_error(e) from None
         except CroitTaskError as e:
+            await _audit_unsure(request, user.username, "bucket.create_failed", full, acct, e)
             raise _task_failure(e, "create the bucket") from None
         except CroitClientError as e:
+            await _audit_unsure(request, user.username, "bucket.create_failed", full, acct, e)
             raise croit_http_error(e) from None
 
         recorded = True
@@ -487,6 +504,8 @@ async def set_versioning(name: str, body: VersioningBody, request: Request, acct
         try:
             await croit.update_bucket(full, owner=None, versioning=target.upper())
         except CroitClientError as e:
+            await _audit_unsure(request, user.username, "bucket.versioning_failed", full, acct,
+                                e, before=before, wanted=target)
             raise croit_http_error(e) from None
         try:
             after = _STATES.get((await croit.get_bucket(full, owner=acct.uid)).get("versioning"))
@@ -526,10 +545,16 @@ async def delete_bucket(name: str, request: Request, acct: Account, user: User,
             "requiresConfirmation": True, "objects": objects, "bytes": size,
         })
     except CroitError as e:
+        await _audit_unsure(request, user.username, "bucket.delete_failed", full, acct, e,
+                            confirmed=confirmed)
         raise croit_http_error(e) from None
     except CroitTaskError as e:
+        await _audit_unsure(request, user.username, "bucket.delete_failed", full, acct, e,
+                            confirmed=confirmed)
         raise _task_failure(e, "delete the bucket") from None
     except CroitClientError as e:
+        await _audit_unsure(request, user.username, "bucket.delete_failed", full, acct, e,
+                            confirmed=confirmed)
         raise croit_http_error(e) from None
     await db.run(db.buckets.delete, full)
     await _audit(request, user.username, "bucket.delete", full, uid=acct.uid,

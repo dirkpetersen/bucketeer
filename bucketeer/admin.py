@@ -221,8 +221,15 @@ async def set_user_quota(uid: str, body: QuotaBody, admin: Admin, croit: Croit, 
         await croit.set_user_quota(uid, **args)
     except CroitClientError as e:
         raise croit_http_error(e) from e
-    after = _quota((await _fetch_user(croit, uid)).get("userQuota"))
-    await _audit(db, admin, "admin.user.quota", "user", uid, {"before": before, "after": after})
+    try:
+        after = _quota((await _fetch_user(croit, uid)).get("userQuota"))
+    except HTTPException:
+        # the write went through; only the read-back failed: still audit the change
+        await _audit(db, admin, "admin.user.quota", "rgw_user", uid,
+                     {"before": before, "after": None, "requested": args, "readback_failed": True})
+        raise
+    await _audit(db, admin, "admin.user.quota", "rgw_user", uid,
+                 {"before": before, "after": after})
     return {"uid": uid, "quota": after}
 
 
@@ -235,7 +242,14 @@ async def set_bucket_quota(bucket: str, body: QuotaBody, admin: Admin, croit: Cr
         await croit.set_bucket_quota(bucket, **args)
     except CroitClientError as e:
         raise croit_http_error(e) from e
-    after = _quota((await _fetch_bucket(croit, bucket)).get("bucket_quota"), zero_unlimited=True)
+    try:
+        after = _quota((await _fetch_bucket(croit, bucket)).get("bucket_quota"),
+                       zero_unlimited=True)
+    except HTTPException:
+        await _audit(db, admin, "admin.bucket.quota", "bucket", bucket,
+                     {"before": before, "after": None, "requested": args,
+                      "readback_failed": True})
+        raise
     details = {"before": before, "after": after}
     await _audit(db, admin, "admin.bucket.quota", "bucket", bucket, details)
     return {"bucket": bucket, "quota": after}
@@ -308,7 +322,7 @@ async def _set_suspended(
     if failed:
         details["keys_failed"] = failed
     action = "admin.user.suspend" if suspend else "admin.user.unsuspend"
-    await _audit(db, admin, action, "user", uid, details)
+    await _audit(db, admin, action, "rgw_user", uid, details)
     if failed:
         raise HTTPException(
             502,
