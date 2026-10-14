@@ -141,7 +141,10 @@ skips them too.
 - [x] Bucket tagging.
 - [x] Object lock: default retention, plus legal hold and retention for a given
   object key.
-- [ ] Full lifecycle editor: transitions, prefix and tag filters.
+- [ ] Full lifecycle editor: prefix and tag filters, object-size filters, and
+  expiration rules (current, noncurrent with versions-to-keep, delete-marker
+  cleanup, multipart abort), alongside the existing simple rules.
+- [ ] (blocked: Q13) Lifecycle transitions to another storage class.
 - [ ] Bucket notifications, with endpoints from the admin allowlist only
   (no broker credentials, Q6).
 - [ ] Multipart upload cleanup (list and abort).

@@ -56,6 +56,25 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 **Answer:**
 
+### Q13: May lifecycle rules move data to another storage class?
+
+- **Blocks:** TODO "Lifecycle transitions". The rest of the full lifecycle
+  editor is being built now without them.
+- **Context:** a lifecycle "transition" moves objects older than N days to a
+  different storage class, typically a cheaper, slower tier such as an
+  erasure-coded or HDD pool. Q6 decided users never pick a storage class for
+  new data. Moving data later is a related but separate choice, and it can
+  affect cost and performance on the cluster.
+- **Options:**
+  1. No transitions in Bucketeer; admins handle tiering.
+  2. Transitions allowed, but only to storage classes an admin enables for
+     this purpose on the Settings tab (default: none).
+  3. Transitions to any storage class of the bucket's placement.
+- **Recommendation:** 2. Admins decide which tiers are open for automatic
+  moves, and users can use them without seeing the rest.
+
+**Answer:**
+
 ## Resolved
 
 ### Q1: How does a user choose the object for a presigned share link?
