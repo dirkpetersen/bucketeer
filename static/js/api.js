@@ -81,6 +81,12 @@ export const createBucket = (body) => api("/buckets", { method: "POST", json: bo
 export const reconcileBuckets = () => api("/buckets/reconcile", { method: "POST" });
 export const setBucketVersioning = (name, enabled) =>
   api(`/buckets/${encodeURIComponent(name)}/versioning`, { method: "PUT", json: { enabled } });
+// Simple lifecycle rules (loaded on demand). get -> {expireCurrentDays, expireNoncurrentDays,
+// abortMultipartDays (days or null), foreignRules, versioning}. put sends all three (null removes)
+// plus confirm:true for enabling or shortening expireCurrentDays (else 409 requiresConfirmation).
+export const getBucketLifecycle = (name) => api(`/buckets/${encodeURIComponent(name)}/lifecycle`);
+export const setBucketLifecycle = (name, rules) =>
+  api(`/buckets/${encodeURIComponent(name)}/lifecycle`, { method: "PUT", json: rules });
 export const deleteBucket = (name, confirmName) =>
   api(`/buckets/${encodeURIComponent(name)}`, { method: "DELETE", json: confirmName ? { confirmName } : {} });
 

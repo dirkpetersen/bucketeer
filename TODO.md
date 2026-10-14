@@ -91,8 +91,13 @@ skips them too.
   for each key. Verify the zero-quota assumption on the real cluster.
 - [x] Bucket keys cleanup: at startup, finish or roll back bucket-key rows
   left `pending` by a crash (the same rollback as a failed create), audited.
-- [ ] Simple lifecycle rules: expire after N days, expire noncurrent versions,
+- [x] Simple lifecycle rules: expire after N days, expire noncurrent versions,
   abort incomplete multipart uploads.
+- [ ] Lifecycle polish: when the server answers 409 requiresConfirmation (rules
+  changed in another tab), reload the dialog or show the confirm prompt
+  instead of a dead-end error; offer to also enable "expire old versions" in
+  the expire-current confirm when versioning is on; add tests for foreign
+  rules that use a legacy top-level Prefix or Filter And/Tag.
 - [ ] Presigned share links, 7 days at most. Choose the object with a key field
   plus prefix autocomplete from a read-only listing (Q1); no tree browser.
 - [ ] Audit log entries for every bucket, key and share change.
