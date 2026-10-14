@@ -25,3 +25,32 @@ def settings():
     from bucketeer.config import Settings
 
     return Settings(_env_file=None, **REQUIRED)
+
+
+@pytest.fixture(scope="session")
+def moto_server():
+    """A moto S3 server on a free localhost port for the whole test session."""
+    import os
+
+    from mock.s3_bridge import endpoint_url, start_moto
+
+    saved = {k: os.environ.get(k) for k in ("NO_PROXY", "no_proxy")}
+    os.environ["NO_PROXY"] = os.environ["no_proxy"] = "127.0.0.1,localhost"
+    server = start_moto()
+    server.endpoint = endpoint_url(server)
+    yield server
+    server.stop()
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
+@pytest.fixture
+def s3_endpoint(moto_server):
+    """The moto endpoint URL, emptied of buckets before each test."""
+    import httpx
+
+    httpx.post(f"{moto_server.endpoint}/moto-api/reset", timeout=10).raise_for_status()
+    return moto_server.endpoint

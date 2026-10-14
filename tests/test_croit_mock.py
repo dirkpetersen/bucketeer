@@ -335,6 +335,16 @@ def test_delete_non_empty_bucket_flow(c):
     assert delete_bucket(c, "alice-data", token, **body).status_code == 400
 
 
+def test_ignore_warning_token_is_refused_for_another_bucket(c, app):
+    app.state.croit.set_bucket_usage("bob-shared", 1, 1)
+    token = delete_bucket(c, "alice-data").json()["ignorableWarning"]["token"]
+    sentence = app.state.croit.delete_sentence("bob-shared")
+    r = delete_bucket(c, "bob-shared", token, deleteData=True, thisWillDeleteData=sentence)
+    assert r.status_code == 400
+    assert c.get("/s3/buckets/bob-shared").status_code == 200
+    assert c.get("/s3/buckets/alice-data").status_code == 200
+
+
 def test_tenant_bucket_delete_uses_tenant_name(c):
     assert delete_bucket(c, "acme:reports").status_code == 200
     assert c.delete("/s3/users/acme%24carol").status_code == 204

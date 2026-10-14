@@ -12,6 +12,9 @@ Run standalone:  .venv/bin/python3 mock/croit_mock.py
   CROIT_MOCK_PREFIX        API prefix (default /api), so CROIT_URL=http://127.0.0.1:18080/api
   CROIT_MOCK_TASK_SECONDS  how long tasks stay RUNNING (default 0.5)
   CROIT_MOCK_ADMIN_TOKEN / CROIT_MOCK_VIEWER_TOKEN   fixed API token secrets
+  CROIT_MOCK_S3=moto       also start a moto S3 server (mock/s3_bridge.py) that mirrors the
+                           mock's buckets and keys; point S3_ENDPOINT_URL at the printed URL
+  CROIT_MOCK_S3_PORT       moto port (default 18081)
 
 In-process (tests): `create_app(seed=True, task_seconds=0)`; the state is
 `app.state.croit` (a `CroitState`). Side effects of a task apply immediately;
@@ -101,6 +104,8 @@ class MockHooks:
     bucket_deleted: Callable[[Bucket], None] | None = None
     key_added: Callable[[str, str, str], None] | None = None  # (uid, access, secret)
     key_removed: Callable[[str, str], None] | None = None  # (uid, access)
+    # (bucket) -> (objects, bytes): the real contents; overrides the stored counters
+    bucket_usage: Callable[[Bucket], tuple[int, int]] | None = None
 
 
 def new_quota() -> dict:
@@ -222,7 +227,18 @@ class CroitState:
     def _fire(self, name: str, *args):
         cb = getattr(self.hooks, name)
         if cb:
-            cb(*args)
+            try:
+                cb(*args)
+            except ApiError:
+                raise
+            except Exception as e:  # a failing S3 backend becomes an ErrorMessage
+                detail = f"{type(e).__name__}: {e}"
+                raise ApiError(500, f"S3 backend failed in {name}", detail) from e
+
+    def refresh_usage(self, bucket: Bucket):
+        """With a usage hook (moto), the real contents decide emptiness and usage."""
+        if self.hooks.bucket_usage:
+            bucket.num_objects, bucket.size_bytes = self.hooks.bucket_usage(bucket)
 
     # -- seed --
     def seed(self):
@@ -516,8 +532,8 @@ class CroitState:
             versioning="ENABLED" if (object_lock or versioning == "ENABLED") else "OFF",
             object_lock=bool(object_lock), acl=acl, placement=placement or "default-placement",
         )
+        self._fire("bucket_created", bucket)  # state changes only if the backend succeeded
         self.buckets[full] = bucket
-        self._fire("bucket_created", bucket)
         return bucket
 
     @locked
@@ -555,6 +571,7 @@ class CroitState:
         """Empty bucket: deleted at once. Non-empty: needs deleteData, the exact
         sentence and an `ignoreWarning` token issued by an earlier refusal."""
         bucket = self.get_bucket(name)
+        self.refresh_usage(bucket)
         if body["name"] != name:
             raise ApiError(400, f"The name {body['name']!r} does not match bucket {name!r}")
         if bucket.num_objects > 0:
@@ -564,9 +581,9 @@ class CroitState:
             if not (body.get("deleteData") and body.get("thisWillDeleteData") == sentence
                     and token_ok):
                 self._refuse_delete(name, sentence)
-            del self.delete_tokens[ignore_warning]
+        self._fire("bucket_deleted", bucket)  # may fail (e.g. retained objects): keep state
+        self.delete_tokens.pop(ignore_warning, None)
         del self.buckets[name]
-        self._fire("bucket_deleted", bucket)
         return bucket
 
     def _refuse_delete(self, name: str, sentence: str):
@@ -606,6 +623,7 @@ class CroitState:
         }
 
     def bucket_view(self, b: Bucket) -> dict:
+        self.refresh_usage(b)
         kib = math.ceil(b.size_bytes / 1024)
         usage = {
             "numObjects": float(b.num_objects), "num_objects": float(b.num_objects),
@@ -627,6 +645,7 @@ class CroitState:
         return {"acl": acl, "cors": [], "versioning": b.versioning}
 
     def usage_entry(self, b: Bucket) -> dict:
+        self.refresh_usage(b)
         hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
         return {
             "bucketName": b.name, "bucketOwner": b.owner,
@@ -1097,7 +1116,20 @@ def main():
     port = int(os.environ.get("CROIT_MOCK_PORT", "18080"))
     prefix = os.environ.get("CROIT_MOCK_PREFIX", "/api")
     seconds = float(os.environ.get("CROIT_MOCK_TASK_SECONDS", "0.5"))
-    app = create_app(seed=True, task_seconds=seconds, prefix=prefix)
+    bridge = None
+    kwargs = {}
+    if os.environ.get("CROIT_MOCK_S3", "").lower() == "moto":
+        try:
+            from mock.s3_bridge import S3Bridge, endpoint_url, start_moto
+        except ImportError:  # run as a script: mock/ itself is on sys.path
+            from s3_bridge import S3Bridge, endpoint_url, start_moto
+        server = start_moto(host, int(os.environ.get("CROIT_MOCK_S3_PORT", "18081")))
+        bridge = S3Bridge(endpoint_url(server))
+        kwargs = {"hooks": bridge.make_hooks(MockHooks), "rgw_endpoint": bridge.host_port}
+    app = create_app(seed=True, task_seconds=seconds, prefix=prefix, **kwargs)
+    if bridge:
+        bridge.seed_objects(app.state.croit)
+        print(f"moto S3 endpoint: S3_ENDPOINT_URL={bridge.endpoint}", flush=True)
     print(f"croit mock API: CROIT_URL=http://{host}:{port}{prefix}", flush=True)
     print(f"  admin API token:  {ADMIN_TOKEN}")
     print(f"  viewer API token: {VIEWER_TOKEN}", flush=True)

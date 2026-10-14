@@ -28,7 +28,7 @@ QUESTIONS.md. Skip it, and skip anything that depends on it.
   Mirror croit's rules: duplicate email rejected, user with buckets can't be
   deleted, `tenant$uid`. Return croit's `ErrorMessage` shape. Add a test that
   validates responses against `docs/api/api-1.yaml`.
-- [ ] S3 test backend: tests start `moto` in server mode as the S3 endpoint. The
+- [x] S3 test backend: tests start `moto` in server mode as the S3 endpoint. The
   mock croit's buckets and keys must line up with what's in moto, e.g. mock
   bucket creation also creates the bucket in moto.
 - [ ] croit client module: async httpx client, Bearer token, `ErrorMessage` →
