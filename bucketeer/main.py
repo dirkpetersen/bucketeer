@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import admin, admin_settings, auth, credentials, rgw_user
+from . import admin, admin_settings, auth, credentials, profile, rgw_user
 from .config import Settings
 from .croit import CroitClient
 from .db import DB_FILENAME, Database
@@ -116,6 +116,7 @@ def create_app(
     api.include_router(demo_router)
     api.include_router(rgw_user.router)
     api.include_router(credentials.router)
+    api.include_router(profile.router)
     api.include_router(admin.router)
     api.include_router(admin_settings.router)
     app.include_router(api)

@@ -74,7 +74,7 @@ skips them too.
   path or setting can enable it. It uses a temporary DATA_DIR and plain-http
   cookies, binds 127.0.0.1 only, and shows a "Demo mode" banner. One command:
   `.venv/bin/python3 mock/demo.py`. Document it in CLAUDE.md and README.md.
-- [ ] User profile: a profile page where users set a default budget number
+- [x] User profile: a profile page where users set a default budget number
   (index/worktag), stored in SQLite.
 - [ ] Bucket list with usage, quota and budget number. Create bucket: name
   checked against the admin naming rules, a **required** budget number

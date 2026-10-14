@@ -65,6 +65,11 @@ export const createKey = () => api("/credentials/keys", { method: "POST" });
 export const rotateKey = (accessKey) => api(`/credentials/keys/${enc(accessKey)}/rotate`, { method: "POST" });
 export const deleteKey = (accessKey) => api(`/credentials/keys/${enc(accessKey)}`, { method: "DELETE" });
 
+// The signed-in user's profile: {username, displayName, email, defaultBudgetNumber|null}.
+// Saving "" or null clears the default budget number; a 422 carries the message to show.
+export const getProfile = () => api("/profile");
+export const saveProfile = (defaultBudgetNumber) => api("/profile", { method: "PUT", json: { defaultBudgetNumber } });
+
 // Administrator endpoints (the server enforces the role on each of them).
 const enc = encodeURIComponent;
 export const adminUsers = () => api("/admin/users");

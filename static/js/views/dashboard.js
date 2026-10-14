@@ -3,6 +3,7 @@ import { icon } from "../icons.js";
 import { credentialsCard } from "./credentials.js";
 import { load, save } from "../storage.js";
 import { renderAdmin } from "./admin.js";
+import { renderProfile } from "./profile.js";
 
 const THEMES = [["system", "monitor", "Theme: system"], ["light", "sun", "Theme: light"], ["dark", "moon", "Theme: dark"]];
 
@@ -79,6 +80,9 @@ export function renderDashboard({ me, appName, onLogout, page = "home" }) {
         h("div", { class: "menu", id: menuId, popover: "auto" },
           h("div", { class: "menu-who" }, h("b", { text: name }), h("span", { text: me.email || me.username }),
             me.isAdmin && h("span", {}, h("span", { class: "chip chip-accent", text: "Administrator" }))),
+          page === "profile"
+            ? h("a", { class: "btn btn-ghost", href: "#/" }, icon("home"), "My workspace")
+            : h("a", { class: "btn btn-ghost", href: "#/profile" }, icon("user"), "Profile"),
           me.isAdmin && (page === "admin"
             ? h("a", { class: "btn btn-ghost", href: "#/" }, icon("home"), "My workspace")
             : h("a", { class: "btn btn-ghost", href: "#/admin" }, icon("shield"), "Administration")),
@@ -97,7 +101,7 @@ export function renderDashboard({ me, appName, onLogout, page = "home" }) {
 
   shell.append(
     h("a", { class: "skip-link", href: "#main", text: "Skip to content" }),
-    header, page === "admin" && me.isAdmin ? renderAdmin() : home(),
+    header, page === "admin" && me.isAdmin ? renderAdmin() : page === "profile" ? renderProfile({ me }) : home(),
     h("footer", { class: "foot", text: `${appName} · signed in as ${me.username}` }));
   return shell;
 }

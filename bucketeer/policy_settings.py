@@ -244,6 +244,13 @@ def _pattern_matches(pattern: str, name: str) -> bool:
     return _compiled(pattern).fullmatch(name, timeout=REGEX_TIMEOUT) is not None
 
 
+def pattern_matches(pattern: str, value: str) -> bool:
+    """Full-match `value` against an admin pattern, approved patterns only (see
+    `approve_pattern`). Blocking: async callers use `asyncio.to_thread`. Raises
+    TimeoutError, SettingsError."""
+    return _pattern_matches(pattern, value)
+
+
 def normalize_naming(raw: Any) -> dict[str, str]:
     """Validate the admin's naming rules; raises SettingsError. Both fields are
     optional (empty = off)."""

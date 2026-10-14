@@ -27,12 +27,13 @@ function swap(node, name) {
 const showLogin = () => swap(renderLogin({ appName, onSuccess: showDashboard }), "login");
 let me = null;
 // Hash routes: "#/admin" is the administration page (admins only; the server
-// enforces the role as well), anything else is the workspace.
+// enforces the role as well), "#/profile" the user profile, anything else is the workspace.
 function showDashboard(user = me) {
   me = user;
-  const page = location.hash === "#/admin" && me.isAdmin ? "admin" : "home";
+  const page = location.hash === "#/admin" && me.isAdmin ? "admin" : location.hash === "#/profile" ? "profile" : "home";
   swap(renderDashboard({ me, appName, onLogout: doLogout, page }), page);
-  document.title = page === "admin" ? `Administration · ${appName}` : appName;
+  const titles = { admin: "Administration", profile: "Profile" };
+  document.title = titles[page] ? `${titles[page]} · ${appName}` : appName;
 }
 window.addEventListener("hashchange", () => {
   if (current && current !== "login") showDashboard();

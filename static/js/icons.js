@@ -27,6 +27,7 @@ const PATHS = {
   plus: ["M12 5v14", "M5 12h14"],
   trash: ["M3 6h18", "M8 6V4h8v2", "M6 6l1 14h10l1-14", "M10 11v6", "M14 11v6"],
   right: ["m9 6 6 6-6 6"],
+  user: ["M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2", "M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"],
   down: ["m6 9 6 6 6-6"],
 };
 export function icon(name, cls = "icon") {

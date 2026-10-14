@@ -1,0 +1,11 @@
+/* Profile page: cards reuse the settings form styles. */
+
+.pf-grid { display: grid; gap: var(--sp-5); align-items: start; }
+@media (min-width: 56em) { .pf-grid { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); } }
+.pf-card { display: grid; gap: var(--sp-4); padding: var(--sp-5); animation: rise var(--dur-slow) var(--ease-out) both; }
+@media (max-width: 39.99em) { .pf-card { padding: var(--sp-4); } }
+.pf-list { margin: 0; display: grid; }
+.pf-row { display: grid; gap: 2px; padding: var(--sp-3) 0; border-top: 1px solid var(--border); }
+.pf-row dt { font-size: var(--fs-xs); font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+.pf-row dd { margin: 0; font-weight: 520; overflow-wrap: anywhere; }
+.pf-card .chip { text-transform: none; letter-spacing: 0; }
