@@ -101,6 +101,11 @@ class CreateBody(BaseModel):
     placement: str | None = Field(default=None, max_length=256)
 
 
+class BudgetBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    budgetNumber: str | None = Field(max_length=4096)
+
+
 class VersioningBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool
@@ -166,7 +171,11 @@ async def _audit(request: Request, actor: str, action: str, target: str, **detai
     await db.run(db.audit.add, actor, action, "bucket", target, details)
 
 
-def _write_budget_tag(s3, bucket: str, value: str) -> None:
+def _write_budget_tag(s3, bucket: str, value: str | None) -> None:
+    """Set the managed budget tag; None removes it (an administrator cleared the number)."""
+    if value is None:
+        s3docs.update_bucket_tagging(s3, bucket, lambda tags: s3docs.remove_tags(tags, BUDGET_TAG))
+        return
     s3docs.update_bucket_tagging(
         s3, bucket, lambda tags: s3docs.upsert_tags(tags, [{"Key": BUDGET_TAG, "Value": value}])
     )
@@ -202,7 +211,7 @@ async def _try_noncurrent_rule(request: Request, uid: str, short: str, days: int
     return False
 
 
-async def _try_tag(request: Request, uid: str, short: str, value: str) -> bool:
+async def _try_tag(request: Request, uid: str, short: str, value: str | None) -> bool:
     try:
         await request.app.state.s3.call(uid, _write_budget_tag, short, value)
         return True
@@ -304,7 +313,7 @@ async def list_buckets(request: Request, acct: Account):
             "budgetNumber": budget,
             "budgetMissing": budget is None,
             "keyCount": key_counts.get(full, 0),
-            "tagPending": bool(m and budget is not None and not m.get("tag_synced", 1)),
+            "tagPending": bool(m and not m.get("tag_synced", 1)),
         })
     return {"buckets": out}
 
@@ -489,16 +498,67 @@ async def reconcile(request: Request, acct: Account, user: User):
     todo = [m for m in await db.run(db.buckets.list, acct.uid)
             if not m["tag_synced"] and m["name"] in existing]
     synced, pending = [], []
-    for m in todo:
-        short = _short(m["name"])
-        if m["budget_number"] is None or await _try_tag(request, acct.uid, short,
-                                                        m["budget_number"]):
-            await db.run(db.buckets.set_tag_synced, m["name"], True)
-            await _audit(request, user.username, "bucket.tag_sync", m["name"], uid=acct.uid)
-            synced.append(short)
-        else:
-            pending.append(short)
+    async with _user_lock(request, acct.uid):  # a concurrent budget edit must not be overwritten
+        for m in todo:
+            m = await db.run(db.buckets.get, m["name"])  # fresh row: it may have changed
+            if m is None or m["tag_synced"]:
+                continue
+            short = _short(m["name"])
+            if await _try_tag(request, acct.uid, short, m["budget_number"]):
+                await db.run(db.buckets.set_tag_synced, m["name"], True)
+                await _audit(request, user.username, "bucket.tag_sync", m["name"], uid=acct.uid)
+                synced.append(short)
+            else:
+                pending.append(short)
     return {"synced": synced, "pending": pending}
+
+
+# -- budget number edit ------------------------------------------------------------
+
+
+@router.put("/{name}/budget")
+async def set_budget(name: str, body: BudgetBody, request: Request, acct: Account, user: User):
+    """Change the budget number of an own bucket: SQLite row, then the managed tag (a failed
+    tag write leaves `tag_synced = 0` and a warning; reconcile retries). Only administrators
+    may clear it. Audit `bucket.budget` with old and new value, only when it changed."""
+    db = request.app.state.db
+    short = _own_name(name)
+    full = _full(acct.uid, short)
+    try:
+        budget = await asyncio.to_thread(validate_budget_number, body.budgetNumber, db.settings)
+    except BudgetNumberError as e:
+        raise HTTPException(422, str(e)) from None
+    if budget is None and not user.is_admin:
+        raise HTTPException(422, "Enter a budget number for this bucket.")
+    async with _user_lock(request, acct.uid):
+        if not any(b.get("bucket") == full
+                   for b in await _own_buckets(request.app.state.croit, acct.uid)):
+            raise HTTPException(404, "Bucket not found.")
+        row = await db.run(db.buckets.get, full)
+        old = (row or {}).get("budget_number")
+        if row is not None and old == budget and row["tag_synced"]:
+            return {"name": short, "budgetNumber": budget, "changed": False, "tagSynced": True}
+        if row is None:
+            await db.run(db.buckets.create, full, acct.uid, budget, user.username, False)
+        else:
+            await db.run(db.buckets.set_budget_number, full, budget)
+            await db.run(db.buckets.set_tag_synced, full, False)
+        ok = await _try_tag(request, acct.uid, short, budget)
+        if ok:
+            try:
+                await db.run(db.buckets.set_tag_synced, full, True)
+            except Exception:
+                log.exception("could not mark the budget tag of %s as synced", full)
+                ok = False
+    if old != budget:
+        await _audit(request, user.username, "bucket.budget", full, uid=acct.uid,
+                     old=old, new=budget, tag_synced=ok)
+    out: dict[str, Any] = {"name": short, "budgetNumber": budget, "changed": old != budget,
+                           "tagSynced": ok}
+    if not ok:
+        out["warning"] = ("The budget number was saved, but the bucket tag could not be updated "
+                          "yet. It will be retried automatically.")
+    return out
 
 
 # -- versioning ------------------------------------------------------------------

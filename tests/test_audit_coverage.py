@@ -43,6 +43,8 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "PUT /api/buckets/{name}/versioning": ("bucket.versioning",),
     "PUT /api/buckets/{name}/lifecycle": ("bucket.lifecycle",),
     "PUT /api/buckets/{name}/cors": ("bucket.cors",),
+    "PUT /api/buckets/{name}/tags": ("bucket.tags",),
+    "PUT /api/buckets/{name}/budget": ("bucket.budget",),
     "PUT /api/buckets/{name}/policy": ("bucket.policy",),
     "DELETE /api/buckets/{name}/policy": ("bucket.policy_delete",),
     "POST /api/buckets/{name}/share-link": ("bucket.share_link",),
@@ -237,6 +239,13 @@ def run(tmp_path_factory, moto_server):
     r.step("PUT /api/buckets/{name}/cors", lambda: a.put(
         "/api/buckets/alice-tag/cors", headers=H, json={"etag": et, "rules": [{
             "allowedOrigins": ["https://example.org"], "allowedMethods": ["GET"]}]}))
+    # tags and budget number
+    et = a.get("/api/buckets/alice-tag/tags").json()["etag"]
+    r.step("PUT /api/buckets/{name}/tags", lambda: a.put(
+        "/api/buckets/alice-tag/tags", headers=H, json={"etag": et, "tags": [
+            {"key": "team", "value": "genomics"}]}))
+    r.step("PUT /api/buckets/{name}/budget", lambda: a.put(
+        "/api/buckets/alice-tag/budget", headers=H, json={"budgetNumber": "WT-999"}))
     # ACLs: bucket (moto keeps these) and object (moto ignores object ACL documents)
     et = a.get("/api/buckets/alice-data/acl").json()["etag"]
     r.step("PUT /api/buckets/{name}/acl", lambda: a.put(

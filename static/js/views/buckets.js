@@ -7,6 +7,8 @@ import { confirmDialog, nameSpan } from "../components/confirm-dialog.js";
 import { createBucketDialog } from "../components/create-bucket-dialog.js";
 import { bucketKeysDialog } from "../components/bucket-keys-dialog.js";
 import { isAdvanced, subscribe } from "../advanced.js";
+import { tagsDialog } from "../components/tags-dialog.js";
+import { budgetDialog } from "../components/budget-dialog.js";
 import { corsDialog } from "../components/cors-dialog.js";
 import { policyDialog } from "../components/policy-dialog.js";
 import { lifecycleDialog } from "../components/lifecycle-dialog.js";
@@ -68,7 +70,7 @@ function usageBlock(b) {
   return out;
 }
 
-function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPolicy, onAcl, onCors, busy) {
+function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPolicy, onAcl, onCors, onTags, onBudget, busy) {
   const created = b.createdAt ? new Date(b.createdAt) : null;
   const meta = h("div", { class: "bk-meta" });
   if (created && !Number.isNaN(created.getTime())) {
@@ -89,11 +91,13 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPo
   const more = menuButton({
     label: "More", ariaLabel: `More actions for bucket ${b.name}`, disabled: busy, className: "bk-more",
     items: [
+      { label: "Change budget number…", icon: "edit", hint: b.budgetMissing ? "This bucket has none yet" : "The index or worktag this bucket is charged to", onSelect: () => onBudget(b) },
       { label: "Keys", icon: "key", hint: "Keys that work for this bucket only", badge: b.keyCount || null, onSelect: () => onKeys(b) },
       { label: "Lifecycle", icon: "refresh", hint: "Delete old files or unfinished uploads automatically", onSelect: () => onLifecycle(b) },
       { label: "Share link", icon: "download", hint: "Temporary download link for one file", onSelect: () => onShare(b) },
       ...(isAdvanced() ? [
         { label: "Bucket policy…", icon: "shield", hint: "Edit the raw access policy (JSON)", onSelect: () => onPolicy(b) },
+        { label: "Tags…", icon: "tag", hint: "Label the bucket with key and value pairs", onSelect: () => onTags(b) },
         { label: "CORS rules…", icon: "sliders", hint: "Let websites use this bucket from visitors' browsers", onSelect: () => onCors(b) },
         { label: "Bucket permissions (ACL)…", icon: "users", hint: "Legacy permissions of the bucket itself", onSelect: () => onAcl(b, false) },
         { label: "Object permissions (ACL)…", icon: "users", hint: "Legacy permissions of one file, chosen by name", onSelect: () => onAcl(b, true) },
@@ -134,7 +138,7 @@ export function bucketsCard() {
         h("div", { class: "empty-acts" }, h("button", { class: "btn btn-primary", type: "button", on: { click: create } }, icon("plus"), "Create your first bucket"))));
       return;
     }
-    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, managePolicy, manageAcl, manageCors, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
+    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, managePolicy, manageAcl, manageCors, manageTags, manageBudget, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
   }
 
   function failed(err) {
@@ -235,6 +239,23 @@ export function bucketsCard() {
   async function manageCors(b) {
     const res = await corsDialog({ bucket: b.name });
     if (res.error && res.error.status !== 401) toast.error(res.error.message);
+  }
+
+  async function manageTags(b) {
+    const res = await tagsDialog({ bucket: b.name });
+    if (res.error && res.error.status !== 401) toast.error(res.error.message);
+  }
+
+  async function manageBudget(b) {
+    const res = await budgetDialog({ bucket: b.name, current: b.budgetNumber });
+    if (res.error) {
+      if (res.error.status !== 401) toast.error(res.error.message);
+      return;
+    }
+    if (!res.saved) return;
+    if (res.saved.warning) toast.show(res.saved.warning, { timeout: 9000 });
+    else toast.show(res.saved.changed ? `Budget number of ${b.name} saved.` : "Nothing to change.");
+    load({ quiet: true });
   }
 
   async function manageAcl(b, object) {

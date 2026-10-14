@@ -177,6 +177,14 @@ export const putAcl = (bucket, key, body) => api(aclBase(bucket, key), { method:
 // exposeHeaders, maxAgeSeconds|null}], etag, warnings: [{rule, message}]}. put sends {rules, etag}
 // (an empty list deletes the configuration); a 422 body has errors: [{rule, field, message}], a 409
 // etagMismatch carries {current}.
+export const getBucketTags = (name) => api(`/buckets/${encodeURIComponent(name)}/tags`);
+// body: {tags: [{key, value}] (user tags only), etag}; 422 carries errors [{tag, field, message}],
+// 409 {etagMismatch, current}.
+export const putBucketTags = (name, body) =>
+  api(`/buckets/${encodeURIComponent(name)}/tags`, { method: "PUT", json: body });
+// {budgetNumber: string|null} -> {name, budgetNumber, changed, tagSynced, warning?}
+export const setBucketBudget = (name, budgetNumber) =>
+  api(`/buckets/${encodeURIComponent(name)}/budget`, { method: "PUT", json: { budgetNumber } });
 export const getBucketCors = (name) => api(`/buckets/${encodeURIComponent(name)}/cors`);
 export const putBucketCors = (name, body) =>
   api(`/buckets/${encodeURIComponent(name)}/cors`, { method: "PUT", json: body });

@@ -138,7 +138,7 @@ skips them too.
   statements.
 - [x] Bucket and object ACLs.
 - [x] CORS rules editor.
-- [ ] Bucket tagging.
+- [x] Bucket tagging.
 - [ ] Object lock: default retention, plus legal hold and retention for a given
   object key.
 - [ ] Full lifecycle editor: transitions, prefix and tag filters.
