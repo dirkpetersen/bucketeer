@@ -69,7 +69,7 @@ skips them too.
   under Advanced object lock (with warning) and placement. Delete bucket:
   typed-name confirmation when non-empty. (blocked: Q2)
 - [ ] Versioning toggle (enable/suspend).
-- [ ] Shared-document helpers for bucket policy and lifecycle: read-modify-write
+- [x] Shared-document helpers for bucket policy and lifecycle: read-modify-write
   that only touches `bucketeer-*` Sids/IDs. Unit-test heavily.
 - [ ] Sharing: share a bucket with an AD user (read-only or read-write). Group
   share expands to member uids. List and revoke shares.
@@ -118,6 +118,11 @@ available, and fix the client and the mock if reality differs:
 - [ ] (needs cluster) Where croit puts the bucket-delete confirmation sentence (the client
   reads `details`, then falls back to the message text), and the exact
   wording.
+- [ ] (needs cluster) Policy Sids with `-` and `.` (e.g. `bucketeer-share-u-j.doe`)
+  are accepted by RGW. AWS documents Sids as alphanumeric only. If RGW
+  rejects them, switch to id-based Sids mapped to uids in SQLite.
+- [ ] (needs cluster) Resource ARN form for buckets in a tenant
+  (`arn:aws:s3:::<bucket>` vs `arn:aws:s3::<tenant>:<bucket>`).
 - [ ] (needs cluster) Bucket keys: a zero user quota doesn't block writes to the shared
   bucket, because writes count against the bucket owner's quota.
 

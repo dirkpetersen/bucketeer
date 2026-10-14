@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Bucketeer is a self-service S3 portal for Ceph clusters managed by **croit**. Users log in with AD, get their S3 (RGW) access/secret keys with ready-to-paste `~/.aws/config` and `~/.aws/credentials` snippets, and manage their buckets: create, delete, versioning, sharing, scoped keys, lifecycle, and the full set of S3 bucket features. Admins get an admin page. See "Product design" below for decisions already made, and `TODO.md` for the phased plan.
 
-The repo is greenfield; see `TODO.md` for what exists so far. Code layout: `app.py` (uvicorn entry point), the `bucketeer/` package (`config.py` settings, `main.py` app factory, `croit.py` croit client, `db.py` SQLite storage, `ldapauth.py` AD login, `auth.py` sessions/CSRF/throttle/login routes), `static/` (frontend, served at `/`), `tests/`, and `mock/` (dev/test-only mock croit API). JSON endpoints go under `/api/...`; the static mount at `/` is registered last so it never shadows them or `/health`.
+The repo is greenfield; see `TODO.md` for what exists so far. Code layout: `app.py` (uvicorn entry point), the `bucketeer/` package (`config.py` settings, `main.py` app factory, `croit.py` croit client, `db.py` SQLite storage, `s3docs.py` shared bucket policy/lifecycle/tag helpers, `ldapauth.py` AD login, `auth.py` sessions/CSRF/throttle/login routes), `static/` (frontend, served at `/`), `tests/`, and `mock/` (dev/test-only mock croit API). JSON endpoints go under `/api/...`; the static mount at `/` is registered last so it never shadows them or `/health`.
 
 ### Commands
 
@@ -170,10 +170,12 @@ A simple, always-visible form shares a bucket with an AD user, read-only or read
 ### Bucket policy and lifecycle are shared documents
 
 Several features write the same per-bucket policy and lifecycle configuration: bucket keys, sharing, simple lifecycle rules, and the Advanced raw editors.
-- Read-modify-write them, and only touch statements or rules whose `Sid`/`ID` starts with `bucketeer-` (e.g. `bucketeer-key-<id>`, `bucketeer-share-<uid>`).
+- Read-modify-write them, and only touch statements or rules whose `Sid`/`ID` starts with `bucketeer-` (e.g. `bucketeer-key-<id>`, `bucketeer-share-u-<uid>` or `bucketeer-share-t-<tenant>-<uid>`).
 - Leave every other statement intact.
 - The raw editors show everything but must warn before editing `bucketeer-*` entries.
 - Policy principals are `arn:aws:iam::<tenant>:user/<uid>`, with an empty tenant when there is none.
+- **Always use `bucketeer/s3docs.py`** (pure document functions plus `update_bucket_policy` / `update_bucket_lifecycle` / `update_bucket_tagging`). Never call `put_bucket_policy`, `put_bucket_lifecycle_configuration` or `put_bucket_tagging` directly. The helpers refuse to write non-`bucketeer-*` entries, raise on duplicate Sids/IDs, and delete the document when the last entry goes (S3 rejects empty ones). Builders: `share_statement`, `bucket_key_statement`, and the three simple lifecycle rules. Their action sets are documented in the module docstring.
+- The helpers are synchronous: call them with `asyncio.to_thread`. There is no conditional write, so they take `bucket_lock(bucket)` (per-bucket, re-entrant); hold it yourself around any multi-step change to one bucket. Writers outside this process can still cause a lost update.
 
 ### Always visible vs. Advanced
 
