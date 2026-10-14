@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Bucketeer is a self-service S3 portal for Ceph clusters managed by **croit**. Users log in with AD, get their S3 (RGW) access/secret keys with ready-to-paste `~/.aws/config` and `~/.aws/credentials` snippets, and manage their buckets: create, delete, versioning, sharing, scoped keys, lifecycle, and the full set of S3 bucket features. Admins get an admin page. See "Product design" below for decisions already made, and `TODO.md` for the phased plan.
 
-The repo is greenfield; see `TODO.md` for what exists so far. Code layout: `app.py` (uvicorn entry point), the `bucketeer/` package (`config.py` settings, `main.py` app factory, `croit.py` croit client, `db.py` SQLite storage, `s3docs.py` shared bucket policy/lifecycle/tag helpers, `ldapauth.py` AD login, `auth.py` sessions/CSRF/throttle/login routes, `admin.py` admin API), `static/` (frontend, served at `/`), `tests/`, and `mock/` (dev/test-only mock croit API). JSON endpoints go under `/api/...`; the static mount at `/` is registered last so it never shadows them or `/health`.
+The repo is greenfield; see `TODO.md` for what exists so far. Code layout: `app.py` (uvicorn entry point), the `bucketeer/` package (`config.py` settings, `main.py` app factory, `croit.py` croit client, `db.py` SQLite storage, `s3docs.py` shared bucket policy/lifecycle/tag helpers, `ldapauth.py` AD login, `auth.py` sessions/CSRF/throttle/login routes, `admin.py` admin API, `admin_settings.py` + `policy_settings.py` admin settings), `static/` (frontend, served at `/`), `tests/`, and `mock/` (dev/test-only mock croit API). JSON endpoints go under `/api/...`; the static mount at `/` is registered last so it never shadows them or `/health`.
 
 ### Commands
 
@@ -69,7 +69,7 @@ Users log in with Active Directory credentials over LDAPS, using the `LDAP_*` se
 - **Routes:** `POST /api/login` (JSON `{login, password}`), `POST /api/logout`, `GET /api/me`. Statuses: 401 uniform failure, 429 throttled (`Retry-After`), 503 LDAP down, 400 malformed body. Login/logout write audit actions `login.success`, `login.failure`, `login.throttled`, `logout`.
 - **Dependencies for later endpoints:** `Depends(auth.require_user)` returns the `SessionUser` (401 if none), `Depends(auth.require_admin)` adds a 403 for non-admins. Take the identity from the session, never from the request.
 - **CSRF rule:** every state-changing (non GET/HEAD/OPTIONS) `/api` request must send `X-Requested-With: bucketeer`, else 403. `create_app` enforces it by including all `/api` routers into one `APIRouter(prefix="/api", dependencies=[Depends(csrf_protect)])`: add new routers there (`api.include_router(...)`), never register `/api` routes straight on `app`. The frontend's fetch helper must always send the header. Never add CORS middleware that allows that header, and never make a GET change state.
-- **Throttle:** in-memory `LoginThrottle`, constants in `auth.py`: 5 attempts per normalized typed login, 5 password checks per resolved account (`resolve()` then `verify()`, so sAMAccountName/mail/UPN count together and stay below AD's lockout threshold) and 20 per client IP in 15 minutes, then 429 without contacting LDAP. Attempts count when they start and are refunded on success or LDAP outage. It resets on restart (single process assumed). The IP is `request.client.host`, which is correct only because uvicorn runs with `proxy_headers` and `forwarded_allow_ips="127.0.0.1"`.
+- **Throttle:** in-memory `LoginThrottle`, constants in `auth.py`: 10 attempts per normalized typed login, 10 password checks per resolved account (`resolve()` then `verify()`, so sAMAccountName/mail/UPN count together and stay below AD's lockout threshold) and 20 per client IP in 15 minutes, then 429 without contacting LDAP. The message stays "Too many attempts" (Q3). The limit of 10 is the owner's choice, so make sure it stays below the AD lockout threshold. Attempts count when they start and are refunded on success or LDAP outage. It resets on restart (single process assumed). The IP is `request.client.host`, which is correct only because uvicorn runs with `proxy_headers` and `forwarded_allow_ips="127.0.0.1"`.
 
 The backend calls croit as a single service identity, with `CROIT_API_TOKEN` sent as a Bearer token. Because of that, the backend must make sure a user only ever reads or changes their own RGW uid.
 
@@ -147,8 +147,10 @@ Formats in the two files differ, so keep them straight:
 ### Users and access
 
 - Login requires membership of the AD group `LDAP_REQUIRED_GROUP_DN`. Opening it to all users later just means clearing that setting.
-- The RGW uid is the AD `sAMAccountName`. The admin page can map exceptions, such as existing RGW users with different names.
-- The first login creates the RGW user automatically, with the default quota from the admin page.
+- The RGW uid is the **lowercased** AD `sAMAccountName` (Q4). At login, an existing RGW user whose uid matches case-insensitively (checked against croit's uid list) is used instead, with an audit entry. Admin uid mappings always win.
+- Logging in with an email address or UPN only finds the account: the AD search resolves it to the `sAMAccountName`. A uid is **never** derived from an email address.
+- The first login creates the RGW user automatically with the default user quota. That default is **1 TiB** unless an admin changes it on the Settings tab, so a quota is always applied (Q4).
+- If RGW rejects the AD email because another RGW user already has it, auto-create refuses: the user sees "contact your administrator", and an audit entry names the conflict. This is a safe placeholder until QUESTIONS.md Q5 is answered.
 - Admins are members of `LDAP_ADMIN_GROUP_DN`. They see all users and buckets, set quotas, suspend users, and edit settings.
 - **Offboarding:** a daily job suspends (`PATCH /s3/users/{uid}` with `suspended`) every RGW user whose AD account is disabled or no longer in the group, together with that user's bucket keys. It never deletes anything; an admin decides what happens to the data.
 
@@ -181,6 +183,16 @@ Several features write the same per-bucket policy and lifecycle configuration: b
 
 `bucketeer/admin.py`, router `/api/admin` included in the parent `/api` router (CSRF applies); every route depends on `require_admin`. `GET /users` (uid, name, email, tenant, suspended, `quota`/`bucketQuota` as `{enabled, maxSize, maxObjects}` with null = unlimited, `bucketCount`, `bucketKey` when the uid is a live bucket-key user) and `GET /buckets` (name, tenant, owner, objects, bytes, quota, `budgetNumber` joined from the `buckets` table, null = missing, not validated: Q2). `PUT /users/{uid}/quota`, `PUT /buckets/{bucket}/quota` (body `{enabled, maxSize, maxObjects}`, bytes/counts 0..2^62 or null; enabled needs a limit; `enabled:false` keeps stored limits). `POST /users/{uid}/(un)suspend` PATCHes croit and (un)suspends the owner's live `bucket_keys` (croit user plus `suspended_at`), never deletes; `bucket_keys.suspended_by` (migration v2: `owner`, `direct`, reserved `offboarding`) records who suspended a key: unsuspending an owner wakes only `owner` rows (none if the owner was not suspended), a directly suspended key wakes only when unsuspended directly, revoked keys never wake; an admin cannot suspend themselves (409); a key failure still audits and answers 502. Mutations audit `admin.user.quota|suspend|unsuspend`, `admin.bucket.quota` with before/after, no secrets. croit errors map through `croit_http_error` (404, 400, 502, 503) without croit's URL or token. Key owner lookup uses the uid as the AD username until Q4 (uid mapping) is answered. Tests: `tests/test_admin.py`.
 
+### Admin settings
+
+`bucketeer/admin_settings.py` (routes `/api/admin/settings`, admin only, CSRF via the parent router) and `bucketeer/policy_settings.py` (pure validators and helpers later features call; nothing applies a setting yet). `GET /settings` returns everything. Stored in `settings` (keys `naming` {prefix, pattern}, `placement` {default, allowed}, `default_quota` absent = not set, else {enabled, maxSize, maxObjects}, `notification_endpoints` list) and the `uid_mappings` table; load with `load_*`. Each change audits `admin.settings.*` with before/after.
+- **Naming:** DNS-compatible rules always (`check_dns_name`); optional prefix template (`{username}` only, slugged lowercase, `_` becomes `-`) and optional extra regex (fullmatch, max 200 chars). `validate_bucket_name(name, username, rules) -> [errors]`, `suggest_prefix`. Regex safety layers: a static pre-check (`check_pattern_static`: counted repeats above 63, nested product above 256, since `regex` expands them at compile time), then `approve_pattern` compiles and probes in a subprocess (256 MB cap, 1 s), then in-process matching on the `regex` module with a 50 ms `timeout=` for approved patterns only (bounded cache). These can block briefly: call `normalize_naming`/`validate_bucket_name` via `asyncio.to_thread`. `POST /settings/naming/test` tries draft rules without saving. Use `\Z`, not `$`, when validating whole strings (`$` accepts a trailing newline).
+- **Placement:** validated on save against croit `GET /s3/placements` (`CroitClient.list_placements`). Default null = croit's zone default; allowed [] = users get no choice. `placement_options()` gives the create-form view; the choice is shown only when `userChoice` (more than one).
+- **Default quota:** stored only, same semantics as user quotas (0 is a limit); unset shows a "Not set" warning; `quota_croit_args()` for later. What first login does when unset is Q4.
+- **UID mappings:** `PUT/DELETE /settings/uid-mappings/{ad}`; uid syntax `uid` or `tenant$uid`; unique both ways (case-insensitive, 409); a missing RGW user is a warning only. Not applied anywhere until Q4.
+- **Notification endpoints:** `PUT/DELETE /settings/notification-endpoints/{name}`; types http|https|amqp|kafka with matching schemes, optional topic/exchange, `verifyTls`. No credentials in v1: URLs with user info, query or fragment are refused, so nothing secret is stored, audited or returned. If brokers need logins later, add write-only fields never returned. Users may only see `endpoint_choices()` (name and type).
+- Frontend: Settings tab in `views/admin-settings.js`, styles in `css/settings.css`.
+
 ### Always visible vs. Advanced
 
 - **Always visible:**
@@ -201,7 +213,13 @@ Several features write the same per-bucket policy and lifecycle configuration: b
   - multipart cleanup
   - subusers
   - placement and storage class choice, shown only when more than one exists
-- **Budget numbers:** every bucket must have a budget number (index/worktag) when it is created. Users can store a default in their profile, which prefills the create form. Format, storage and editing details: see QUESTIONS.md Q2.
+- **Budget numbers** (index/worktag, Q2):
+  - Users must enter a budget number for every bucket they create. A default saved in their profile prefills the form. **Only admins** can create a bucket without one.
+  - **Format:** checked against an admin-editable pattern on the Settings tab, with an example shown as a hint. There is no lookup against a finance system.
+  - **Storage:** kept in SQLite (`buckets.budget_number`) and mirrored as the Bucketeer-managed bucket tag `bucketeer-budget=<value>`. The tagging editor protects `bucketeer-*` tags.
+  - **Editing:** the bucket owner can change it later; the audit log records the old and new values.
+  - **Existing buckets without one** are flagged in the bucket list and on the admin page, but not blocked.
+  - **Reporting:** the admin page offers a CSV chargeback export (bucket, owner, budget number, usage).
 - There is no object/file browser. Presigned share links choose the object with a key field plus prefix autocomplete from a read-only listing (Q1).
 
 ### Admin page and storage

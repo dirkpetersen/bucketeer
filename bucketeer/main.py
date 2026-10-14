@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import admin, auth
+from . import admin, admin_settings, auth
 from .config import Settings
 from .croit import CroitClient
 from .db import DB_FILENAME, Database
@@ -100,6 +100,7 @@ def create_app(
     api = APIRouter(prefix="/api", dependencies=[Depends(auth.csrf_protect)])
     api.include_router(auth.router)
     api.include_router(admin.router)
+    api.include_router(admin_settings.router)
     app.include_router(api)
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

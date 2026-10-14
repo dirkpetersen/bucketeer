@@ -223,6 +223,12 @@ class CroitState:
         self.next_token_id = 1
         self.cert_pem = ""
         self.ha_groups = [default_ha_group()]
+        # (placement rule, storage class, default?) rows of GET /s3/placements
+        self.placements = [
+            ("default-placement", "STANDARD", True),
+            ("default-placement", "COLD", True),
+            ("nvme-placement", "STANDARD", False),
+        ]
 
     def _fire(self, name: str, *args):
         cb = getattr(self.hooks, name)
@@ -965,6 +971,25 @@ def s3_key_delete(uid: str, accessKey: str, request: Request, _a: Admin):
 @router.get("/s3/users/{uid}/cfg-file/download")
 def s3_cfg_file(uid: str, request: Request, _v: Viewer):
     return st(request).cfg_file(uid)
+
+
+# placements
+@router.get("/s3/placements")
+def s3_placements(request: Request, _v: Viewer, _p: NoPagination):
+    rows = st(request).placements
+    default = next((r for r in rows if r[2]), None)
+    return {
+        "defaultPlacementRule": default[0] if default else None,
+        "defaultStorageClass": "STANDARD" if default else None,
+        "placements": [
+            {
+                "name": n, "storageClass": c, "isDefault": d,
+                "dataPool": f"{n}.{c.lower()}.data", "indexPool": f"{n}.index",
+                "dataExtraPool": f"{n}.non-ec",
+            }
+            for n, c, d in rows
+        ],
+    }
 
 
 # buckets

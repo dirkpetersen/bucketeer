@@ -5,6 +5,7 @@ import { formatBytes, formatCount, quotaText } from "../format.js";
 import { toast } from "../components/toast.js";
 import { confirmDialog } from "../components/confirm-dialog.js";
 import { quotaDialog } from "../components/quota-dialog.js";
+import { renderSettings } from "./admin-settings.js";
 
 // Administration: all users and buckets, quota editing, suspend/unsuspend.
 // The server enforces the role on every call; this view is only shown to admins.
@@ -139,15 +140,20 @@ export function renderAdmin() {
   const dirBtn = h("button", { class: "btn btn-icon sort-dir", type: "button" });
   const onlyBtn = h("button", { class: "btn btn-filter", type: "button", "aria-pressed": "false" });
   const refreshBtn = h("button", { class: "btn btn-icon", type: "button", "aria-label": "Refresh", title: "Refresh" }, icon("refresh"));
+  const filtersEl = h("div", { class: "admin-filters" },
+    h("div", { class: "search" }, icon("search", "icon search-ic"), search), sortSel, dirBtn, onlyBtn);
   const countEl = h("span", { class: "count", "aria-live": "polite" });
   const tableHost = h("div", { class: "table-host" });
-  const tabs = [["users", "Users", "users"], ["buckets", "Buckets", "bucket"]].map(([key, label, ic]) =>
+  const settings = renderSettings();
+  const TAB_KEYS = ["users", "buckets", "settings"];
+  const tabs = [["users", "Users", "users"], ["buckets", "Buckets", "bucket"], ["settings", "Settings", "sliders"]].map(([key, label, ic]) =>
     h("button", { class: "tab", type: "button", role: "tab", id: `tab-${key}`, "aria-controls": "admin-panel", on: { click: () => switchTab(key) } },
       icon(ic), label, h("span", { class: "tab-count", id: `tc-${key}` })));
   const tablist = h("div", { class: "tabs", role: "tablist", "aria-label": "Administration" }, tabs);
   tablist.addEventListener("keydown", (e) => {
     if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-      const next = state.tab === "users" ? "buckets" : "users";
+      const step = e.key === "ArrowRight" ? 1 : -1;
+      const next = TAB_KEYS[(TAB_KEYS.indexOf(state.tab) + step + TAB_KEYS.length) % TAB_KEYS.length];
       switchTab(next);
       document.getElementById(`tab-${next}`)?.focus();
     }
@@ -165,10 +171,11 @@ export function renderAdmin() {
   sortSel.addEventListener("change", () => { state.sort[state.tab].key = sortSel.value; render(); });
   dirBtn.addEventListener("click", () => { state.sort[state.tab].dir *= -1; render(); });
   onlyBtn.addEventListener("click", () => { state.only[state.tab] = !state.only[state.tab]; render(); });
-  refreshBtn.addEventListener("click", () => load(state.tab));
+  refreshBtn.addEventListener("click", () => (state.tab === "settings" ? settings.load() : load(state.tab)));
 
   function paintControls() {
     const tab = state.tab;
+    if (tab === "settings") return;
     search.placeholder = tab === "users" ? "Search users, names, e-mail" : "Search buckets, owners, budget numbers";
     sortSel.replaceChildren(...columns[tab].filter((c) => !c.noSort).map((c) =>
       h("option", { value: c.key, selected: c.key === state.sort[tab].key, text: `Sort: ${c.label}` })));
@@ -243,9 +250,18 @@ export function renderAdmin() {
 
   function render() {
     const tab = state.tab;
-    const d = state.data[tab];
+    const isSettings = tab === "settings";
+    filtersEl.hidden = isSettings;
     for (const t of tabs) t.setAttribute("aria-selected", String(t.id === `tab-${tab}`)), t.tabIndex = t.id === `tab-${tab}` ? 0 : -1;
     paintStats();
+    if (isSettings) {
+      countEl.textContent = "";
+      refreshBtn.disabled = false;
+      refreshBtn.classList.remove("spin");
+      if (tableHost.firstElementChild !== settings.el) tableHost.replaceChildren(settings.el);
+      return;
+    }
+    const d = state.data[tab];
     onlyBtn.textContent = tab === "users" ? "Suspended only" : "Missing budget number";
     onlyBtn.setAttribute("aria-pressed", String(state.only[tab]));
     onlyBtn.classList.toggle("on", state.only[tab]);
@@ -282,19 +298,18 @@ export function renderAdmin() {
   }
 
   paintControls();
+  settings.load();
   load("users");
   load("buckets");
 
   return h("main", { class: "main admin", id: "main" },
     h("div", { class: "hero" },
       h("span", { class: "eyebrow", text: "Administration" }),
-      h("h1", { text: "Users and buckets" }),
-      h("p", { text: "Every S3 user and bucket on the cluster. Set quotas, check budget numbers, and suspend or restore access." })),
+      h("h1", { text: "Users, buckets and settings" }),
+      h("p", { text: "Every S3 user and bucket on the cluster. Set quotas, check budget numbers, suspend or restore access, and edit the portal's policies." })),
     statsEl,
-    h("section", { class: "card admin-card", "aria-label": "Users and buckets" },
+    h("section", { class: "card admin-card", "aria-label": "Administration" },
       h("div", { class: "admin-bar" }, tablist, h("div", { class: "admin-tools" }, countEl, refreshBtn)),
-      h("div", { class: "admin-filters" },
-        h("div", { class: "search" }, icon("search", "icon search-ic"), search),
-        sortSel, dirBtn, onlyBtn),
+      filtersEl,
       h("div", { id: "admin-panel", role: "tabpanel", "aria-live": "polite" }, tableHost)));
 }

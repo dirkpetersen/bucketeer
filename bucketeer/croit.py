@@ -395,6 +395,14 @@ class CroitClient:
             "DELETE", _path("/s3/users/{uid}/keys/{access_key}", uid=uid, access_key=access_key)
         )
 
+    # -- placements --
+
+    async def list_placements(self) -> dict:
+        """`RgwPlacementResponse`: `placements` (one row per placement rule and
+        storage class, `isDefault` marks the zonegroup default) plus
+        `defaultPlacementRule` / `defaultStorageClass` (null when none is set)."""
+        return await self._request("GET", "/s3/placements")
+
     # -- buckets --
 
     async def list_buckets(self) -> list[dict]:

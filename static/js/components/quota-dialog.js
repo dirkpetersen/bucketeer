@@ -5,10 +5,10 @@ import { UNITS } from "../format.js";
 // A native <dialog> form. `onSave(body)` is async and is given
 // { enabled, maxSize (bytes|null), maxObjects (int|null) }; if it throws, the
 // message is shown inline and the dialog stays open. Resolves true once saved.
-const SIZE_UNITS = UNITS.filter(([u]) => ["KiB", "MiB", "GiB", "TiB"].includes(u));
+export const SIZE_UNITS = UNITS.filter(([u]) => ["KiB", "MiB", "GiB", "TiB"].includes(u));
 let seq = 0;
 
-function splitSize(bytes) {
+export function splitSize(bytes) {
   if (bytes == null) return ["", "GiB"];
   for (const [u, f] of [...SIZE_UNITS].reverse()) if (bytes >= f && bytes % f === 0) return [String(bytes / f), u];
   const [u, f] = bytes >= 1024 ** 2 ? SIZE_UNITS[1] : SIZE_UNITS[0];

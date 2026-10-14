@@ -1,0 +1,50 @@
+/* Administration > Settings: stacked cards, each with its own form. */
+
+.settings { display: grid; gap: var(--sp-5); padding: var(--sp-4); background: var(--surface-sunken); border-top: 1px solid var(--border); }
+@media (min-width: 48em) { .settings { padding: var(--sp-5); } }
+.set-card { display: grid; gap: var(--sp-4); padding: var(--sp-5); animation: rise var(--dur-slow) var(--ease-out) both; }
+@media (max-width: 39.99em) { .set-card { padding: var(--sp-4); } }
+.set-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2) var(--sp-3); }
+.set-head h2 { font: 560 var(--fs-xl) / 1.2 var(--font-display); }
+.set-head .chip { text-transform: none; letter-spacing: 0; max-width: 100%; overflow-wrap: anywhere; }
+.set-lead { color: var(--text-muted); font-size: var(--fs-sm); max-width: 62ch; }
+
+.set-form { display: grid; gap: var(--sp-4); }
+.set-grid { display: grid; gap: var(--sp-4); }
+@media (min-width: 40em) { .set-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; } }
+.set-hint { font-size: var(--fs-xs); color: var(--text-muted); }
+.set-err { padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm); background: var(--danger-bg); color: var(--danger); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.set-warn { display: flex; gap: var(--sp-3); align-items: flex-start; padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); background: var(--accent-soft); color: var(--accent-text); font-size: var(--fs-sm); font-weight: 520; }
+.set-warn svg { margin-top: 0.1rem; }
+.set-ok { display: flex; gap: var(--sp-2); align-items: center; color: var(--success); font-size: var(--fs-sm); font-weight: 560; }
+.set-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-2); }
+.set-actions .btn { min-height: 2.5rem; }
+.mono-input { font-family: var(--font-mono); font-size: var(--fs-sm); }
+.set-check { padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
+.set-check span { display: grid; gap: 2px; }
+.set-check b { font-weight: 560; overflow-wrap: anywhere; }
+.set-check small { color: var(--text-muted); font-size: var(--fs-xs); }
+.set-fieldset { display: grid; gap: var(--sp-2); border: 0; padding: 0; margin: 0; min-width: 0; }
+.set-fieldset legend { padding: 0; margin-bottom: var(--sp-2); font-size: var(--fs-sm); font-weight: 560; }
+
+.set-test { display: grid; gap: var(--sp-3); padding: var(--sp-4); border: 1px dashed var(--border-strong); border-radius: var(--r-md); }
+.set-test h3 { font-size: var(--fs-sm); font-weight: 600; }
+.set-test-out { min-height: 1.5rem; display: grid; gap: var(--sp-2); }
+.set-problems { margin: 0; padding-left: 1.1rem; display: grid; gap: var(--sp-1); color: var(--danger); font-size: var(--fs-sm); }
+.set-test code, .set-hint code { font-family: var(--font-mono); background: var(--surface-2); padding: 0.1rem 0.4rem; border-radius: var(--r-sm); color: var(--text); }
+
+.set-list { list-style: none; margin: 0; padding: 0; display: grid; border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.set-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); background: var(--surface); }
+.set-item + .set-item { border-top: 1px solid var(--border); }
+.set-item-main { display: grid; gap: var(--sp-2); min-width: 0; flex: 1 1 16rem; }
+.set-pair { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.set-pair b { font-weight: 600; overflow-wrap: anywhere; }
+.set-pair code, .set-url { font-family: var(--font-mono); font-size: var(--fs-xs); background: var(--surface-2); padding: 0.15rem 0.45rem; border-radius: var(--r-sm); color: var(--text-muted); overflow-wrap: anywhere; }
+.set-url { justify-self: start; }
+.set-arrow { color: var(--text-faint); }
+.set-item .chip { text-transform: none; letter-spacing: 0; }
+.set-empty { padding: var(--sp-4); border: 1px dashed var(--border-strong); border-radius: var(--r-md); color: var(--text-muted); font-size: var(--fs-sm); }
+.set-inline { padding-top: var(--sp-4); border-top: 1px solid var(--border); }
+.set-unavail { display: grid; gap: var(--sp-3); justify-items: start; color: var(--text-muted); font-size: var(--fs-sm); }
+.set-loading { display: grid; gap: var(--sp-4); }
+.set-skel { height: 9rem; border-radius: var(--r-lg); }

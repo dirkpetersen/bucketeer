@@ -56,3 +56,18 @@ export const setBucketQuota = (bucket, quota) =>
   api(`/admin/buckets/${enc(bucket)}/quota`, { method: "PUT", json: quota });
 export const suspendUser = (uid) => api(`/admin/users/${enc(uid)}/suspend`, { method: "POST" });
 export const unsuspendUser = (uid) => api(`/admin/users/${enc(uid)}/unsuspend`, { method: "POST" });
+
+// Admin settings (naming rules, placement, default quota, uid mappings, notification endpoints).
+export const getSettings = () => api("/admin/settings");
+export const saveNaming = (rules) => api("/admin/settings/naming", { method: "PUT", json: rules });
+export const testNaming = (body) => api("/admin/settings/naming/test", { method: "POST", json: body });
+export const savePlacement = (body) => api("/admin/settings/placement", { method: "PUT", json: body });
+export const saveDefaultQuota = (quota) => api("/admin/settings/default-quota", { method: "PUT", json: quota });
+export const clearDefaultQuota = () => api("/admin/settings/default-quota", { method: "DELETE" });
+export const saveUidMapping = (ad, rgwUid) =>
+  api(`/admin/settings/uid-mappings/${enc(ad)}`, { method: "PUT", json: { rgwUid } });
+export const deleteUidMapping = (ad) => api(`/admin/settings/uid-mappings/${enc(ad)}`, { method: "DELETE" });
+export const saveEndpoint = (name, body) =>
+  api(`/admin/settings/notification-endpoints/${enc(name)}`, { method: "PUT", json: body });
+export const deleteEndpoint = (name) =>
+  api(`/admin/settings/notification-endpoints/${enc(name)}`, { method: "DELETE" });

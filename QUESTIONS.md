@@ -12,6 +12,64 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 ## Open
 
+### Q5: What should happen when RGW rejects a new user's email address?
+
+- **Blocks:** nothing. The current safe behavior is described below.
+- **Context:** this is not about logging in with an email address; that is
+  settled in Q4. When Bucketeer auto-creates the RGW user on first login, it
+  passes the user's AD email to croit. RGW refuses an email that another RGW
+  user already has, for example an old or shared S3 account registered with
+  the same address, so the create fails.
+- **Current behavior (safe placeholder):** the login succeeds, but the user
+  sees "Your S3 account couldn't be created, contact your administrator", and
+  an audit entry names the conflict. No account is created.
+- **Options:**
+  1. Keep it that way: an admin resolves the conflict, for example by adding
+     a uid mapping to the existing RGW user.
+  2. Create the RGW user without an email and audit a warning, so the user
+     gets access immediately.
+- **Recommendation:** 2. The email on the RGW user is informational, and
+  blocking the user helps nobody.
+
+**Answer:**
+
+### Q6: Storage classes and notification broker logins
+
+- **Blocks:** TODO "Bucket notifications" (Phase 4), for part 2 only.
+- **Context:** the admin Settings tab is being built now.
+  1. **Storage class:** in S3 a storage class is chosen per object at upload.
+     Bucketeer has no upload, so users only pick a placement for a new bucket,
+     and storage classes are shown read-only. Should users ever choose a
+     storage class, for example as a default?
+  2. **Broker logins:** bucket notifications can go to HTTP(S), AMQP or Kafka
+     endpoints on the admin allowlist. Do your AMQP or Kafka brokers need a
+     username and password? If they do, Bucketeer would store them write-only:
+     saved, never shown again or sent to the browser.
+- **Recommendations:** 1. No, placement only. 2. Only if your brokers need
+  them; otherwise leave credentials out of v1.
+
+**Answer:**
+
+## Resolved
+
+### Q1: How does a user choose the object for a presigned share link?
+
+- **Blocks:** TODO "Presigned share links" (Phase 2)
+- **Context:** there is no file browser (decision 3), but a share link points
+  to one object.
+- **Options:**
+  1. A text field for the object key, with prefix autocomplete from a
+     read-only listing
+  2. A read-only tree listing (browse only, no upload or delete) with a
+     "Share" action per object
+  3. A key field only, with no listing
+- **Recommendation:** 1. It is fast for users who know their paths, and it
+  avoids building something close to a file browser.
+
+**Answer:** 1)
+
+**Decision:** option 1, a key field with prefix autocomplete. Recorded in CLAUDE.md.
+
 ### Q2: Budget numbers (index/worktag) on buckets: format and handling
 
 - **Blocks:** TODO "User profile" and "Bucket list ... Create bucket" (Phase 2)
@@ -37,7 +95,9 @@ Each question has a recommendation. Answering "ok" accepts it.
      budget number, usage)? *Recommendation: yes, a CSV export on the admin
      page.*
 
-**Answer:**
+**Answer:** yes to all, but 4. only admins can create a buckets if there is no tag
+
+**Decision:** recommendations 1, 2, 3 and 5 accepted. For 4: users must always enter a budget number, and only admins can create a bucket without one. Existing buckets without one are flagged but not blocked. Recorded in CLAUDE.md.
 
 ### Q3: What should users see when an account's login limit is reached?
 
@@ -58,7 +118,9 @@ Each question has a recommendation. Answering "ok" accepts it.
 - **Recommendation:** 1. The leak is expensive to use, and option 2
   confuses legitimate users.
 
-**Answer:**
+**Answer:** 1 but we want 10 attempts
+
+**Decision:** option 1, keep "Too many attempts", but allow 10 attempts instead of 5. Added as a TODO item.
 
 ### Q4: How are AD accounts mapped to RGW users, and created on first login?
 
@@ -90,24 +152,6 @@ Each question has a recommendation. Answering "ok" accepts it.
   3. Retry the creation without an email, and write an audit warning naming
      the conflicting address, so the user still gets access.
 
-**Answer:**
+**Answer:** 1. yes 2. the default quota is hardcoded 1TB and can be changed. 3. We want to allow email address login but what actually happens is that if an email address is used this may or may not be the User principal name it may be the email So then we have to search Active Directory for that email and then look up the associated user SAM account name We would never create an account based on an email address
 
-## Resolved
-
-### Q1: How does a user choose the object for a presigned share link?
-
-- **Blocks:** TODO "Presigned share links" (Phase 2)
-- **Context:** there is no file browser (decision 3), but a share link points
-  to one object.
-- **Options:**
-  1. A text field for the object key, with prefix autocomplete from a
-     read-only listing
-  2. A read-only tree listing (browse only, no upload or delete) with a
-     "Share" action per object
-  3. A key field only, with no listing
-- **Recommendation:** 1. It is fast for users who know their paths, and it
-  avoids building something close to a file browser.
-
-**Answer:** 1)
-
-**Decision:** option 1, a key field with prefix autocomplete. Recorded in CLAUDE.md.
+**Decision:** 1 accepted. 2: the default quota defaults to 1 TiB and admins can change it. 3: the answer clarified email login. An email address is resolved through AD to the sAMAccountName, and a uid is never derived from an email address. The original sub-question (RGW rejecting a duplicate email on create) moves to Q5. Recorded in CLAUDE.md.

@@ -47,13 +47,16 @@ skips them too.
 - [x] Login throttle fix: a successful login resets the per-account counter but
   not its "already reported" flag in `bucketeer/auth.py`, so the next block on
   that account may not write a `login.throttled` audit entry. Reset both.
-- [ ] (blocked: Q4) RGW user resolution: sAMAccountName → uid, honoring admin uid mappings.
+- [ ] Login throttle: raise the per-typed-login and per-account limits from 5
+  to 10 attempts per 15 minutes (Q3), and keep the IP limit at 20. Update the
+  tests and CLAUDE.md.
+- [ ] RGW user resolution: sAMAccountName → uid, honoring admin uid mappings.
   Auto-create on first login with the default quota.
-- [ ] (blocked: Q4) Credentials API and screen: show access and secret keys (secret masked,
+- [ ] Credentials API and screen: show access and secret keys (secret masked,
   reveal and copy) and the `~/.aws/config` + `~/.aws/credentials` snippets,
   with copy and download. Endpoint comes from `S3_ENDPOINT_URL` or the croit
   `.s3cfg`.
-- [ ] (blocked: Q4) Key management: create an additional key, rotate (add new, then remove
+- [ ] Key management: create an additional key, rotate (add new, then remove
   old), delete. Never use the whole-set PUT.
 - [x] Visual design system: CSS tokens, Beaver Orange accent, light and dark,
   login and dashboard layouts, motion with reduced-motion support. Vanilla JS
@@ -62,12 +65,12 @@ skips them too.
 ## Phase 2: Buckets
 
 - [ ] User profile: a profile page where users set a default budget number
-  (index/worktag), stored in SQLite. (blocked: Q2)
+  (index/worktag), stored in SQLite.
 - [ ] Bucket list with usage, quota and budget number. Create bucket: name
   checked against the admin naming rules, a **required** budget number
   (index/worktag) prefilled from the user's profile default, versioning, and
   under Advanced object lock (with warning) and placement. Delete bucket:
-  typed-name confirmation when non-empty. (blocked: Q2)
+  typed-name confirmation when non-empty. Budget number rules: CLAUDE.md (Q2).
 - [ ] Versioning toggle (enable/suspend).
 - [x] Shared-document helpers for bucket policy and lifecycle: read-modify-write
   that only touches `bucketeer-*` Sids/IDs. Unit-test heavily.
@@ -87,8 +90,13 @@ skips them too.
 - [x] Admin page gated by `LDAP_ADMIN_GROUP_DN`: all users and buckets (with
   budget numbers), set
   quotas, suspend and unsuspend.
-- [ ] Admin settings: bucket naming rules, placement defaults, default quota,
+- [x] Admin settings: bucket naming rules, placement defaults, default quota,
   uid mappings, notification endpoint allowlist.
+- [ ] Admin setting: budget number pattern plus example hint (Q2), validated
+  with the same safe-regex machinery as the naming rules. Default quota
+  setting defaults to 1 TiB instead of "Not set" (Q4).
+- [ ] Chargeback CSV export on the admin page: bucket, owner, budget number,
+  usage (Q2).
 - [ ] Audit log viewer with filters.
 - [ ] Offboarding job (daily, in-process): suspend RGW users and their bucket
   keys when the AD account is disabled or removed from the group. Never delete
@@ -106,6 +114,7 @@ skips them too.
   object key.
 - [ ] Full lifecycle editor: transitions, prefix and tag filters.
 - [ ] Bucket notifications, with endpoints from the admin allowlist only.
+  (blocked: Q6)
 - [ ] Multipart upload cleanup (list and abort).
 - [ ] Subusers (read/write/readwrite/full) and their keys.
 

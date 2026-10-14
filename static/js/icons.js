@@ -23,6 +23,10 @@ const PATHS = {
   refresh: ["M21 12a9 9 0 1 1-3-6.7L21 8", "M21 3v5h-5"],
   home: ["m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"],
   up: ["m6 15 6-6 6 6"],
+  sliders: ["M4 21v-7", "M4 10V3", "M12 21v-9", "M12 8V3", "M20 21v-5", "M20 12V3", "M1 14h6", "M9 8h6", "M17 16h6"],
+  plus: ["M12 5v14", "M5 12h14"],
+  trash: ["M3 6h18", "M8 6V4h8v2", "M6 6l1 14h10l1-14", "M10 11v6", "M14 11v6"],
+  right: ["m9 6 6 6-6 6"],
   down: ["m6 9 6 6 6-6"],
 };
 export function icon(name, cls = "icon") {

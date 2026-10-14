@@ -541,6 +541,7 @@ def test_responses_match_spec_schemas(app, c, spec, registry):
 
     ck(c.get("/s3/user-names"), "/s3/user-names")
     ck(c.get("/s3/users"), "/s3/users")
+    ck(c.get("/s3/placements"), "/s3/placements")
     ck(c.post("/s3/users", json={"uid": "zoe", "name": "Zoe", "email": "z@example.org"}),
        "/s3/users")
     ck(c.post("/s3/users", json={"uid": "zoe", "name": "Zoe"}), "/s3/users")  # 409
