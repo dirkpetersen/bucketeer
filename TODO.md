@@ -131,7 +131,7 @@ skips them too.
 ## Phase 4: Advanced (behind the global Advanced toggle)
 
 - [x] Advanced toggle, remembered per user.
-- [ ] Bucket row polish: each row now has seven controls and the actions wrap;
+- [x] Bucket row polish: each row now has seven controls and the actions wrap;
   group the less common ones (Keys, Lifecycle, Share link, Share) into a
   "More" menu that is keyboard-accessible and works on phones.
 - [ ] Raw bucket policy editor, with a warning before editing `bucketeer-*`

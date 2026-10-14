@@ -8,6 +8,7 @@ import { createBucketDialog } from "../components/create-bucket-dialog.js";
 import { bucketKeysDialog } from "../components/bucket-keys-dialog.js";
 import { lifecycleDialog } from "../components/lifecycle-dialog.js";
 import { shareLinkDialog } from "../components/share-link-dialog.js";
+import { menuButton } from "../components/menu-button.js";
 import { shareDialog } from "../components/share-dialog.js";
 
 // The Buckets card on the home page: the user's own buckets with usage, quota and
@@ -74,37 +75,29 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, busy
   const budget = b.budgetMissing
     ? h("span", { class: "chip chip-warn", title: "This bucket has no budget number yet." }, icon("alert", "icon"), "Missing budget number")
     : h("span", { class: "bk-budget" }, h("span", { class: "bk-budget-l", text: "Budget" }), h("code", { text: b.budgetNumber }));
-  const del = h("button", {
-    class: "btn btn-sm btn-quiet-danger", type: "button", disabled: busy, "aria-label": `Delete bucket ${b.name}`,
-    on: { click: () => onDelete(b) },
-  }, icon("trash"), h("span", { class: "bk-del-l", text: "Delete" }));
-  const keysBtn = h("button", {
-    class: "btn btn-sm", type: "button", disabled: busy, "aria-label": `Keys for bucket ${b.name}`,
-    title: "Keys that work for this bucket only",
-    on: { click: () => onKeys(b) },
-  }, icon("key"), h("span", { class: "bk-del-l", text: b.keyCount ? `Keys (${b.keyCount})` : "Keys" }));
-  const lcBtn = h("button", {
-    class: "btn btn-sm", type: "button", disabled: busy, "aria-label": `Lifecycle rules for bucket ${b.name}`,
-    title: "Delete old files or unfinished uploads automatically",
-    on: { click: () => onLifecycle(b) },
-  }, icon("refresh"), h("span", { class: "bk-del-l", text: "Lifecycle" }));
-  const shareBtn = h("button", {
-    class: "btn btn-sm", type: "button", disabled: busy, "aria-label": `Share link for bucket ${b.name}`,
-    title: "Create a temporary download link for one file",
-    on: { click: () => onShare(b) },
-  }, icon("download"), h("span", { class: "bk-del-l", text: "Share link" }));
   const peopleBtn = h("button", {
     class: "btn btn-sm", type: "button", disabled: busy, "aria-label": `Share bucket ${b.name} with people`,
     title: "Give colleagues read-only or read and write access",
     on: { click: () => onPeople(b) },
   }, icon("users"), h("span", { class: "bk-del-l", text: "Share" }));
+  // Frequent controls stay in the row (versioning, Share); the rest sit in "More", with
+  // Delete last, apart and in danger red so it is never the first thing under the cursor.
+  const more = menuButton({
+    label: "More", ariaLabel: `More actions for bucket ${b.name}`, disabled: busy, className: "bk-more",
+    items: [
+      { label: "Keys", icon: "key", hint: "Keys that work for this bucket only", badge: b.keyCount || null, onSelect: () => onKeys(b) },
+      { label: "Lifecycle", icon: "refresh", hint: "Delete old files or unfinished uploads automatically", onSelect: () => onLifecycle(b) },
+      { label: "Share link", icon: "download", hint: "Temporary download link for one file", onSelect: () => onShare(b) },
+      { label: "Delete bucket", icon: "trash", danger: true, separatorBefore: true, onSelect: () => onDelete(b) },
+    ],
+  });
   const vsw = versionSwitch(b, onToggle);
   budget.classList.add("bk-budget-slot");
   return h("li", { class: "bk-row", "data-busy": String(!!busy) },
     h("span", { class: "bk-ic", "aria-hidden": "true" }, icon("bucket")),
     h("div", { class: "bk-main" }, h("b", { class: "bk-name", text: b.name }), meta),
     usageBlock(b),
-    h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, vsw, peopleBtn, shareBtn, lcBtn, keysBtn, del)));
+    h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, vsw, peopleBtn, more)));
 }
 
 export function bucketsCard() {

@@ -2,6 +2,7 @@ import "./components/secret-field.js";
 import "./components/code-panel.js";
 import { toast } from "./components/toast.js";
 import { confirmDialog } from "./components/confirm-dialog.js";
+import "./components/menu-button.js";
 import { h } from "./dom.js";
 import { save } from "./storage.js";
 
@@ -48,3 +49,14 @@ document.getElementById("toggle-theme").addEventListener("click", () => {
   else delete document.documentElement.dataset.theme;
   save("theme", next);
 });
+
+const mbResult = document.getElementById("mb-result");
+const pick = (name) => () => { mbResult.textContent = `Chose: ${name}`; };
+for (const el of document.querySelectorAll("menu-button")) {
+  el.items = [
+    { label: "Keys", icon: "key", hint: "Keys that work for this bucket only", badge: 2, onSelect: pick("Keys") },
+    { label: "Lifecycle", icon: "refresh", hint: "Delete old files automatically", onSelect: pick("Lifecycle") },
+    { label: "Share link", icon: "download", disabled: true, reason: "Add a file first", onSelect: pick("Share link") },
+    { label: "Delete bucket", icon: "trash", danger: true, separatorBefore: true, onSelect: pick("Delete") },
+  ];
+}

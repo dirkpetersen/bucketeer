@@ -41,6 +41,7 @@
 @container (max-width: 30rem) {
   .bk-del-l { display: none; }
   .bk-row .btn-sm { width: 2.25rem; padding: 0; }
+  .bk-more .mb-label, .bk-more .mb-caret { display: none; }
 }
 .bk-row .btn-sm { min-height: 2.25rem; }
 
@@ -70,7 +71,7 @@
 .bk-vsw[disabled] { opacity: 0.55; cursor: not-allowed; }
 .bk-row .bk-vsw { min-height: 2.25rem; }
 .bk-row .bk-vsw .switch-label { display: inline; }
-@media (max-width: 34em) { .bk-row .bk-vsw .switch-label { display: none; } .bk-acts { gap: var(--sp-1); } }
+@media (max-width: 34em) { .bk-row .bk-vsw .switch-label { font-size: var(--fs-xs); } .bk-acts { gap: var(--sp-1); } }
 
 /* Bucket keys dialog (builds on .cd and .qd) */
 .bkd { width: min(44rem, calc(100vw - 2 * var(--gutter))); }
