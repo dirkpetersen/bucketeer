@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Bucketeer components</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="img/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/app.css">
+  <script src="js/theme.js"></script>
+  <script type="module" src="js/showcase.js"></script>
+</head>
+<body>
+  <main class="sc">
+    <header>
+      <span class="eyebrow">Design system</span>
+      <h1 class="sc-title">Components</h1>
+      <p class="panel-note">Developer-only page; not linked from the app.</p>
+    </header>
+
+    <section aria-labelledby="s-tokens">
+      <h2 id="s-tokens">Colour tokens</h2>
+      <div class="swatches" id="swatches"></div>
+    </section>
+
+    <section aria-labelledby="s-btn">
+      <h2 id="s-btn">Buttons and chips</h2>
+      <div class="row">
+        <button class="btn btn-primary" type="button">Primary</button>
+        <button class="btn" type="button">Default</button>
+        <button class="btn btn-ghost" type="button">Ghost</button>
+        <button class="btn btn-danger" type="button">Danger</button>
+        <button class="btn btn-primary" type="button" disabled>Disabled</button>
+        <span class="chip">Neutral</span>
+        <span class="chip chip-accent">Accent</span>
+      </div>
+      <div class="row">
+        <button class="btn" type="button" id="toggle-theme">Cycle theme</button>
+      </div>
+    </section>
+
+    <section aria-labelledby="s-secret">
+      <h2 id="s-secret">secret-field</h2>
+      <secret-field id="sf-demo" label="Secret access key" ttl="10"></secret-field>
+    </section>
+
+    <section aria-labelledby="s-code">
+      <h2 id="s-code">code-panel</h2>
+      <code-panel id="cp-demo"></code-panel>
+    </section>
+
+    <section aria-labelledby="s-toast">
+      <h2 id="s-toast">toast-region</h2>
+      <div class="row">
+        <button class="btn" type="button" id="t-info">Info toast</button>
+        <button class="btn" type="button" id="t-err">Error toast</button>
+      </div>
+    </section>
+
+    <section aria-labelledby="s-dlg">
+      <h2 id="s-dlg">confirm-dialog</h2>
+      <div class="row">
+        <button class="btn" type="button" id="d-simple">Simple confirm</button>
+        <button class="btn btn-danger" type="button" id="d-type">Type to delete</button>
+      </div>
+      <p class="panel-note" id="d-result" role="status"></p>
+    </section>
+  </main>
+</body>
+</html>

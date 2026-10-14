@@ -55,7 +55,7 @@ skips them too.
   `.s3cfg`.
 - [ ] (blocked: Q4) Key management: create an additional key, rotate (add new, then remove
   old), delete. Never use the whole-set PUT.
-- [ ] Visual design system: CSS tokens, Beaver Orange accent, light and dark,
+- [x] Visual design system: CSS tokens, Beaver Orange accent, light and dark,
   login and dashboard layouts, motion with reduced-motion support. Vanilla JS
   modules and web components only.
 

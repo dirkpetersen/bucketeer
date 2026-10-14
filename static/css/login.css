@@ -1,0 +1,66 @@
+/* Login: a deep black stage with a slow orange glow, subtle grain, a crisp card. */
+
+.login {
+  position: relative; isolation: isolate; overflow: hidden;
+  min-height: 100dvh; display: grid; place-items: center;
+  padding: var(--sp-6) var(--gutter);
+  background: var(--stage); color: var(--stage-text);
+}
+.login::before { /* the glow */
+  content: ""; position: absolute; inset: -20%; z-index: -2;
+  background:
+    radial-gradient(42% 38% at var(--glow-x) var(--glow-y), rgb(215 63 9 / 0.7), transparent 70%),
+    radial-gradient(36% 34% at calc(100% - var(--glow-x)) calc(100% - var(--glow-y)), rgb(255 120 40 / 0.22), transparent 70%),
+    radial-gradient(60% 50% at 50% 110%, rgb(215 63 9 / 0.18), transparent 70%);
+  filter: blur(30px);
+  animation: glow-drift 26s ease-in-out infinite alternate;
+}
+.login::after { /* grain */
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: url("../img/grain.svg"); opacity: 0.07; mix-blend-mode: overlay;
+}
+@keyframes glow-drift {
+  0%   { --glow-x: 22%; --glow-y: 18%; }
+  50%  { --glow-x: 62%; --glow-y: 34%; }
+  100% { --glow-x: 38%; --glow-y: 8%; }
+}
+
+.login-wrap { width: min(24.5rem, 100%); display: grid; gap: var(--sp-6); justify-items: center;
+  animation: rise var(--dur-slow) var(--ease-out) both; }
+@keyframes rise { from { opacity: 0; translate: 0 1rem; } }
+
+.brand { display: flex; align-items: center; gap: var(--sp-3); }
+.brand img { width: 2.25rem; height: 2.25rem; border-radius: 0.6rem; box-shadow: 0 6px 24px rgb(215 63 9 / 0.45); }
+.brand-name { font: 560 var(--fs-xl) / 1 var(--font-display); letter-spacing: -0.01em; font-variation-settings: "opsz" 48; }
+.login .brand-name { color: var(--stage-text); }
+.login-tag { color: var(--stage-muted); font-size: var(--fs-sm); text-align: center; margin-top: calc(-1 * var(--sp-3)); }
+
+.login-card {
+  width: 100%; display: grid; gap: var(--sp-5); padding: var(--sp-6) var(--sp-5);
+  border-radius: var(--r-xl); background: var(--surface); color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.04), 0 2px 4px rgb(0 0 0 / 0.3),
+    0 24px 60px -12px rgb(0 0 0 / 0.7), 0 0 80px -20px rgb(215 63 9 / 0.35);
+}
+.login-card h1 { font: 500 var(--fs-2xl) / 1.1 var(--font-display); letter-spacing: -0.015em;
+  font-variation-settings: "opsz" 72; }
+.login-card h1 + p { margin-top: var(--sp-2); color: var(--text-muted); font-size: var(--fs-sm); }
+.login-form { display: grid; gap: var(--sp-4); }
+.login-card.shake { animation: shake 420ms var(--ease-in-out); }
+@keyframes shake {
+  15%, 55% { translate: -7px 0; } 35%, 75% { translate: 7px 0; } 95% { translate: -2px 0; }
+}
+.form-error {
+  display: flex; gap: var(--sp-2); align-items: flex-start;
+  padding: var(--sp-3) var(--sp-3); border-radius: var(--r-md);
+  background: var(--danger-bg); color: var(--danger); font-size: var(--fs-sm);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  animation: rise var(--dur) var(--ease-out) both;
+}
+.form-error .icon { margin-top: 0.1rem; }
+.login-foot { color: var(--stage-muted); font-size: var(--fs-xs); text-align: center; }
+
+@media (prefers-reduced-motion: reduce) {
+  .login::before { animation: none; }
+  .login-card.shake { animation: none; outline: 2px solid var(--danger); }
+}

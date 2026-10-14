@@ -33,6 +33,14 @@ Settings read `./.env` only (no upward search). Tests never read a real `.env`: 
 - **Frontend:** plain HTML, CSS, and vanilla JavaScript. **No JS frameworks or build step** (no React/Vue/Svelte/Tailwind, no bundler). FastAPI serves the static files.
 - **The frontend must look exceptionally polished.** This is a top-level requirement, not an extra. Use a deliberate visual design (typography, spacing, motion, light/dark) and don't settle for default or template styling.
 
+### Frontend layout and rules
+
+- `static/index.html` loads `css/{tokens,base,components,login,app}.css`, a tiny classic `js/theme.js` (sets `data-theme` before paint) and the module `js/app.js`, which switches between `views/login.js` and `views/dashboard.js` based on `/api/me`. `static/showcase.html` (not linked) demonstrates every component; open it at `/showcase.html` to review UI changes in light and dark.
+- Web components live in `js/components/` and render into the light DOM (no Shadow DOM) so tokens and theming just work: `secret-field`, `code-panel` (tabs, copy, download, INI highlighter in `js/ini.js`), `toast-region` (`toast.show/error`), `confirm-dialog` (`confirmDialog({...requireText})`, native `<dialog>`).
+- **Always call `/api` through `js/api.js`** (`api()`, `getMe`, `login`, `logout`): it sends `X-Requested-With: bucketeer` and the session cookie, throws `ApiError`, and fires `bucketeer:unauthorized` on 401 so the app returns to login. Never use bare `fetch` for `/api`.
+- **Design-token rule:** colours, spacing, radii, shadows, type sizes and motion values come from `css/tokens.css` (`light-dark()` plus `[data-theme]` override); never hard-code them in other CSS. Orange (`--accent`, #D73F09) is the only accent; check AA contrast for any new text/background pair. Everything must honour `prefers-reduced-motion`. No OSU logo or wordmark.
+- **CSP rule:** `main.py` sends a strict CSP (`script-src 'self'; style-src 'self'`), so no inline `<script>`, `<style>`, `style=` attributes or `on*` handlers; use external files, classes and `element.style` (CSSOM). Build DOM with `js/dom.js` `h()`; never `innerHTML` with dynamic data. `tests/test_static.py` enforces this. Fonts (Inter, Fraunces, JetBrains Mono; all OFL, licenses next to them) are self-hosted in `static/fonts/`.
+
 ## Configuration
 
 - All runtime config comes from environment variables loaded from `.env`. Use `python-dotenv` without override, so variables already in the process environment (such as the ones systemd sets) take precedence.

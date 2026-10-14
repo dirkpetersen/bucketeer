@@ -1,0 +1,182 @@
+/* Design tokens. Every colour, space, radius, shadow, type size and motion value
+   used anywhere in the app comes from here; components never hard-code them.
+
+   Light/dark: colours use light-dark(), driven by `color-scheme`. That follows
+   prefers-color-scheme by default, and <html data-theme="light|dark"> forces it
+   (set by js/theme.js). */
+
+@font-face {
+  font-family: "Inter";
+  src: url("../fonts/inter.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("../fonts/jbmono.woff2") format("woff2");
+  font-weight: 100 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Fraunces";
+  src: url("../fonts/fraunces.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+/* Animated glow position on the login stage (progressive enhancement). */
+@property --glow-x {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 30%;
+}
+@property --glow-y {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 20%;
+}
+
+:root {
+  color-scheme: light dark;
+
+  /* Brand. Beaver Orange #D73F09 is the only accent. White on it is 4.56:1 and
+     it is 4.6:1 on pure black. Text-sized orange on the off-white surface uses
+     a slightly deeper tone, and on dark surfaces a slightly brighter one. */
+  --orange: #d73f09;
+  --accent: #d73f09;
+  --accent-hover: #bd3706; /* white on it: 5.7:1 */
+  --accent-press: #a22f05;
+  --on-accent: #ffffff;
+  --accent-text: light-dark(#bd3706, #ff7a4d);
+  --accent-soft: light-dark(rgb(215 63 9 / 0.08), rgb(255 106 58 / 0.14));
+  --accent-ring: light-dark(#d73f09, #ff7a4d);
+
+  /* Neutrals (warm, derived; not any institutional palette). */
+  --bg: light-dark(#f6f5f3, #0a0908);
+  --surface: light-dark(#ffffff, #141210);
+  --surface-2: light-dark(#f0eeeb, #1c1a17);
+  --surface-sunken: light-dark(#eceae6, #0f0e0c);
+  --text: light-dark(#14120f, #f4f1ed);
+  --text-muted: light-dark(#5a554e, #aaa49b);
+  --text-faint: light-dark(#6b665f, #8f8980);
+  --border: light-dark(rgb(20 18 15 / 0.11), rgb(255 250 240 / 0.11));
+  --border-strong: light-dark(rgb(20 18 15 / 0.22), rgb(255 250 240 / 0.24));
+
+  /* Status */
+  --danger: light-dark(#b42318, #ff8f85);
+  --danger-bg: light-dark(#fef1ef, rgb(255 110 95 / 0.12));
+  --danger-solid: #b42318;
+  --on-danger: #ffffff;
+  --danger-press: #9a1d13;
+  --knob: #ffffff;
+  --avatar-from: #e8541f;
+  --avatar-to: #b53307;
+  --on-avatar: #ffffff;
+  --success: light-dark(#0b6b3a, #5fd897);
+  --success-bg: light-dark(#eaf7ef, rgb(95 216 151 / 0.12));
+
+  /* Code panel */
+  --code-bg: light-dark(#fbfaf8, #0d0c0a);
+  --code-text: light-dark(#26231f, #e8e4de);
+  --syn-comment: light-dark(#6b665f, #8f8980);
+  --syn-section: light-dark(#bd3706, #ff8a5e);
+  --syn-key: light-dark(#14120f, #f4f1ed);
+  --syn-value: light-dark(#0b6b3a, #7fdcaa);
+  --syn-punct: light-dark(#6b665f, #8f8980);
+
+  /* Login stage is always dark. */
+  --stage: #070605;
+  --stage-text: #f4f1ed;
+  --stage-muted: #aaa49b;
+
+  /* Type */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Fraunces", ui-serif, Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.875rem;
+  --fs-md: 1rem;
+  --fs-lg: 1.125rem;
+  --fs-xl: 1.375rem;
+  --fs-2xl: clamp(1.625rem, 1.3rem + 1.2vw, 2.25rem);
+  --fs-3xl: clamp(2rem, 1.5rem + 2.2vw, 3.25rem);
+  --lh-tight: 1.15;
+  --lh-body: 1.55;
+
+  /* Space (4px base), radii */
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.5rem;
+  --sp-6: 2rem;
+  --sp-7: 3rem;
+  --sp-8: 4.5rem;
+  --gutter: 1rem;
+  --r-sm: 0.5rem;
+  --r-md: 0.75rem;
+  --r-lg: 1.125rem;
+  --r-xl: 1.5rem;
+  --r-pill: 999px;
+  --header-h: 4rem;
+  --content-w: 72rem;
+
+  /* Layered soft shadows */
+  --sh-1: 0 1px 1px rgb(20 12 5 / 0.04), 0 1px 3px rgb(20 12 5 / 0.06);
+  --sh-2: 0 1px 2px rgb(20 12 5 / 0.04), 0 4px 8px rgb(20 12 5 / 0.05),
+    0 12px 24px rgb(20 12 5 / 0.06);
+  --sh-3: 0 2px 4px rgb(20 12 5 / 0.04), 0 8px 16px rgb(20 12 5 / 0.07),
+    0 24px 48px rgb(20 12 5 / 0.12);
+  --sh-inset: inset 0 1px 0 rgb(255 255 255 / 0.5);
+
+  /* Motion */
+  --dur-fast: 120ms;
+  --dur: 220ms;
+  --dur-slow: 480ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --sh-1: 0 1px 1px rgb(0 0 0 / 0.4), 0 1px 3px rgb(0 0 0 / 0.5);
+    --sh-2: 0 1px 2px rgb(0 0 0 / 0.4), 0 6px 12px rgb(0 0 0 / 0.45),
+      0 16px 32px rgb(0 0 0 / 0.4);
+    --sh-3: 0 2px 4px rgb(0 0 0 / 0.4), 0 12px 24px rgb(0 0 0 / 0.5),
+      0 32px 64px rgb(0 0 0 / 0.55);
+    --sh-inset: inset 0 1px 0 rgb(255 255 255 / 0.05);
+  }
+}
+:root[data-theme="dark"] {
+  --sh-1: 0 1px 1px rgb(0 0 0 / 0.4), 0 1px 3px rgb(0 0 0 / 0.5);
+  --sh-2: 0 1px 2px rgb(0 0 0 / 0.4), 0 6px 12px rgb(0 0 0 / 0.45), 0 16px 32px rgb(0 0 0 / 0.4);
+  --sh-3: 0 2px 4px rgb(0 0 0 / 0.4), 0 12px 24px rgb(0 0 0 / 0.5), 0 32px 64px rgb(0 0 0 / 0.55);
+  --sh-inset: inset 0 1px 0 rgb(255 255 255 / 0.05);
+}
+
+@media (min-width: 40em) {
+  :root {
+    --gutter: 1.5rem;
+  }
+}
+@media (min-width: 64em) {
+  :root {
+    --gutter: 2rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0.01ms;
+    --dur: 0.01ms;
+    --dur-slow: 0.01ms;
+  }
+}

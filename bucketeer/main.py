@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import auth
@@ -14,6 +14,21 @@ from .db import DB_FILENAME, Database
 from .ldapauth import AdAuthenticator
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+# No inline script/style anywhere in the frontend, so the policy can be strict.
+# (CSSOM changes from JS, e.g. element.style.x = ..., are allowed by style-src 'self'.)
+CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+    "font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
+    "form-action 'self'; frame-ancestors 'none'"
+)
+SECURITY_HEADERS = {
+    "Content-Security-Policy": CSP,
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+}
+ASSET_CACHE = "public, max-age=86400"  # fonts and images: stable, not fingerprinted
 
 
 def create_app(
@@ -56,6 +71,22 @@ def create_app(
     app.state.authenticator = authenticator or AdAuthenticator(settings)
     app.state.sessions = auth.SessionManager(settings, clock)
     app.state.throttle = auth.LoginThrottle(clock)
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next: Callable) -> Response:
+        response: Response = await call_next(request)
+        for name, value in SECURITY_HEADERS.items():
+            response.headers[name] = value
+        path = request.url.path
+        if path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "no-store")
+        elif path.startswith(("/fonts/", "/img/")):
+            response.headers.setdefault("Cache-Control", ASSET_CACHE)
+        elif response.status_code in (200, 304) and path != settings.health_check_path:
+            # No build step means no fingerprinted file names: always revalidate
+            # (StaticFiles sends ETag/Last-Modified, so this costs a 304).
+            response.headers.setdefault("Cache-Control", "no-cache")
+        return response
 
     # Cheap liveness probe: must never contact LDAP or croit.
     @app.get(settings.health_check_path, include_in_schema=False)
