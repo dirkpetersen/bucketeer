@@ -1,0 +1,107 @@
+# To do
+
+Work top to bottom. Each `- [ ]` item should be one reviewable change: code,
+tests and docs together. Design decisions are in CLAUDE.md under "Product
+design"; don't re-decide them here. Tick an item (`- [x]`) in the same commit
+that completes it. An item tagged `(blocked: Qn)` waits for an answer in
+QUESTIONS.md. Skip it, and skip anything that depends on it.
+
+## Phase 0: Foundations
+
+- [ ] Project skeleton: `app.py` (uvicorn, `PORT`/`HOST`, proxy headers),
+  config loading from `.env` with REQUIRED/Default validation matching
+  `.env.default`, `GET /health`, `requirements.txt`, `requirements-dev.txt`
+  (pytest, ruff, httpx, moto[server]), `static/` served at `/`. Document the
+  run, lint, test and single-test commands in CLAUDE.md.
+- [ ] Mock croit API at `mock/croit_mock.py` (FastAPI, in-memory, seeded). It
+  covers:
+  - auth (`/auth/login`, `/auth/login-form`, `/auth/token-info`, `/api-tokens`
+    CRUD with roles)
+  - S3 users: CRUD, suspend, quotas, `/s3/user-names`
+  - keys: GET, whole-set PUT that drops missing keys, single PUT/DELETE, `/key`,
+    `cfg-file/download`
+  - buckets: list, create, patch, delete with the `deleteData` and
+    confirmation-sentence flow, plus `/policy`, `/quota` and `/usage/*`
+  - tasks that stay RUNNING briefly before FINISHED
+  - `/config/rgw-ssl-cert` and `/servers/ha-groups` (for `tools/croit-cert`)
+
+  Mirror croit's rules: duplicate email rejected, user with buckets can't be
+  deleted, `tenant$uid`. Return croit's `ErrorMessage` shape. Add a test that
+  validates responses against `docs/api/api-1.yaml`.
+- [ ] S3 test backend: tests start `moto` in server mode as the S3 endpoint. The
+  mock croit's buckets and keys must line up with what's in moto, e.g. mock
+  bucket creation also creates the bucket in moto.
+- [ ] croit client module: async httpx client, Bearer token, `ErrorMessage` →
+  exception, task polling, `$` URL-encoding of uids.
+- [ ] SQLite storage under `DATA_DIR`: schema plus migrations for settings, uid
+  mappings, bucket keys, and the audit log.
+
+## Phase 1: Login and credentials (MVP)
+
+- [ ] AD login over LDAPS (CLAUDE.md "Authentication"): service bind, filter
+  with `{login}`, exactly one match, nested-group check, user bind, reject
+  empty passwords. Signed session cookie, `SESSION_MAX_AGE`. Tests use a fake
+  LDAP layer.
+- [ ] RGW user resolution: sAMAccountName → uid, honoring admin uid mappings.
+  Auto-create on first login with the default quota.
+- [ ] Credentials API and screen: show access and secret keys (secret masked,
+  reveal and copy) and the `~/.aws/config` + `~/.aws/credentials` snippets,
+  with copy and download. Endpoint comes from `S3_ENDPOINT_URL` or the croit
+  `.s3cfg`.
+- [ ] Key management: create an additional key, rotate (add new, then remove
+  old), delete. Never use the whole-set PUT.
+- [ ] Visual design system: CSS tokens, Beaver Orange accent, light and dark,
+  login and dashboard layouts, motion with reduced-motion support. Vanilla JS
+  modules and web components only.
+
+## Phase 2: Buckets
+
+- [ ] Bucket list with usage and quota. Create bucket: name checked against the
+  admin naming rules, versioning, and under Advanced object lock (with warning)
+  and placement. Delete bucket: typed-name confirmation when non-empty.
+- [ ] Versioning toggle (enable/suspend).
+- [ ] Shared-document helpers for bucket policy and lifecycle: read-modify-write
+  that only touches `bucketeer-*` Sids/IDs. Unit-test heavily.
+- [ ] Sharing: share a bucket with an AD user (read-only or read-write). Group
+  share expands to member uids. List and revoke shares.
+- [ ] Bucket keys: create a scoped RGW user (zero quota) plus a policy
+  statement, and record ownership in SQLite. List, revoke, and show snippets
+  for each key. Verify the zero-quota assumption on the real cluster.
+- [ ] Simple lifecycle rules: expire after N days, expire noncurrent versions,
+  abort incomplete multipart uploads.
+- [ ] Presigned share links, 7 days at most. (blocked: Q1)
+- [ ] Audit log entries for every bucket, key and share change.
+
+## Phase 3: Admin
+
+- [ ] Admin page gated by `LDAP_ADMIN_GROUP_DN`: all users and buckets, set
+  quotas, suspend and unsuspend.
+- [ ] Admin settings: bucket naming rules, placement defaults, default quota,
+  uid mappings, notification endpoint allowlist.
+- [ ] Audit log viewer with filters.
+- [ ] Offboarding job (daily, in-process): suspend RGW users and their bucket
+  keys when the AD account is disabled or removed from the group. Never delete
+  anything.
+
+## Phase 4: Advanced (behind the global Advanced toggle)
+
+- [ ] Advanced toggle, remembered per user.
+- [ ] Raw bucket policy editor, with a warning before editing `bucketeer-*`
+  statements.
+- [ ] Bucket and object ACLs.
+- [ ] CORS rules editor.
+- [ ] Bucket tagging.
+- [ ] Object lock: default retention, plus legal hold and retention for a given
+  object key.
+- [ ] Full lifecycle editor: transitions, prefix and tag filters.
+- [ ] Bucket notifications, with endpoints from the admin allowlist only.
+- [ ] Multipart upload cleanup (list and abort).
+- [ ] Subusers (read/write/readwrite/full) and their keys.
+
+## Later (needs cluster work first)
+
+- [ ] Server-side encryption: SSE-KMS/SSE-S3 needs a key server
+  (Vault/Barbican/KMIP), SSE-C needs HTTPS only.
+- [ ] Static website hosting: needs RGW website mode and wildcard DNS.
+- [ ] STS temporary credentials: needs an RGW STS key and roles. This also
+  gives short-lived bucket-scoped keys.

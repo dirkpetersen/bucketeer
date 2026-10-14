@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Bucketeer is a self-service S3 credential portal for Ceph clusters managed by **croit**. Users log in, get their S3 (RGW) access/secret keys, and copy ready-to-paste snippets for `~/.aws/config` and `~/.aws/credentials`.
+Bucketeer is a self-service S3 portal for Ceph clusters managed by **croit**. Users log in with AD, get their S3 (RGW) access/secret keys with ready-to-paste `~/.aws/config` and `~/.aws/credentials` snippets, and manage their buckets: create, delete, versioning, sharing, scoped keys, lifecycle, and the full set of S3 bucket features. Admins get an admin page. See "Product design" below for decisions already made, and `TODO.md` for the phased plan.
 
 The repo is greenfield: so far only the README, LICENSE, a Python `.gitignore`, and the croit OpenAPI spec exist. There is no build, lint, or test tooling yet. When you add it, document the commands here, including how to run a single test. To match production, run the app locally with `python app.py` (see the appmotel section below).
 
@@ -67,9 +67,15 @@ Endpoints this app relies on:
 | Endpoint discovery | `GET /s3/users/{uid}/cfg-file/download` | Returns a `.s3cfg` whose text includes a running RGW gateway address and the DNS name. Useful for filling in `endpoint_url` |
 | Create S3 user | `POST /s3/users` | `NewUserRequest`: `uid` and `name` are required. RGW rejects duplicate emails |
 | Change keys | `PUT /s3/users/{uid}/keys` | **Replaces the whole key set** for the user and subusers, so any key left out is deleted. Always read-modify-write. Returns an async task |
+| Add / remove one key | `PUT` / `DELETE /s3/users/{uid}/keys/{accessKey}` | Use these for creating and rotating keys |
+| Suspend user | `PATCH /s3/users/{uid}` | `RgwUserUpdateRequest.suspended`, used by offboarding |
+| Quotas | `PUT /s3/users/{uid}/quota`, `PUT /s3/buckets/{bucketName}/quota` | |
+| Buckets | `PUT` / `PATCH` / `DELETE /s3/buckets/{bucketName}` | Create and delete return tasks. Deleting a non-empty bucket needs `deleteData` plus the confirmation sentence croit names in its first refusal |
 
 - RGW uids can carry a tenant (`tenant$uid`). URL-encode the `$` in path parameters.
 - Errors come back as the `ErrorMessage` schema.
+- `docs/api/s3-features.md` lists every S3 endpoint croit offers, and the S3 features users have to manage through the S3 protocol instead. `docs/api/README.md` covers how to get croit tokens.
+- Planned work, including a mock croit API, is tracked in `TODO.md`. Questions for the owner go in `QUESTIONS.md`. Don't guess at product decisions: ask there and work on something else.
 
 ## Generated AWS config
 
@@ -88,7 +94,78 @@ Formats in the two files differ, so keep them straight:
 - Keep it idempotent and keep its exit codes stable (0 ok/unchanged, 1 error, 3 `--verify` mismatch), since it is meant to run from cron or a certbot hook.
 - Never call `/auth/logout`. croit allows one session per user, so logging out also ends that user's browser sessions.
 
-## Open design decisions
+## Product design (decided by the owner)
 
-These are not settled yet. Confirm with the owner before you lock any of them in:
-- Whether the RGW uid is the bare `sAMAccountName` or follows some other naming scheme, and how existing RGW users are matched. Whether a missing RGW user is created automatically is controlled by `S3_AUTO_CREATE_USER`, which defaults to off.
+### Two API planes
+
+- **croit API** (admin plane, with `CROIT_API_TOKEN`): S3 users, keys, quotas, suspension, usage, and bucket create/delete, as listed in `docs/api/s3-features.md`.
+- **S3 API** (data plane, boto3 against `S3_ENDPOINT_URL`): everything croit lacks. That covers lifecycle, CORS, object-lock retention and legal hold, tagging, notifications, presigned URLs, bucket policies and ACLs.
+  - S3 calls run with **the logged-in user's own keys**, fetched from croit on the server, so RGW itself enforces ownership, policies and object lock.
+  - Never use an admin S3 identity for user actions. Keys stay on the server and never reach the browser except on the credentials screen.
+
+### Users and access
+
+- Login requires membership of the AD group `LDAP_REQUIRED_GROUP_DN`. Opening it to all users later just means clearing that setting.
+- The RGW uid is the AD `sAMAccountName`. The admin page can map exceptions, such as existing RGW users with different names.
+- The first login creates the RGW user automatically, with the default quota from the admin page.
+- Admins are members of `LDAP_ADMIN_GROUP_DN`. They see all users and buckets, set quotas, suspend users, and edit settings.
+- **Offboarding:** a daily job suspends (`PATCH /s3/users/{uid}` with `suspended`) every RGW user whose AD account is disabled or no longer in the group, together with that user's bucket keys. It never deletes anything; an admin decides what happens to the data.
+
+### Bucket keys: keys scoped to one bucket
+
+S3 keys belong to users, not buckets, so a bucket-scoped key needs its own identity:
+- **Create:** make a separate RGW user (e.g. `alice.backup-job`) and give it a zero user quota, so it can't store data in buckets of its own. Writes into the shared bucket count against the bucket owner's quota. Verify this on the real cluster.
+- **Grant access:** add a bucket-policy statement that gives this user read-only or read-write access to that one bucket.
+- **Ownership:** record the key's owner in SQLite.
+- **Revoke:** delete the RGW user and its policy statement.
+- **Offboarding:** bucket keys are suspended along with their owner.
+
+Subusers (read/write/readwrite/full across *all* of a user's buckets) are offered only under Advanced.
+
+### Sharing
+
+A simple, always-visible form shares a bucket with an AD user, read-only or read-write, by adding a bucket-policy statement. Policies can't reference AD groups, so sharing with a group expands it to its members' uids at share time.
+
+### Bucket policy and lifecycle are shared documents
+
+Several features write the same per-bucket policy and lifecycle configuration: bucket keys, sharing, simple lifecycle rules, and the Advanced raw editors.
+- Read-modify-write them, and only touch statements or rules whose `Sid`/`ID` starts with `bucketeer-` (e.g. `bucketeer-key-<id>`, `bucketeer-share-<uid>`).
+- Leave every other statement intact.
+- The raw editors show everything but must warn before editing `bucketeer-*` entries.
+- Policy principals are `arn:aws:iam::<tenant>:user/<uid>`, with an empty tenant when there is none.
+
+### Always visible vs. Advanced
+
+- **Always visible:**
+  - credentials and config snippets
+  - key create, rotate and delete. Rotation adds the new key before removing the old, never with a whole-set PUT that drops keys.
+  - bucket list, create and delete. Deleting a non-empty bucket requires typing its name.
+  - versioning
+  - usage and quota display
+  - sharing and bucket keys
+  - presigned share links (at most 7 days)
+  - simple lifecycle rules: expire after N days, expire noncurrent versions, abort incomplete multipart uploads
+- **Advanced:** one global toggle, remembered per user:
+  - the raw bucket-policy editor and ACLs
+  - CORS and tagging
+  - object lock: offered only in the create-bucket dialog with a can't-be-undone warning, plus retention and legal hold
+  - the full lifecycle editor
+  - notifications: endpoints only from the admin-defined list
+  - multipart cleanup
+  - subusers
+  - placement and storage class choice, shown only when more than one exists
+- There is no object/file browser.
+
+### Admin page and storage
+
+- Runtime policy is edited on the admin page, not in `.env`: bucket naming rules, placement defaults, default quota, uid mappings, and the notification endpoint allowlist. `.env` keeps only infrastructure and secrets.
+- State lives in **SQLite** under `DATA_DIR`. That covers settings, uid mappings, bucket-key ownership and the **audit log** of who created or deleted buckets, keys and shares.
+- `DATA_DIR` defaults to `data/` in the repo (git-ignored). appmotel updates use `git reset --hard`, which keeps ignored files, and its backups and restores tar the repo, so the database is included.
+- Assume a single uvicorn process: SQLite plus in-process background jobs such as the offboarding sync.
+
+### Later features
+
+These need cluster work first:
+- **Server-side encryption** needs a key server (Vault, Barbican or KMIP).
+- **Static website hosting** needs RGW website mode and wildcard DNS.
+- **STS temporary credentials** need an STS key and roles on RGW. They would also give short-lived bucket-scoped keys.

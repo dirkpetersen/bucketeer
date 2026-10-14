@@ -81,7 +81,7 @@ Request fields:
 
 | Consumer | Roles | Why |
 |---|---|---|
-| Bucketeer | `viewer`, `admin` | Reads users' S3 secret keys and, with `S3_AUTO_CREATE_USER=true`, creates RGW users |
+| Bucketeer | `viewer`, `admin` | Reads users' S3 secret keys, creates and suspends RGW users, manages buckets and quotas |
 | `tools/croit-cert` | `viewer`, `admin` | The spec marks `/config/rgw-ssl-cert` admin-only, because the private key can impersonate the S3 endpoint |
 | Read-only monitoring or reporting | `viewer` | |
 
