@@ -101,7 +101,7 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, busy) {
     h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, vsw, shareBtn, lcBtn, keysBtn, del)));
 }
 
-export function bucketsCard({ isAdvanced = () => false } = {}) {
+export function bucketsCard() {
   let buckets = [];
   const deleting = new Set();
   const body = h("div", { class: "bk-body", "aria-live": "polite" }, skeleton());
@@ -151,7 +151,7 @@ export function bucketsCard({ isAdvanced = () => false } = {}) {
 
   async function create() {
     createBtn.disabled = true;
-    const res = await createBucketDialog({ advanced: isAdvanced() });
+    const res = await createBucketDialog();
     createBtn.disabled = false;
     if (res.error) {
       if (res.error.status !== 401) toast.error(res.error.message);

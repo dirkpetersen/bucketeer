@@ -69,7 +69,7 @@ function budgetCard() {
     save.disabled = cancel.disabled = clear.disabled = input.disabled = true;
     save.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), "Saving…");
     try {
-      const res = await saveProfile(input.value.trim() || null);
+      const res = await saveProfile({ defaultBudgetNumber: input.value.trim() || null });
       input.disabled = false;
       apply(res);
       toast.show(res.defaultBudgetNumber ? "Default budget number saved." : "Default budget number cleared.");

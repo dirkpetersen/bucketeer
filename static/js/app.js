@@ -2,6 +2,7 @@ import { getDemo, getMe, logout } from "./api.js";
 import { renderLogin } from "./views/login.js";
 import { renderDashboard } from "./views/dashboard.js";
 import { h } from "./dom.js";
+import { initAdvanced } from "./advanced.js";
 import { toast } from "./components/toast.js";
 import "./components/secret-field.js";
 import "./components/code-panel.js";
@@ -24,7 +25,14 @@ function swap(node, name) {
   }
 }
 
-const showLogin = () => swap(renderLogin({ appName, onSuccess: showDashboard }), "login");
+// Load the per-user Advanced setting from /api/me before the first paint.
+function showMe(user) {
+  initAdvanced(user.advancedMode);
+  showDashboard(user);
+}
+const showLogin = () => swap(renderLogin({ appName, onSuccess: async () => {
+    try { showMe(await getMe()); } catch (err) { toast.error(err.message || "Could not load your account."); }
+  } }), "login");
 let me = null;
 // Hash routes: "#/admin" is the administration page (admins only; the server
 // enforces the role as well), "#/profile" the user profile, anything else is the workspace.
@@ -76,7 +84,7 @@ getDemo()
 
 (async function start() {
   try {
-    showDashboard(await getMe());
+    showMe(await getMe());
   } catch (err) {
     showLogin();
     if (err.status !== 401) toast.error(err.message);

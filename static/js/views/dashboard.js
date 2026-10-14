@@ -1,7 +1,9 @@
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
 import { credentialsCard } from "./credentials.js";
-import { load, save } from "../storage.js";
+import { save } from "../storage.js";
+import { isAdvanced, setAdvanced, subscribe } from "../advanced.js";
+import { toast } from "../components/toast.js";
 import { renderAdmin } from "./admin.js";
 import { renderProfile } from "./profile.js";
 import { bucketsCard } from "./buckets.js";
@@ -20,16 +22,17 @@ function greeting() {
 export function renderDashboard({ me, appName, onLogout, page = "home" }) {
   const root = document.documentElement;
 
-  // Advanced mode: visual placeholder only; server-side persistence comes later.
-  let advanced = load("advanced") === "true";
-  const sw = h("button", { class: "switch", type: "button", role: "switch", "aria-checked": String(advanced) },
+  // Advanced mode: global store (advanced.js), server-persisted per user.
+  const sw = h("button", { class: "switch", type: "button", role: "switch", "aria-checked": String(isAdvanced()) },
     h("span", { class: "switch-label", text: "Advanced" }), h("span", { class: "switch-track", "aria-hidden": "true" }));
-  const shell = h("div", { class: "shell", "data-advanced": String(advanced) });
+  const shell = h("div", { class: "shell", "data-advanced": String(isAdvanced()) });
+  const unsub = subscribe((on) => {
+    if (!shell.isConnected) { unsub(); return; } // this shell was replaced
+    sw.setAttribute("aria-checked", String(on));
+    shell.dataset.advanced = String(on);
+  });
   sw.addEventListener("click", () => {
-    advanced = !advanced;
-    sw.setAttribute("aria-checked", String(advanced));
-    shell.dataset.advanced = String(advanced);
-    save("advanced", advanced);
+    setAdvanced(!isAdvanced()).catch((err) => toast.error(err.message || "Could not save the Advanced setting."));
   });
 
   // Theme: system -> light -> dark
@@ -79,7 +82,7 @@ export function renderDashboard({ me, appName, onLogout, page = "home" }) {
       h("span", { class: "chip adv-note" }, h("span", { class: "dot" }), "Advanced mode on")),
     h("div", { class: "grid" },
       credentialsCard(),
-      bucketsCard({ isAdvanced: () => advanced })));
+      bucketsCard()));
 
   shell.append(
     h("a", { class: "skip-link", href: "#main", text: "Skip to content" }),

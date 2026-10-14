@@ -376,6 +376,7 @@ async def logout(request: Request, response: Response, db: Annotated[Database, D
 
 
 @router.get("/me")
-def me(response: Response, user: Annotated[SessionUser, Depends(require_user)]):
+def me(request: Request, response: Response, user: Annotated[SessionUser, Depends(require_user)]):
     _no_store(response)
-    return user.public()
+    profile = request.app.state.db.profiles.get(user.username)
+    return {**user.public(), "advancedMode": profile["advanced_mode"]}

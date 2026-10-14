@@ -39,7 +39,8 @@ def test_get_defaults(env):
     body = r.json()
     assert body["username"] == "alice"
     assert body["defaultBudgetNumber"] is None
-    assert set(body) == {"username", "displayName", "email", "defaultBudgetNumber", "budgetExample"}
+    assert set(body) == {"username", "displayName", "email", "defaultBudgetNumber",
+                         "advancedMode", "budgetExample"}
     assert r.headers["cache-control"] == "no-store"
 
 
@@ -151,3 +152,42 @@ def test_allowed_set_is_s3_tag_subset():
 class _Store:
     def get(self, key, default=None):
         return default
+
+
+def test_advanced_mode_me_and_partial_updates(env):
+    assert env.alice.get("/api/me").json()["advancedMode"] is False
+    put(env.alice, "X1")
+    r = env.alice.put("/api/profile", json={"advancedMode": True}, headers=H)
+    assert r.status_code == 200 and r.json()["advancedMode"] is True
+    assert r.json()["defaultBudgetNumber"] == "X1"  # untouched
+    assert env.alice.get("/api/me").json()["advancedMode"] is True
+    assert env.alice.get("/api/profile").json()["advancedMode"] is True
+    # budget-only update leaves advancedMode alone
+    assert put(env.alice, "X2").json()["advancedMode"] is True
+    bob = env.session("bob")  # other users are isolated
+    assert bob.get("/api/me").json()["advancedMode"] is False
+    assert env.db.profiles.get("bob")["advanced_mode"] is False
+    r = env.alice.put("/api/profile", json={"advancedMode": False}, headers=H)
+    assert r.json()["advancedMode"] is False
+
+
+def test_advanced_mode_audit_on_change_only(env):
+    n = len(audit(env))
+    for v in (False, True, True):
+        env.alice.put("/api/profile", json={"advancedMode": v}, headers=H)
+    rows = audit(env)
+    assert len(rows) == n + 1  # False->False and True->True wrote nothing
+    assert len(rows) == 1
+    assert rows[0]["details"] == {"field": "advanced_mode", "old": False, "new": True}
+
+
+@pytest.mark.parametrize(
+    "body", [{"advancedMode": None}, {"advancedMode": "maybe"}, {"advancedMode": True, "x": 1}]
+)
+def test_advanced_mode_rejects_bad_input(env, body):
+    assert env.alice.put("/api/profile", json=body, headers=H).status_code == 422
+    assert env.db.profiles.get("alice")["advanced_mode"] is False
+
+
+def test_advanced_mode_csrf(env):
+    assert env.alice.put("/api/profile", json={"advancedMode": True}).status_code == 403

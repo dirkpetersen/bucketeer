@@ -130,7 +130,7 @@ skips them too.
 
 ## Phase 4: Advanced (behind the global Advanced toggle)
 
-- [ ] Advanced toggle, remembered per user.
+- [x] Advanced toggle, remembered per user.
 - [ ] Raw bucket policy editor, with a warning before editing `bucketeer-*`
   statements.
 - [ ] Bucket and object ACLs.

@@ -1,9 +1,10 @@
+import { isAdvanced, subscribe } from "../advanced.js";
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
 import { bucketOptions, createBucket } from "../api.js";
 import { checkBudget } from "../budget.js";
 
-// createBucketDialog({ advanced }) -> Promise<{ created: object } | null>
+// createBucketDialog() -> Promise<{ created: object } | null>
 // A native <dialog> form. The server is authoritative for every rule (naming, budget
 // format, placement); the checks here give instant feedback only. Object lock and
 // placement live under "Advanced" and are shown only when the global toggle is on
@@ -22,7 +23,7 @@ export function checkName(name, prefix) {
   return "";
 }
 
-export async function createBucketDialog({ advanced }) {
+export async function createBucketDialog() {
   const id = `cb${++seq}`;
   let opts;
   try {
@@ -56,8 +57,7 @@ export async function createBucketDialog({ advanced }) {
   const check = (input, label, hint, cls = "") =>
     h("label", { class: `qd-check ${cls}`, for: input.id }, input, h("span", {}, h("b", { text: label }), h("small", { text: hint })));
 
-  const advancedBlock = advanced
-    ? h("fieldset", { class: "cb-adv" },
+  const advancedBlock = h("fieldset", { class: "cb-adv" },
       h("legend", {}, h("span", { class: "chip chip-accent", text: "Advanced" })),
       check(lock, "Enable object lock", "Lets you protect objects from deletion with retention periods and legal holds.", "qd-main"),
       h("div", { class: "set-warn cb-lock-warn", id: `${id}-lw`, hidden: true },
@@ -65,8 +65,8 @@ export async function createBucketDialog({ advanced }) {
         h("span", { text: "Object lock can only be switched on now, while the bucket is created, and it can never be switched off. It also turns versioning on for good. Locked objects cannot be deleted until their retention ends, and a bucket holding them cannot be deleted." })),
       placement && h("div", { class: "field" },
         h("label", { for: placement.id, text: "Placement" }), placement,
-        h("p", { class: "set-hint", text: "Where the data is stored. The default suits most buckets." })))
-    : null;
+        h("p", { class: "set-hint", text: "Where the data is stored. The default suits most buckets." })));
+  advancedBlock.hidden = !isAdvanced();
 
   const form = h("form", { novalidate: true },
     h("div", { class: "qd-head" },
@@ -128,9 +128,9 @@ export async function createBucketDialog({ advanced }) {
       result = await createBucket({
         name: name.value,
         budgetNumber: budget.value.trim() || null,
-        versioning: versioning.checked || lock.checked,
-        objectLock: lock.checked,
-        placement: placement && placement.value !== opts.defaultPlacement ? placement.value : null,
+        versioning: versioning.checked || (isAdvanced() && lock.checked),
+        objectLock: isAdvanced() && lock.checked,
+        placement: isAdvanced() && placement && placement.value !== opts.defaultPlacement ? placement.value : null,
       });
       dlg.close();
     } catch (err) {
@@ -146,8 +146,9 @@ export async function createBucketDialog({ advanced }) {
   dlg.addEventListener("cancel", (e) => { if (busy) e.preventDefault(); });
   dlg.addEventListener("click", (e) => { if (e.target === dlg && !busy) dlg.close(); });
 
+  const unsub = subscribe((on) => { advancedBlock.hidden = !on; });
   return new Promise((resolve) => {
-    dlg.addEventListener("close", () => { dlg.remove(); resolve({ created: result }); });
+    dlg.addEventListener("close", () => { unsub(); dlg.remove(); resolve({ created: result }); });
     document.body.append(dlg);
     dlg.showModal();
     name.focus();

@@ -69,7 +69,8 @@ export const deleteKey = (accessKey) => api(`/credentials/keys/${enc(accessKey)}
 // The signed-in user's profile: {username, displayName, email, defaultBudgetNumber|null}.
 // Saving "" or null clears the default budget number; a 422 carries the message to show.
 export const getProfile = () => api("/profile");
-export const saveProfile = (defaultBudgetNumber) => api("/profile", { method: "PUT", json: { defaultBudgetNumber } });
+// Partial update: pass only the fields to change ({defaultBudgetNumber}, {advancedMode}).
+export const saveProfile = (fields) => api("/profile", { method: "PUT", json: fields });
 
 // The signed-in user's own buckets. list -> {buckets: [{name, tenant, createdAt, objects, bytes,
 // quota, versioning, budgetNumber, budgetMissing, tagPending}]}; options -> {naming, placements,
