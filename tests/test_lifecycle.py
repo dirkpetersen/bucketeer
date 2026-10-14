@@ -196,3 +196,62 @@ def test_s3_failure_is_502(env):
     env.app.state.s3.factory = lambda *a: broken
     assert env.alice.get(url()).status_code == 502
     assert put(env.alice, mp=1).status_code == 502
+
+
+# -- foreign rules in unusual shapes, byte-for-byte -----------------------------------
+
+LEGACY_PREFIX = {"ID": "legacy", "Status": "Enabled", "Prefix": "logs/",
+                 "Expiration": {"Days": 5}}
+AND_TAGS = {"ID": "and-tags", "Status": "Enabled",
+            "Filter": {"And": {"Prefix": "p/", "Tags": [{"Key": "k", "Value": "v"},
+                                                         {"Key": "k2", "Value": "v2"}]}},
+            "Expiration": {"Days": 9}}
+DISABLED_TAG = {"ID": "tag-off", "Status": "Disabled",
+                "Filter": {"Tag": {"Key": "a", "Value": "b"}},
+                "Transitions": [{"Days": 30, "StorageClass": "STANDARD_IA"}],
+                "NoncurrentVersionExpiration": {"NoncurrentDays": 60}}
+
+
+def foreign_in_moto(env):
+    rules = moto_rules(env) or []
+    return [r for r in rules if not r["ID"].startswith("bucketeer-")]
+
+
+def seed(env, *rules):
+    env.moto().put_bucket_lifecycle_configuration(
+        Bucket="alice-data", LifecycleConfiguration={"Rules": list(rules)})
+    return foreign_in_moto(env)  # what moto itself reports back, the reference
+
+
+@pytest.mark.parametrize("rule", [LEGACY_PREFIX, AND_TAGS, DISABLED_TAG],
+                         ids=["legacy-prefix", "and-tags", "disabled-tag-transition"])
+def test_unusual_foreign_rules_survive(env, rule):
+    ref = seed(env, rule)
+    assert len(ref) == 1
+    assert env.alice.get(url()).json()["foreignRules"] == 1
+    assert put(env.alice, mp=4, non=6).status_code == 200
+    assert foreign_in_moto(env) == ref
+    assert put(env.alice, cur=20).status_code == 409  # refused confirm writes nothing
+    assert foreign_in_moto(env) == ref
+    assert len(moto_rules(env)) == 3
+    assert put(env.alice).status_code == 200  # remove all of ours
+    assert moto_rules(env) == ref
+
+
+def test_all_unusual_rules_together(env):
+    ref = seed(env, LEGACY_PREFIX, AND_TAGS, DISABLED_TAG)
+    assert len(ref) == 3
+    put(env.alice, cur=20, mp=1, confirm=True)
+    assert foreign_in_moto(env) == ref
+    put(env.alice)
+    assert moto_rules(env) == ref
+
+
+def test_409_then_confirmed_put_succeeds(env):
+    first = put(env.alice, cur=15)
+    assert first.status_code == 409 and first.json()["requiresConfirmation"] is True
+    assert moto_rules(env) is None
+    second = put(env.alice, cur=15, confirm=True)
+    assert second.status_code == 200 and second.json()["expireCurrentDays"] == 15
+    assert moto_rules(env)[0]["Expiration"]["Days"] == 15
+    assert len(env.audit("bucket.lifecycle")) == 1

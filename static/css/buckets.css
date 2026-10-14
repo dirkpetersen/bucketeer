@@ -123,3 +123,4 @@
   .lcd-body { padding: var(--sp-4); }
   .lcd .cd-actions .btn { flex: 1; }
 }
+.lcd-also { display: flex; margin-top: var(--sp-3); font-weight: 550; color: var(--text); }

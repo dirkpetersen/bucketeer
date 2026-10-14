@@ -99,6 +99,37 @@ export async function lifecycleDialog({ bucket }) {
     return setBucketLifecycle(bucket, { ...rules, ...(confirm ? { confirm: true } : {}) });
   }
 
+  // Ask before files are deleted. Resolves null (declined) or { alsoNoncurrent } (the
+  // optional "also delete old versions" box, offered on versioned buckets with no such rule).
+  async function askDelete(now) {
+    const offer = state.versioning === "enabled" && state.expireNoncurrentDays == null && !rows.expireNoncurrentDays.check.checked;
+    const box = h("input", { type: "checkbox", checked: true, id: `${id}-also` });
+    const message = h("span", {},
+      `Every file older than ${now} days will be deleted permanently, including files already there. `,
+      state.versioning === "enabled" ? "Because versioning is on, they become old versions first and are removed for good only when old versions are deleted too. " : "",
+      "It cannot be undone.",
+      offer && h("label", { class: "qd-check lcd-also", for: box.id }, box,
+        h("span", {}, `Also delete old versions after ${Math.min(now, 30)} days`)));
+    const ok = await confirmDialog({
+      title: ["Delete files in ", nameSpan(bucket), " after ", `${now} days?`], danger: true,
+      confirmLabel: "Delete old files automatically", message,
+    });
+    return ok ? { alsoNoncurrent: offer && box.checked ? Math.min(now, 30) : null } : null;
+  }
+
+  // Show what the server has now (rules changed elsewhere), discarding unsaved edits.
+  async function reloadState() {
+    state = await getBucketLifecycle(bucket);
+    for (const def of DEFS) {
+      const r = rows[def.key];
+      r.check.checked = state[def.key] != null;
+      r.input.value = String(state[def.key] ?? def.def);
+      r.input.disabled = !r.check.checked;
+      r.err.hidden = true;
+    }
+    update();
+  }
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (busy || save.disabled) return;
@@ -107,18 +138,35 @@ export async function lifecycleDialog({ bucket }) {
     const now = rules.expireCurrentDays;
     const destructive = now != null && (was == null || now < was);
     if (destructive) {
-      const ok = await confirmDialog({
-        title: ["Delete files in ", nameSpan(bucket), " after ", `${now} days?`], danger: true, confirmLabel: "Delete old files automatically",
-        message: `Every file older than ${now} days will be deleted permanently, including files already there. ${
-          state.versioning === "enabled" ? "Because versioning is on, they become old versions first and are removed for good only if you also delete old versions. " : ""}It cannot be undone.`,
-      });
-      if (!ok) return;
+      const choice = await askDelete(now);
+      if (!choice) return;
+      if (choice.alsoNoncurrent) {
+        rules.expireNoncurrentDays = choice.alsoNoncurrent;
+        rows.expireNoncurrentDays.check.checked = true;
+        rows.expireNoncurrentDays.input.value = String(choice.alsoNoncurrent);
+        rows.expireNoncurrentDays.input.disabled = false;
+      }
     }
     busy = true;
     save.disabled = true;
     save.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), "Saving…");
     try {
-      const res = await send(rules, destructive);
+      let res;
+      try {
+        res = await send(rules, destructive);
+      } catch (err) {
+        if (!(err.status === 409 && err.body?.requiresConfirmation) || destructive) throw err;
+        // The rules changed elsewhere: show the current ones and write nothing; Save asks again.
+        await reloadState();
+        // Only the delete-after rule the user was editing keeps their value, so Save can ask for confirmation.
+        const r = rows.expireCurrentDays;
+        r.check.checked = now != null;
+        r.input.value = String(now ?? r.def.def);
+        r.input.disabled = now == null;
+        update();
+        toast.show("Rules were changed elsewhere. Review them and press Save again.", { timeout: 9000 });
+        return;
+      }
       state = { ...state, ...res };
       changed = changed || res.changed;
       toast.show(res.changed ? `Lifecycle rules saved for ${bucket}.` : "Nothing to change.");

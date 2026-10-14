@@ -93,7 +93,7 @@ skips them too.
   left `pending` by a crash (the same rollback as a failed create), audited.
 - [x] Simple lifecycle rules: expire after N days, expire noncurrent versions,
   abort incomplete multipart uploads.
-- [ ] Lifecycle polish: when the server answers 409 requiresConfirmation (rules
+- [x] Lifecycle polish: when the server answers 409 requiresConfirmation (rules
   changed in another tab), reload the dialog or show the confirm prompt
   instead of a dead-end error; offer to also enable "expire old versions" in
   the expire-current confirm when versioning is on; add tests for foreign
