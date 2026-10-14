@@ -48,6 +48,7 @@ log = logging.getLogger("bucketeer.rgw_user")
 CACHE_TTL = 300.0  # seconds a resolution is remembered (never "unavailable")
 WARM_TIMEOUT = 30.0  # background resolve right after login
 
+RESERVED_UIDS = frozenset({"anonymous"})  # RGW evaluates anonymous requests as this user
 _UID = re.compile(r"^[a-z0-9][a-z0-9._@-]{0,63}\Z")  # same alphabet as validate_rgw_uid
 
 READY, SUSPENDED = "ready", "suspended"
@@ -248,6 +249,13 @@ class RgwResolver:
         mapping = await db.run(db.uid_mappings.get, username)
         if mapping:
             uid, source = mapping["rgw_uid"], "mapping"
+            if split_uid(uid)[1].lower() in RESERVED_UIDS:
+                await self._audit(
+                    username, "rgw.user.invalid_username", username,
+                    {"reason": "mapped to a reserved RGW uid"},
+                )
+                return RgwAccount(username, None, CREATION_FAILED, display_name,
+                                  reason="invalid_username")
             if await self._get(uid) is None:
                 await self._audit_quiet(
                     username, "rgw.user.mapping_target_missing", uid, {"mapped_to": uid}
@@ -256,7 +264,7 @@ class RgwResolver:
                                   reason="mapping_target_missing")
         else:
             bare = username.lower()
-            if not _UID.match(bare):
+            if not _UID.match(bare) or bare in RESERVED_UIDS:
                 await self._audit(
                     username, "rgw.user.invalid_username", username,
                     {"reason": "sAMAccountName cannot form a valid RGW uid"},

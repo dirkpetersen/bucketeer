@@ -1,7 +1,7 @@
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
-import { listBucketObjects, createShareLink } from "../api.js";
-import { formatBytes } from "../format.js";
+import { createShareLink } from "../api.js";
+import { keyPicker } from "./key-picker.js";
 import { copyText } from "../clipboard.js";
 import { toast } from "./toast.js";
 import { nameSpan } from "./confirm-dialog.js";
@@ -12,7 +12,6 @@ import { nameSpan } from "./confirm-dialog.js";
 // presigned download link. The link is kept in memory only, never in storage or attributes,
 // and is dropped when the key or the duration changes or the dialog closes.
 let seq = 0;
-const DEBOUNCE_MS = 220;
 const EXPIRIES = [
   { label: "1 hour", seconds: 3600 },
   { label: "1 day", seconds: 86400 },
@@ -21,103 +20,26 @@ const EXPIRIES = [
 
 export function shareLinkDialog({ bucket }) {
   const id = `sl${++seq}`;
-  let options = []; // [{ id, kind: "folder" | "file", value, el }]
-  let active = -1;
-  let ticket = 0; // drops answers of superseded autocomplete requests
-  let timer = 0;
   let busy = false;
   let link = null; // { url, expiresAt } while shown
 
   const error = h("p", { class: "qd-error", role: "alert", hidden: true });
   const showError = (m) => { error.textContent = m; error.hidden = !m; };
 
-  const input = h("input", {
-    class: "input slk-key", id: `${id}-key`, type: "text", role: "combobox", autocomplete: "off", autocapitalize: "off",
-    spellcheck: "false", placeholder: "reports/2026/summary.pdf", "aria-autocomplete": "list", "aria-expanded": "false",
-    "aria-controls": `${id}-list`, "aria-describedby": `${id}-hint`, maxlength: 1024,
+  const picker = keyPicker({
+    id,
+    bucket,
+    onChange: () => { showError(""); resetLink(); syncGo(); },
+    onError: showError,
+    onUnauthorized: () => dlg.close(),
   });
-  const list = h("ul", { class: "slk-list", id: `${id}-list`, role: "listbox", "aria-label": "Matching files and folders", hidden: true });
-  const status = h("p", { class: "slk-status", role: "status", "aria-live": "polite" });
+  const input = picker.input;
   const select = h("select", { class: "input slk-exp", id: `${id}-exp`, "aria-label": "Link lasts" },
     EXPIRIES.map((e, i) => h("option", { value: String(e.seconds), selected: i === 1, text: e.label })));
   const go = h("button", { class: "btn btn-primary", type: "submit", disabled: true }, icon("check"), "Create link");
   const close = h("button", { class: "btn", type: "button", text: "Close" });
 
   const resultWrap = h("div", { class: "slk-result", hidden: true });
-
-  function setOpen(open) {
-    list.hidden = !open || options.length === 0;
-    input.setAttribute("aria-expanded", String(!list.hidden));
-    if (list.hidden) { active = -1; input.removeAttribute("aria-activedescendant"); }
-  }
-  function setActive(i) {
-    if (!options.length) return;
-    active = (i + options.length) % options.length;
-    options.forEach((o, n) => o.el.setAttribute("aria-selected", String(n === active)));
-    const cur = options[active];
-    input.setAttribute("aria-activedescendant", cur.id);
-    cur.el.scrollIntoView({ block: "nearest" });
-  }
-
-  function render(res) {
-    options = [];
-    const items = [];
-    const add = (kind, value, label, meta) => {
-      const oid = `${id}-o${options.length}`;
-      const el = h("li", { class: "slk-opt", id: oid, role: "option", "aria-selected": "false", "data-kind": kind },
-        icon(kind === "folder" ? "right" : "download", "icon slk-ic"),
-        h("span", { class: "slk-name", text: label }),
-        meta && h("span", { class: "slk-meta", text: meta }));
-      el.addEventListener("mousedown", (e) => e.preventDefault()); // keep focus in the field
-      el.addEventListener("click", () => choose(options.find((o) => o.id === oid)));
-      options.push({ id: oid, kind, value, el });
-      items.push(el);
-    };
-    for (const p of res.prefixes) add("folder", p.prefix, p.prefix.slice(res.prefix.length) || p.prefix);
-    for (const e of res.entries) add("file", e.key, e.key.slice(res.prefix.length) || e.key, formatBytes(e.size));
-    list.replaceChildren(...items);
-    status.textContent = items.length
-      ? `${items.length} ${items.length === 1 ? "match" : "matches"}${res.truncated ? ", keep typing to narrow them down" : ""}.`
-      : "No files or folders start with that.";
-    setOpen(items.length > 0);
-    if (items.length) setActive(0);
-  }
-
-  async function suggest() {
-    const mine = ++ticket;
-    try {
-      const res = await listBucketObjects(bucket, input.value);
-      if (mine !== ticket) return;
-      render(res);
-    } catch (err) {
-      if (mine !== ticket) return;
-      if (err.status === 401) { dlg.close(); return; }
-      options = [];
-      setOpen(false);
-      status.textContent = "";
-      showError(err.message || "Could not look up file names.");
-    }
-  }
-  function schedule() {
-    clearTimeout(timer);
-    timer = setTimeout(suggest, DEBOUNCE_MS);
-  }
-
-  function choose(opt) {
-    if (!opt) return;
-    input.value = opt.value;
-    resetLink();
-    syncGo();
-    if (opt.kind === "folder") {
-      suggest(); // folders expand in place
-    } else {
-      ticket++;
-      options = [];
-      setOpen(false);
-      status.textContent = "";
-    }
-    input.focus();
-  }
 
   function syncGo() { go.disabled = busy || input.value.trim() === "" || input.value.endsWith("/"); }
   function resetLink() {
@@ -126,23 +48,6 @@ export function shareLinkDialog({ bucket }) {
     resultWrap.replaceChildren();
   }
 
-  input.addEventListener("input", () => { showError(""); resetLink(); syncGo(); schedule(); });
-  input.addEventListener("focus", () => { if (!options.length && !input.value) suggest(); else if (options.length) setOpen(true); });
-  input.addEventListener("blur", () => setOpen(false));
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      if (list.hidden) { if (options.length) setOpen(true); else suggest(); }
-      if (options.length) setActive(e.key === "ArrowDown" ? active + 1 : active - 1);
-    } else if (e.key === "Enter" && !list.hidden && active >= 0) {
-      e.preventDefault();
-      choose(options[active]);
-    } else if (e.key === "Escape" && !list.hidden) {
-      e.preventDefault();
-      e.stopPropagation(); // closes the list, not the dialog
-      setOpen(false);
-    }
-  });
   select.addEventListener("change", resetLink);
 
   function showLink(res) {
@@ -171,9 +76,7 @@ export function shareLinkDialog({ bucket }) {
   const form = h("form", { class: "slk-form", novalidate: true },
     h("div", { class: "field" },
       h("label", { for: input.id, text: "File name (key)" }),
-      input,
-      h("p", { class: "slk-hint", id: `${id}-hint`, text: "Start typing to see matching files. Choose a folder to look inside it." }),
-      list, status),
+      ...picker.nodes),
     h("div", { class: "field" },
       h("label", { for: select.id, text: "Link works for" }), select),
     h("p", { class: "lcd-tip", role: "note" }, icon("alert", "icon"),
@@ -187,7 +90,7 @@ export function shareLinkDialog({ bucket }) {
     busy = true;
     showError("");
     resetLink();
-    setOpen(false);
+    picker.close();
     go.disabled = true;
     go.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), "Creating…");
     try {
@@ -214,8 +117,7 @@ export function shareLinkDialog({ bucket }) {
 
   return new Promise((resolve) => {
     dlg.addEventListener("close", () => {
-      clearTimeout(timer);
-      ticket++;
+      picker.dispose();
       link = null;
       dlg.remove();
       resolve();

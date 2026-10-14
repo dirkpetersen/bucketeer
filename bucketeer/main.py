@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import (
+    acl,
     admin,
     admin_settings,
     audit_viewer,
@@ -148,6 +149,7 @@ def create_app(
     api.include_router(lifecycle.router)
     api.include_router(policy_editor.router)
     api.include_router(share_links.router)
+    api.include_router(acl.router)
     api.include_router(sharing.router)
     api.include_router(admin.router)
     api.include_router(admin_settings.router)

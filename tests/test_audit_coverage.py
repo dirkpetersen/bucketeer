@@ -21,6 +21,7 @@ import pytest
 from bucketeer.bucket_keys import cleanup_pending
 
 from .conftest import REQUIRED
+from .test_acl import fake_objects
 from .test_auth import SECRET_PW, TEAM_GROUP, USERS_GROUP
 from .test_buckets import Env, H
 
@@ -44,6 +45,8 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "PUT /api/buckets/{name}/policy": ("bucket.policy",),
     "DELETE /api/buckets/{name}/policy": ("bucket.policy_delete",),
     "POST /api/buckets/{name}/share-link": ("bucket.share_link",),
+    "PUT /api/buckets/{name}/acl": ("bucket.acl",),
+    "PUT /api/buckets/{name}/objects/acl": ("object.acl",),
     "POST /api/buckets/{name}/shares": ("bucket.share",),
     "PUT /api/buckets/{name}/shares/{share_id}": ("bucket.share_update",),
     "DELETE /api/buckets/{name}/shares/{share_id}": ("bucket.unshare",),
@@ -228,6 +231,20 @@ def run(tmp_path_factory, moto_server):
     r.step("DELETE /api/buckets/{name}/policy", lambda: a.request(
         "DELETE", "/api/buckets/alice-tag/policy", json={"etag": put_p.json()["etag"]},
         headers=H))
+    # ACLs: bucket (moto keeps these) and object (moto ignores object ACL documents)
+    et = a.get("/api/buckets/alice-data/acl").json()["etag"]
+    r.step("PUT /api/buckets/{name}/acl", lambda: a.put(
+        "/api/buckets/alice-data/acl", headers=H, json={
+            "etag": et, "keep": [], "add": [{"login": "bob", "permission": "READ"}]}))
+    plain_factory = env.app.state.s3.factory
+    fake_objects(env)
+    oacl = "/api/buckets/alice-data/objects/acl"
+    key = {"key": "data/file-0001.bin"}
+    et = a.get(oacl, params=key).json()["etag"]
+    r.step("PUT /api/buckets/{name}/objects/acl", lambda: a.put(
+        oacl, params=key, headers=H, json={
+            "etag": et, "keep": [], "add": [{"login": "bob", "permission": "READ"}]}))
+    env.app.state.s3.factory = plain_factory
     # failures with an unknown outcome (croit 5xx) are audited too
     def fail(method, needle):
         env.transport.fail = lambda q: (httpx.Response(500, json={"message": "boom"})

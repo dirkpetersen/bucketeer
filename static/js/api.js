@@ -162,3 +162,13 @@ export const putBucketPolicy = (name, body) =>
   api(`/buckets/${encodeURIComponent(name)}/policy`, { method: "PUT", json: body });
 export const deleteBucketPolicy = (name, body) =>
   api(`/buckets/${encodeURIComponent(name)}/policy`, { method: "DELETE", json: body });
+
+// ACLs (Advanced). get -> {scope, key?, owner, grants: [{kind: owner|user|unknown|group, id, uri, email,
+// name, permission, scope: public|signed_in|logs|null, removable}], etag, permissions}. put sends
+// {etag, keep: [{id|uri|email, permission}], add: [{login, permission}]}; a 409 etagMismatch carries
+// {current}; adding group (public) grants is refused with 422. Objects are chosen by key.
+const aclBase = (bucket, key) => key == null
+  ? `/buckets/${encodeURIComponent(bucket)}/acl`
+  : `/buckets/${encodeURIComponent(bucket)}/objects/acl?key=${encodeURIComponent(key)}`;
+export const getAcl = (bucket, key) => api(aclBase(bucket, key));
+export const putAcl = (bucket, key, body) => api(aclBase(bucket, key), { method: "PUT", json: body });

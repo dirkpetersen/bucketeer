@@ -12,6 +12,7 @@ import { lifecycleDialog } from "../components/lifecycle-dialog.js";
 import { shareLinkDialog } from "../components/share-link-dialog.js";
 import { menuButton } from "../components/menu-button.js";
 import { shareDialog } from "../components/share-dialog.js";
+import { aclDialog } from "../components/acl-dialog.js";
 
 // The Buckets card on the home page: the user's own buckets with usage, quota and
 // budget number; create and delete. `isAdvanced()` tells whether the global
@@ -66,7 +67,7 @@ function usageBlock(b) {
   return out;
 }
 
-function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPolicy, busy) {
+function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPolicy, onAcl, busy) {
   const created = b.createdAt ? new Date(b.createdAt) : null;
   const meta = h("div", { class: "bk-meta" });
   if (created && !Number.isNaN(created.getTime())) {
@@ -90,7 +91,11 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPo
       { label: "Keys", icon: "key", hint: "Keys that work for this bucket only", badge: b.keyCount || null, onSelect: () => onKeys(b) },
       { label: "Lifecycle", icon: "refresh", hint: "Delete old files or unfinished uploads automatically", onSelect: () => onLifecycle(b) },
       { label: "Share link", icon: "download", hint: "Temporary download link for one file", onSelect: () => onShare(b) },
-      ...(isAdvanced() ? [{ label: "Bucket policy…", icon: "shield", hint: "Edit the raw access policy (JSON)", onSelect: () => onPolicy(b) }] : []),
+      ...(isAdvanced() ? [
+        { label: "Bucket policy…", icon: "shield", hint: "Edit the raw access policy (JSON)", onSelect: () => onPolicy(b) },
+        { label: "Bucket permissions (ACL)…", icon: "users", hint: "Legacy permissions of the bucket itself", onSelect: () => onAcl(b, false) },
+        { label: "Object permissions (ACL)…", icon: "users", hint: "Legacy permissions of one file, chosen by name", onSelect: () => onAcl(b, true) },
+      ] : []),
       { label: "Delete bucket", icon: "trash", danger: true, separatorBefore: true, onSelect: () => onDelete(b) },
     ],
   });
@@ -127,7 +132,7 @@ export function bucketsCard() {
         h("div", { class: "empty-acts" }, h("button", { class: "btn btn-primary", type: "button", on: { click: create } }, icon("plus"), "Create your first bucket"))));
       return;
     }
-    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, managePolicy, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
+    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, managePolicy, manageAcl, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
   }
 
   function failed(err) {
@@ -222,6 +227,11 @@ export function bucketsCard() {
 
   async function managePolicy(b) {
     const res = await policyDialog({ bucket: b.name });
+    if (res.error && res.error.status !== 401) toast.error(res.error.message);
+  }
+
+  async function manageAcl(b, object) {
+    const res = await aclDialog({ bucket: b.name, object });
     if (res.error && res.error.status !== 401) toast.error(res.error.message);
   }
 

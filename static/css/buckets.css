@@ -225,3 +225,16 @@
   .pol-gutter, .pol-text { height: 16rem; }
 }
 .pol-jump { justify-self: start; }
+
+/* ACL dialog (builds on .bkd and .shd) */
+.acl { width: min(42rem, calc(100vw - 2 * var(--gutter))); }
+.acl-editor { display: grid; gap: var(--sp-4); grid-template-columns: minmax(0, 1fr); }
+.acl-editor[hidden] { display: none; }
+.acl-warn { background: var(--danger-bg); color: var(--danger); }
+.acl-warn svg { color: var(--danger); }
+.acl-row[data-risk="true"] { background: var(--danger-bg); }
+.acl-desc { color: var(--text-muted); font-size: var(--fs-xs); }
+.acl-perm { text-transform: none; letter-spacing: 0; }
+.acl-load { display: flex; justify-content: flex-start; padding-top: var(--sp-1); }
+.acl .field { display: grid; gap: var(--sp-2); min-width: 0; }
+.acl .field > label { font-size: var(--fs-sm); font-weight: 600; }

@@ -232,6 +232,13 @@ def test_mapping_crud_and_audit(env):
     assert env.transport.mutations() == []
 
 
+def test_mapping_to_the_reserved_anonymous_uid_is_refused(env):
+    for uid in ("anonymous", "Anonymous", "acme$anonymous"):
+        r = put(env, "/uid-mappings/someone", {"rgwUid": uid})
+        assert r.status_code == 422 and "reserved" in r.json()["detail"], uid
+    assert env.db.uid_mappings.list() == []
+
+
 def test_mapping_to_a_bucket_key_uid_is_refused(env):
     assert put(env, "/uid-mappings/dave", {"rgwUid": "john+backup"}).status_code == 422
     assert put(env, "/uid-mappings/dave", {"rgwUid": "acme$john+x"}).status_code == 422

@@ -136,7 +136,7 @@ skips them too.
   "More" menu that is keyboard-accessible and works on phones.
 - [x] Raw bucket policy editor, with a warning before editing `bucketeer-*`
   statements.
-- [ ] Bucket and object ACLs.
+- [x] Bucket and object ACLs.
 - [ ] CORS rules editor.
 - [ ] Bucket tagging.
 - [ ] Object lock: default retention, plus legal hold and retention for a given

@@ -52,6 +52,7 @@ from .ldapauth import InvalidCredentials, LdapUnavailable
 from .rgw_user import (
     CREATION_FAILED,
     MSG_UNAVAILABLE,
+    RESERVED_UIDS,
     SUSPENDED,
     UNAVAILABLE,
     RgwAccount,
@@ -119,6 +120,34 @@ async def _find_person(request: Request, owner: str, login: str):
     except LdapUnavailable:
         raise HTTPException(503, "The directory is temporarily unavailable. "
                                  "Try again shortly.") from None
+
+
+async def resolve_recipient(request: Request, acct: RgwAccount, login: str):
+    """Look a person up like a share does (rate limited, Q8 eligibility, uniform 404) and
+    resolve their RGW uid, creating the S3 account on the spot. Refuses yourself, a
+    suspended or unusable account and bucket-key users. Returns (person, RgwAccount, uid)."""
+    db = request.app.state.db
+    person = await _find_person(request, acct.username, login)
+    if person.username.lower() == acct.username.lower():
+        raise HTTPException(409, "That is you. The bucket is already yours.")
+
+    rcpt = await request.app.state.rgw.resolve(person.username, person.display_name)
+    if rcpt.status == UNAVAILABLE:
+        raise HTTPException(503, MSG_UNAVAILABLE)
+    if rcpt.status == CREATION_FAILED or not rcpt.uid:
+        raise HTTPException(409, "An S3 account could not be set up for that person. "
+                                 "Contact your administrator.")
+    if rcpt.status == SUSPENDED:
+        raise HTTPException(409, "That person's S3 account is suspended, so the bucket cannot "
+                                 "be shared with them now.")
+    uid = rcpt.uid
+    if split_uid(uid)[1].lower() in RESERVED_UIDS:
+        raise HTTPException(409, "That account name is reserved and cannot be used.")
+    if same_uid(uid, acct.uid):
+        raise HTTPException(409, "That person uses the same S3 account as you.")
+    if await db.run(db.bucket_keys.get_by_uid, uid):
+        raise HTTPException(409, "That account is a bucket key and cannot be a share recipient.")
+    return person, rcpt, uid
 
 
 def _statement_view(st: dict) -> dict[str, Any]:
@@ -277,24 +306,7 @@ async def create_share(name: str, body: ShareBody, request: Request, response: R
     response.headers["Cache-Control"] = "no-store"
     db = request.app.state.db
     short, full = await _owned(request, acct, name, user.username)
-    person = await _find_person(request, acct.username, body.login)
-    if person.username.lower() == acct.username.lower():
-        raise HTTPException(409, "That is you. The bucket is already yours.")
-
-    rcpt = await request.app.state.rgw.resolve(person.username, person.display_name)
-    if rcpt.status == UNAVAILABLE:
-        raise HTTPException(503, MSG_UNAVAILABLE)
-    if rcpt.status == CREATION_FAILED or not rcpt.uid:
-        raise HTTPException(409, "An S3 account could not be set up for that person. "
-                                 "Contact your administrator.")
-    if rcpt.status == SUSPENDED:
-        raise HTTPException(409, "That person's S3 account is suspended, so the bucket cannot "
-                                 "be shared with them now.")
-    uid = rcpt.uid
-    if same_uid(uid, acct.uid):
-        raise HTTPException(409, "That person uses the same S3 account as you.")
-    if await db.run(db.bucket_keys.get_by_uid, uid):
-        raise HTTPException(409, "That account is a bucket key and cannot be a share recipient.")
+    person, rcpt, uid = await resolve_recipient(request, acct, body.login)
     tenant, bare = split_uid(uid)
     try:
         statement = s3docs.share_statement(short, bare, tenant or None, body.access)
