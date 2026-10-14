@@ -117,7 +117,7 @@ skips them too.
 - [x] Admin: list all bucket keys (owner, bucket, access, status) and revoke
   any of them, audited as the admin.
 - [x] Audit log viewer with filters.
-- [ ] Offboarding job (daily, in-process): suspend RGW users and their bucket
+- [ ] (blocked: Q10) Offboarding job (daily, in-process): suspend RGW users and their bucket
   keys when the AD account is disabled or removed from the group. Never delete
   anything.
 

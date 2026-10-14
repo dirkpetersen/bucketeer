@@ -66,6 +66,38 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 **Answer:**
 
+### Q10: Offboarding: how careful should the daily suspension job be?
+
+- **Blocks:** TODO "Offboarding job"
+- **Context:** CLAUDE.md says that, once a day, Bucketeer suspends the S3
+  account (and its bucket keys) of anyone whose AD account is disabled or
+  who has left the AD group, and never deletes anything. Before it does that
+  automatically, four details need settling:
+  1. **Which S3 accounts are in scope?** The cluster may hold S3 users that
+     don't belong to people, such as service accounts or legacy users that
+     Bucketeer never linked to AD.
+  2. **What if a person comes back,** for example rejoining the group or
+     getting their AD account re-enabled?
+  3. **What if AD looks wrong,** for example unreachable, or a
+     misconfiguration that makes everyone look like they left?
+  4. **Trial run first?** Should it report what it would do before it
+     actually suspends anyone?
+- **Recommendations:**
+  1. Only accounts Bucketeer knows belong to a person: those it created or
+     linked at login, and admin mappings. Anything else is never touched.
+  2. Unsuspend automatically on that person's next successful login, but
+     only for suspensions the job itself made. Suspensions an admin made by
+     hand are never undone automatically.
+  3. Abort the whole run, suspending nobody, if AD can't be read, or if more
+     than 10% of known users (or more than 20 people) would be suspended in
+     one run. Show the reason on the admin page and audit it.
+  4. Yes. The job starts in report-only mode, showing on the admin page who
+     would be suspended. An admin switches it to "enforce" in Settings.
+     It runs at 03:00 local time by default, and an admin can also start it
+     by hand.
+
+**Answer:**
+
 ## Resolved
 
 ### Q1: How does a user choose the object for a presigned share link?
