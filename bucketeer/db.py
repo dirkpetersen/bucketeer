@@ -115,6 +115,10 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE bucket_keys ADD COLUMN statement_pending_cleanup INTEGER NOT NULL DEFAULT 0;
     """,
+    # v6: the audit viewer's filter dropdown lists distinct actions.
+    """
+    CREATE INDEX audit_log_action ON audit_log (action);
+    """,
 ]
 
 _MISSING: Any = object()
@@ -585,6 +589,73 @@ class AuditLog(_Repo):
         for r in rows:
             r["details"] = json.loads(r["details"])
         return rows
+
+    def search(
+        self,
+        *,
+        actor: str | None = None,
+        action: str | None = None,
+        target_type: str | None = None,
+        target: str | None = None,
+        target_contains: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        before_id: int | None = None,
+        limit: int = 50,
+    ) -> tuple[list[dict[str, Any]], int | None]:
+        """Admin viewer: newest first by id (stable under concurrent inserts).
+        `action` ending in '.' is a prefix match, otherwise exact; `target` is
+        exact, `target_contains` a case-insensitive substring; `since` inclusive,
+        `until` exclusive; `before_id` is the cursor. Returns (rows, next cursor
+        or None). `details` come back re-scrubbed (defense in depth)."""
+        conds: list[str] = []
+        params: list[Any] = []
+        for col, val in (("actor", actor), ("target_type", target_type), ("target", target)):
+            if val is not None:
+                conds.append(f"{col} = ?")
+                params.append(val)
+        if action is not None:
+            if action.endswith("."):
+                esc = action.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                conds.append("action LIKE ? ESCAPE '\\'")
+                params.append(esc + "%")
+            else:
+                conds.append("action = ?")
+                params.append(action)
+        if target_contains:
+            conds.append("instr(lower(target), lower(?)) > 0")
+            params.append(target_contains)
+        if since is not None:
+            conds.append("ts >= ?")
+            params.append(since)
+        if until is not None:
+            conds.append("ts < ?")
+            params.append(until)
+        if before_id is not None:
+            conds.append("id < ?")
+            params.append(before_id)
+        where = f"WHERE {' AND '.join(conds)}" if conds else ""
+        limit = max(1, limit)
+        rows = self.db.query(
+            f"SELECT * FROM audit_log {where} ORDER BY id DESC LIMIT ?", (*params, limit + 1)
+        )
+        more = len(rows) > limit
+        rows = rows[:limit]
+        for r in rows:
+            try:
+                r["details"] = scrub(json.loads(r["details"]))
+            except ValueError:
+                r["details"] = {}
+        return rows, (rows[-1]["id"] if more else None)
+
+    def facets(self) -> dict[str, list[str]]:
+        """Distinct actions and target types, for filter dropdowns."""
+        return {
+            "actions": [r["action"] for r in self.db.query(
+                "SELECT DISTINCT action FROM audit_log ORDER BY action")],
+            "targetTypes": [r["target_type"] for r in self.db.query(
+                "SELECT DISTINCT target_type FROM audit_log ORDER BY target_type")],
+        }
 
     def count(
         self,

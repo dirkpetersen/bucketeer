@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from . import (
     admin,
     admin_settings,
+    audit_viewer,
     auth,
     bucket_keys,
     buckets,
@@ -141,6 +142,7 @@ def create_app(
     api.include_router(buckets.router)
     api.include_router(bucket_keys.router)
     api.include_router(bucket_keys.admin_router)
+    api.include_router(audit_viewer.router)
     api.include_router(lifecycle.router)
     api.include_router(share_links.router)
     api.include_router(admin.router)

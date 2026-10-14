@@ -102,6 +102,14 @@ const enc = encodeURIComponent;
 export const adminUsers = () => api("/admin/users");
 export const adminBuckets = () => api("/admin/buckets");
 export const adminBucketKeys = (state = "all") => api(`/admin/bucket-keys?state=${enc(state)}`);
+// Audit log viewer. `params` are the filter fields (actor, action, target_type, target_contains, since, until, before_id, limit).
+export const auditQuery = (params = {}) => {
+  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== ""));
+  return q.toString();
+};
+export const adminAudit = (params) => api(`/admin/audit?${auditQuery(params)}`);
+export const adminAuditFacets = () => api("/admin/audit/facets");
+export const auditExportUrl = (params) => `/api/admin/audit/export.csv?${auditQuery(params)}`;
 export const adminRevokeBucketKey = (id) => api(`/admin/bucket-keys/${Number(id)}`, { method: "DELETE" });
 export const setUserQuota = (uid, quota) =>
   api(`/admin/users/${enc(uid)}/quota`, { method: "PUT", json: quota });
