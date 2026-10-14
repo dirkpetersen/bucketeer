@@ -31,7 +31,7 @@ QUESTIONS.md. Skip it, and skip anything that depends on it.
 - [x] S3 test backend: tests start `moto` in server mode as the S3 endpoint. The
   mock croit's buckets and keys must line up with what's in moto, e.g. mock
   bucket creation also creates the bucket in moto.
-- [ ] croit client module: async httpx client, Bearer token, `ErrorMessage` →
+- [x] croit client module: async httpx client, Bearer token, `ErrorMessage` →
   exception, task polling, `$` URL-encoding of uids.
 - [ ] SQLite storage under `DATA_DIR`: schema plus migrations for settings, uid
   mappings, bucket keys, and the audit log.
@@ -103,6 +103,18 @@ QUESTIONS.md. Skip it, and skip anything that depends on it.
 - [ ] Bucket notifications, with endpoints from the admin allowlist only.
 - [ ] Multipart upload cleanup (list and abort).
 - [ ] Subusers (read/write/readwrite/full) and their keys.
+
+## Verify against a real croit cluster
+
+Things the spec leaves unclear. Check each one once a real cluster is
+available, and fix the client and the mock if reality differs:
+- [ ] `GET /s3/users` without `uid` (the spec marks it required, but the
+  description says it lists all users).
+- [ ] Where croit puts the bucket-delete confirmation sentence (the client
+  reads `details`, then falls back to the message text), and the exact
+  wording.
+- [ ] Bucket keys: a zero user quota doesn't block writes to the shared
+  bucket, because writes count against the bucket owner's quota.
 
 ## Later (needs cluster work first)
 

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Bucketeer is a self-service S3 portal for Ceph clusters managed by **croit**. Users log in with AD, get their S3 (RGW) access/secret keys with ready-to-paste `~/.aws/config` and `~/.aws/credentials` snippets, and manage their buckets: create, delete, versioning, sharing, scoped keys, lifecycle, and the full set of S3 bucket features. Admins get an admin page. See "Product design" below for decisions already made, and `TODO.md` for the phased plan.
 
-The repo is greenfield; see `TODO.md` for what exists so far. Code layout: `app.py` (uvicorn entry point), the `bucketeer/` package (`config.py` settings, `main.py` app factory), `static/` (frontend, served at `/`), `tests/`, and `mock/` (dev/test-only mock croit API). JSON endpoints go under `/api/...`; the static mount at `/` is registered last so it never shadows them or `/health`.
+The repo is greenfield; see `TODO.md` for what exists so far. Code layout: `app.py` (uvicorn entry point), the `bucketeer/` package (`config.py` settings, `main.py` app factory, `croit.py` croit client), `static/` (frontend, served at `/`), `tests/`, and `mock/` (dev/test-only mock croit API). JSON endpoints go under `/api/...`; the static mount at `/` is registered last so it never shadows them or `/health`.
 
 ### Commands
 
@@ -94,6 +94,10 @@ Endpoints this app relies on:
 - RGW uids can carry a tenant (`tenant$uid`). URL-encode the `$` in path parameters.
 - Errors come back as the `ErrorMessage` schema.
 - `docs/api/s3-features.md` lists every S3 endpoint croit offers, and the S3 features users have to manage through the S3 protocol instead. `docs/api/README.md` covers how to get croit tokens.
+- **Client:** `bucketeer/croit.py` (`CroitClient`, async httpx). `create_app` builds one per app (`app.state.croit`, `get_croit` dependency) and closes it on shutdown; tests pass `transport=httpx.ASGITransport(app=mock)` (see `tests/test_croit_client.py`). Methods return croit's JSON as plain dicts; task-returning calls (`create_bucket`, `delete_bucket`) return the task for `wait_for_task`.
+  - Errors: `CroitError(status, code, message, details)` for non-2xx; `CroitWarning` (a `CroitError`) for a 400 `ignorableWarning`, with `.token` kept out of str/repr; `CroitUnavailable` for network/timeout; `CroitTaskFailed`/`CroitTaskTimeout` from `wait_for_task`.
+  - Every path parameter goes through `_path()` (`quote(value, safe="")`: `tenant$uid` -> `tenant%24uid`, `/` can't add segments). Never build a path by hand.
+  - There is no whole-set `PUT .../keys` method on purpose. `delete_bucket_and_data` runs the non-empty delete handshake and only with `user_confirmed=True`.
 - Planned work, including a mock croit API, is tracked in `TODO.md`. Questions for the owner go in `QUESTIONS.md`. Don't guess at product decisions: ask there and work on something else.
 
 ## Generated AWS config
