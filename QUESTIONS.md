@@ -12,89 +12,22 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 ## Open
 
-### Q7: Should versioning be on by default for new buckets?
+### Q11: Group shares: which groups, and how big?
 
-- **Blocks:** nothing. New buckets currently default to versioning **off**,
-  as plain S3 does.
-- **Context:** versioning keeps every overwritten or deleted object version,
-  which protects against accidents. But old versions count toward the quota,
-  and users must add lifecycle rules (expire noncurrent versions) to clean
-  them up. The create dialog has a checkbox either way.
+- **Blocks:** TODO "Group shares". Sharing with individual people is being
+  built now.
+- **Context:** this is the unanswered part 3 of Q8. A bucket policy can't name
+  an AD group, so a group share is turned into one share per member at the
+  moment you share. People who join the group later don't get access until
+  the group is shared again.
 - **Options:**
-  1. Default off, as now.
-  2. Default on, with the simple "expire noncurrent versions after N days"
-     lifecycle rule suggested once that feature exists.
-- **Recommendation:** 2, on by default. Accidental deletes are the most
-  common data-loss case, and the quota cost is visible in the bucket list.
-
-**Answer:**
-
-### Q8: Sharing a bucket: who can receive a share, and how?
-
-- **Blocks:** TODO "Sharing"
-- **Context:** sharing adds a bucket-policy statement that grants another
-  person's S3 user read-only or read-write access. To do that, Bucketeer has
-  to find the person in AD and know their S3 user.
-  1. **Recipient has no S3 account yet:** they have never logged in to
-     Bucketeer, so they have no RGW user to name in the policy.
-  2. **Recipient outside the required AD group:** can you share with someone
-     who isn't allowed to log in to Bucketeer?
-  3. **Group shares:** CLAUDE.md says a group is expanded to its members'
-     S3 users when you share, so later joiners don't get access
-     automatically. Which groups can be picked, and is there a size limit?
-- **Recommendations:**
-  1. Create their S3 account on the spot, with the default quota, the same
-     as their first login would. The share then works immediately and they
-     just need to log in to get keys.
-  2. No. Only members of `LDAP_REQUIRED_GROUP_DN` can receive shares, so
-     Bucketeer never creates accounts for people who couldn't use them.
-  3. Any AD group, found by name, with a cap of 50 members; larger groups
-     are refused with a message. The share list shows which members were
-     added, and re-sharing the group adds new members.
-
-**Answer:**
-
-### Q9: How many bucket keys can one user create?
-
-- **Blocks:** nothing. The default below is used until you answer.
-- **Context:** a bucket key is a separate S3 user that can only reach one
-  bucket, read-only or read-write. Each key adds an RGW user to the cluster.
-- **Default being built:** at most **10 live bucket keys per user** (revoked
-  keys don't count), and at most 5 per bucket.
-- **Recommendation:** keep 10 per user and 5 per bucket. Admins can always
-  see and revoke them.
-
-**Answer:**
-
-### Q10: Offboarding: how careful should the daily suspension job be?
-
-- **Blocks:** TODO "Offboarding job"
-- **Context:** CLAUDE.md says that, once a day, Bucketeer suspends the S3
-  account (and its bucket keys) of anyone whose AD account is disabled or
-  who has left the AD group, and never deletes anything. Before it does that
-  automatically, four details need settling:
-  1. **Which S3 accounts are in scope?** The cluster may hold S3 users that
-     don't belong to people, such as service accounts or legacy users that
-     Bucketeer never linked to AD.
-  2. **What if a person comes back,** for example rejoining the group or
-     getting their AD account re-enabled?
-  3. **What if AD looks wrong,** for example unreachable, or a
-     misconfiguration that makes everyone look like they left?
-  4. **Trial run first?** Should it report what it would do before it
-     actually suspends anyone?
-- **Recommendations:**
-  1. Only accounts Bucketeer knows belong to a person: those it created or
-     linked at login, and admin mappings. Anything else is never touched.
-  2. Unsuspend automatically on that person's next successful login, but
-     only for suspensions the job itself made. Suspensions an admin made by
-     hand are never undone automatically.
-  3. Abort the whole run, suspending nobody, if AD can't be read, or if more
-     than 10% of known users (or more than 20 people) would be suspended in
-     one run. Show the reason on the admin page and audit it.
-  4. Yes. The job starts in report-only mode, showing on the admin page who
-     would be suspended. An admin switches it to "enforce" in Settings.
-     It runs at 03:00 local time by default, and an admin can also start it
-     by hand.
+  1. Any AD group, found by name, with a cap of 50 members; larger groups
+     are refused with a message. The share list shows the members that were
+     added, and sharing the group again adds new members.
+  2. Only groups an admin has put on an allowlist in Settings, with the same
+     cap.
+  3. No group shares; people share with individuals only.
+- **Recommendation:** 1.
 
 **Answer:**
 
@@ -245,3 +178,63 @@ Each question has a recommendation. Answering "ok" accepts it.
 **Answer:** OK
 
 **Decision:** recommendations accepted. Users choose a placement only, never a storage class, and there are no broker credentials in v1. Recorded in CLAUDE.md; bucket notifications unblocked.
+
+### Q7: Should versioning be on by default for new buckets?
+
+- **Blocks:** nothing. New buckets currently default to versioning **off**,
+  as plain S3 does.
+- **Context:** versioning keeps every overwritten or deleted object version,
+  which protects against accidents. But old versions count toward the quota,
+  and users must add lifecycle rules (expire noncurrent versions) to clean
+  them up. The create dialog has a checkbox either way.
+- **Options:**
+  1. Default off, as now.
+  2. Default on, with the simple "expire noncurrent versions after N days"
+     lifecycle rule suggested once that feature exists.
+- **Recommendation:** 2, on by default. Accidental deletes are the most
+  common data-loss case, and the quota cost is visible in the bucket list.
+
+**Answer:** On by default and expire non current versins after 30 days
+
+**Decision:** versioning is on by default for new buckets, and a new versioned bucket gets the lifecycle rule "expire noncurrent versions after 30 days". Recorded in CLAUDE.md; added as a TODO item.
+
+### Q8: Sharing a bucket: who can receive a share, and how?
+
+- **Blocks:** TODO "Sharing"
+- **Context:** sharing adds a bucket-policy statement that grants another
+  person's S3 user read-only or read-write access. To do that, Bucketeer has
+  to find the person in AD and know their S3 user.
+  1. **Recipient has no S3 account yet:** they have never logged in to
+     Bucketeer, so they have no RGW user to name in the policy.
+  2. **Recipient outside the required AD group:** can you share with someone
+     who isn't allowed to log in to Bucketeer?
+  3. **Group shares:** CLAUDE.md says a group is expanded to its members'
+     S3 users when you share, so later joiners don't get access
+     automatically. Which groups can be picked, and is there a size limit?
+- **Recommendations:**
+  1. Create their S3 account on the spot, with the default quota, the same
+     as their first login would. The share then works immediately and they
+     just need to log in to get keys.
+  2. No. Only members of `LDAP_REQUIRED_GROUP_DN` can receive shares, so
+     Bucketeer never creates accounts for people who couldn't use them.
+  3. Any AD group, found by name, with a cap of 50 members; larger groups
+     are refused with a message. The share list shows which members were
+     added, and re-sharing the group adds new members.
+
+**Answer:** 2. if LDAP_REQUIRED_GROUP_DN is set, 1. if it is not set. if not set everyone can login
+
+**Decision:** recipients are exactly the people who could log in: members of `LDAP_REQUIRED_GROUP_DN` when it is set (recommendation 2), anyone in AD when it is empty (recommendation 1); a recipient without an S3 account gets one created on the spot. Group shares (part 3) were not answered and moved to Q11. Recorded in CLAUDE.md; individual sharing unblocked.
+
+### Q9: How many bucket keys can one user create?
+
+- **Blocks:** nothing. The default below is used until you answer.
+- **Context:** a bucket key is a separate S3 user that can only reach one
+  bucket, read-only or read-write. Each key adds an RGW user to the cluster.
+- **Default being built:** at most **10 live bucket keys per user** (revoked
+  keys don't count), and at most 5 per bucket.
+- **Recommendation:** keep 10 per user and 5 per bucket. Admins can always
+  see and revoke them.
+
+**Answer:** OK
+
+**Decision:** keep 10 live bucket keys per user and 5 per bucket. Recorded in CLAUDE.md.

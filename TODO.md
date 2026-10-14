@@ -84,8 +84,15 @@ skips them too.
 - [x] Versioning toggle (enable/suspend).
 - [x] Shared-document helpers for bucket policy and lifecycle: read-modify-write
   that only touches `bucketeer-*` Sids/IDs. Unit-test heavily.
-- [ ] (blocked: Q8) Sharing: share a bucket with an AD user (read-only or read-write). Group
-  share expands to member uids. List and revoke shares.
+- [ ] Sharing: share a bucket with an AD user (read-only or read-write); list
+  and revoke shares. Recipients are people who could log in (Q8): members of
+  `LDAP_REQUIRED_GROUP_DN` when set, anyone in AD when not; a recipient
+  without an S3 account gets one created on the spot.
+- [ ] (blocked: Q11) Group shares: share a bucket with an AD group, expanded to
+  its members' uids at share time.
+- [ ] Versioning on by default (Q7): new buckets default to versioning on, and a
+  new versioned bucket gets the managed "expire noncurrent versions after 30
+  days" lifecycle rule. Update the create dialog default and tests.
 - [x] Bucket keys: create a scoped RGW user (zero quota) plus a policy
   statement, and record ownership in SQLite. List, revoke, and show snippets
   for each key. Verify the zero-quota assumption on the real cluster.
