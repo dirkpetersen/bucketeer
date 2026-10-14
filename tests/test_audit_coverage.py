@@ -41,6 +41,8 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "POST /api/buckets/reconcile": ("bucket.tag_sync",),
     "PUT /api/buckets/{name}/versioning": ("bucket.versioning",),
     "PUT /api/buckets/{name}/lifecycle": ("bucket.lifecycle",),
+    "PUT /api/buckets/{name}/policy": ("bucket.policy",),
+    "DELETE /api/buckets/{name}/policy": ("bucket.policy_delete",),
     "POST /api/buckets/{name}/share-link": ("bucket.share_link",),
     "POST /api/buckets/{name}/shares": ("bucket.share",),
     "PUT /api/buckets/{name}/shares/{share_id}": ("bucket.share_update",),
@@ -216,6 +218,16 @@ def run(tmp_path_factory, moto_server):
         f"/api/buckets/alice-cov/shares/{sid}", headers=H))
     ok(a.post("/api/buckets/alice-cov/shares", json={"login": "bob", "access": "read"},
               headers=H))
+    # raw policy editor: write a foreign statement, then delete the policy
+    et = a.get("/api/buckets/alice-tag/policy").json()["etag"]
+    doc = {"Version": "2012-10-17", "Statement": [{
+        "Sid": "team-read", "Effect": "Allow", "Principal": "*", "Action": "s3:GetObject",
+        "Resource": "arn:aws:s3:::alice-tag/*"}]}
+    put_p = r.step("PUT /api/buckets/{name}/policy", lambda: a.put(
+        "/api/buckets/alice-tag/policy", json={"policy": doc, "etag": et}, headers=H))
+    r.step("DELETE /api/buckets/{name}/policy", lambda: a.request(
+        "DELETE", "/api/buckets/alice-tag/policy", json={"etag": put_p.json()["etag"]},
+        headers=H))
     # failures with an unknown outcome (croit 5xx) are audited too
     def fail(method, needle):
         env.transport.fail = lambda q: (httpx.Response(500, json={"message": "boom"})

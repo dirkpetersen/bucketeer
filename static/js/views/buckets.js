@@ -6,6 +6,8 @@ import { toast } from "../components/toast.js";
 import { confirmDialog, nameSpan } from "../components/confirm-dialog.js";
 import { createBucketDialog } from "../components/create-bucket-dialog.js";
 import { bucketKeysDialog } from "../components/bucket-keys-dialog.js";
+import { isAdvanced, subscribe } from "../advanced.js";
+import { policyDialog } from "../components/policy-dialog.js";
 import { lifecycleDialog } from "../components/lifecycle-dialog.js";
 import { shareLinkDialog } from "../components/share-link-dialog.js";
 import { menuButton } from "../components/menu-button.js";
@@ -64,7 +66,7 @@ function usageBlock(b) {
   return out;
 }
 
-function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, busy) {
+function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPolicy, busy) {
   const created = b.createdAt ? new Date(b.createdAt) : null;
   const meta = h("div", { class: "bk-meta" });
   if (created && !Number.isNaN(created.getTime())) {
@@ -88,6 +90,7 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, busy
       { label: "Keys", icon: "key", hint: "Keys that work for this bucket only", badge: b.keyCount || null, onSelect: () => onKeys(b) },
       { label: "Lifecycle", icon: "refresh", hint: "Delete old files or unfinished uploads automatically", onSelect: () => onLifecycle(b) },
       { label: "Share link", icon: "download", hint: "Temporary download link for one file", onSelect: () => onShare(b) },
+      ...(isAdvanced() ? [{ label: "Bucket policy…", icon: "shield", hint: "Edit the raw access policy (JSON)", onSelect: () => onPolicy(b) }] : []),
       { label: "Delete bucket", icon: "trash", danger: true, separatorBefore: true, onSelect: () => onDelete(b) },
     ],
   });
@@ -124,7 +127,7 @@ export function bucketsCard() {
         h("div", { class: "empty-acts" }, h("button", { class: "btn btn-primary", type: "button", on: { click: create } }, icon("plus"), "Create your first bucket"))));
       return;
     }
-    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
+    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, managePolicy, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
   }
 
   function failed(err) {
@@ -217,6 +220,11 @@ export function bucketsCard() {
     if (res.error && res.error.status !== 401) toast.error(res.error.message);
   }
 
+  async function managePolicy(b) {
+    const res = await policyDialog({ bucket: b.name });
+    if (res.error && res.error.status !== 401) toast.error(res.error.message);
+  }
+
   async function manageShare(b) {
     await shareLinkDialog({ bucket: b.name });
   }
@@ -248,6 +256,12 @@ export function bucketsCard() {
       "This permanently deletes ", h("strong", { text: `${formatCount(objects)} ${objects === 1 ? "object" : "objects"}` }),
       objects ? ` (${formatBytes(bytes)})` : "", " and every version of them. It cannot be undone.");
   }
+
+  // The menu entry follows the Advanced toggle live; stop listening once the card is gone.
+  const unsub = subscribe(() => {
+    if (!card.isConnected) { unsub(); return; }
+    if (buckets.length) paint();
+  });
 
   load();
   return card;

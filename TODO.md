@@ -134,7 +134,7 @@ skips them too.
 - [x] Bucket row polish: each row now has seven controls and the actions wrap;
   group the less common ones (Keys, Lifecycle, Share link, Share) into a
   "More" menu that is keyboard-accessible and works on phones.
-- [ ] Raw bucket policy editor, with a warning before editing `bucketeer-*`
+- [x] Raw bucket policy editor, with a warning before editing `bucketeer-*`
   statements.
 - [ ] Bucket and object ACLs.
 - [ ] CORS rules editor.

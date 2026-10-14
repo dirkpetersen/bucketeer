@@ -31,6 +31,31 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 **Answer:**
 
+### Q12: Public buckets and self-lockout in the raw policy editor
+
+- **Blocks:** nothing. The editor currently accepts both cases below, with
+  the usual warning for Bucketeer-managed statements.
+- **Context:** with Advanced on, users can edit their bucket's raw policy.
+  1. **Public buckets:** a statement with `"Principal": "*"` makes a bucket
+     readable (or writable) by anyone, and RGW accepts it.
+  2. **Locking yourself out:** an explicit Deny on `s3:*` (or on the policy
+     actions) for everyone also stops the owner; only an admin can then fix
+     it in RGW, and Bucketeer's sharing, keys and lifecycle on that bucket
+     start failing.
+  Important: users have their own S3 keys, so they can set any policy with
+  the AWS CLI regardless of what Bucketeer allows. Bucketeer can warn and
+  guide; real enforcement would need RGW/cluster settings.
+- **Options:**
+  1. Allow both, with a clear warning and an extra confirmation in the
+     editor, and audit them so admins can see them.
+  2. Refuse them in the editor (users could still do it with the CLI).
+  3. Also add an admin-page list of buckets with public statements.
+- **Recommendation:** 1 plus 3: warn, confirm and audit in the editor, and
+  give admins a "public buckets" list, since refusing in the UI alone gives a
+  false sense of safety.
+
+**Answer:**
+
 ## Resolved
 
 ### Q1: How does a user choose the object for a presigned share link?

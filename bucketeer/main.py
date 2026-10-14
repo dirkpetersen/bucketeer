@@ -17,6 +17,7 @@ from . import (
     buckets,
     credentials,
     lifecycle,
+    policy_editor,
     profile,
     rgw_user,
     s3client,
@@ -145,6 +146,7 @@ def create_app(
     api.include_router(bucket_keys.admin_router)
     api.include_router(audit_viewer.router)
     api.include_router(lifecycle.router)
+    api.include_router(policy_editor.router)
     api.include_router(share_links.router)
     api.include_router(sharing.router)
     api.include_router(admin.router)

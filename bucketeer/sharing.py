@@ -17,8 +17,9 @@ match, `uid_taken` refusal, default quota, never an email).
 Routes (owner side: `require_active_rgw_user`, own bucket verified in croit, `no-store`):
 - `GET  /api/buckets/{name}/share-lookup?q=` -> `{username, displayName, isYou}`
 - `GET  /api/buckets/{name}/shares` -> `{shares: [{id, recipient, displayName, uid, access,
-  createdAt|null, status}], checked}`; `status`: `active`, `out_of_sync` (row without a matching
-  statement: repair with PUT), `unknown` (a `bucketeer-share-*` statement without a row, `id` is
+  createdAt|null, status}], checked}`; `status`: `active`, `out_of_sync` (statement missing or
+  not exactly the canonical one, e.g. widened Principal: repair with PUT),
+  `unknown` (a `bucketeer-share-*` statement without a row, `id` is
   its Sid; revoke it), `unchecked` (policy could not be read, `checked: false`).
 - `POST /api/buckets/{name}/shares {login, access: read|readwrite}` -> 201 the share view
   (`accountCreated` when the recipient's S3 account was made now); an existing live share of
@@ -223,6 +224,15 @@ async def share_lookup(name: str, q: str, request: Request, response: Response, 
             "isYou": person.username.lower() == acct.username.lower()}
 
 
+def _canonical(short: str, row: dict) -> dict | None:
+    """The statement a share row should have in the policy (None if it cannot be built)."""
+    tenant, bare = split_uid(row["recipient_uid"])
+    try:
+        return s3docs.share_statement(short, bare, tenant or None, row["access"])
+    except s3docs.S3DocError:
+        return None
+
+
 @router.get("/buckets/{name}/shares")
 async def list_shares(name: str, request: Request, response: Response, acct: Account):
     response.headers["Cache-Control"] = "no-store"
@@ -247,7 +257,7 @@ async def list_shares(name: str, request: Request, response: Response, acct: Acc
         seen.add(sid)
         if not checked:
             status = "unchecked"
-        elif st is None or _statement_view(st)["access"] != row["access"]:
+        elif st is None or st != _canonical(short, row):
             status = "out_of_sync"
         else:
             status = "active"

@@ -154,3 +154,11 @@ export const createBucketShare = (bucket, login, access) => api(shareBase(bucket
 export const updateBucketShare = (bucket, id, access) => api(`${shareBase(bucket)}/${encodeURIComponent(id)}`, { method: "PUT", json: { access } });
 export const revokeBucketShare = (bucket, id) => api(`${shareBase(bucket)}/${encodeURIComponent(id)}`, { method: "DELETE" });
 export const sharedWithMe = () => api("/shared-with-me");
+// Raw bucket policy editor (Advanced). get -> {policy|null, managedSids, etag}. put sends the
+// parsed policy object + the etag it was loaded with (+ confirmManaged:true after a 409
+// requiresConfirmation {managedChanges}; a 409 etagMismatch carries {current}). del removes the policy.
+export const getBucketPolicy = (name) => api(`/buckets/${encodeURIComponent(name)}/policy`);
+export const putBucketPolicy = (name, body) =>
+  api(`/buckets/${encodeURIComponent(name)}/policy`, { method: "PUT", json: body });
+export const deleteBucketPolicy = (name, body) =>
+  api(`/buckets/${encodeURIComponent(name)}/policy`, { method: "DELETE", json: body });
