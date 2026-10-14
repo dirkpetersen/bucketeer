@@ -2,3 +2,5 @@
 pytest>=8
 ruff>=0.6
 moto[server]>=5
+pyyaml>=6
+jsonschema>=4.21

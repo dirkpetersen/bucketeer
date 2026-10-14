@@ -13,7 +13,7 @@ QUESTIONS.md. Skip it, and skip anything that depends on it.
   `.env.default`, `GET /health`, `requirements.txt`, `requirements-dev.txt`
   (pytest, ruff, httpx, moto[server]), `static/` served at `/`. Document the
   run, lint, test and single-test commands in CLAUDE.md.
-- [ ] Mock croit API at `mock/croit_mock.py` (FastAPI, in-memory, seeded). It
+- [x] Mock croit API at `mock/croit_mock.py` (FastAPI, in-memory, seeded). It
   covers:
   - auth (`/auth/login`, `/auth/login-form`, `/auth/token-info`, `/api-tokens`
     CRUD with roles)
@@ -56,9 +56,13 @@ QUESTIONS.md. Skip it, and skip anything that depends on it.
 
 ## Phase 2: Buckets
 
-- [ ] Bucket list with usage and quota. Create bucket: name checked against the
-  admin naming rules, versioning, and under Advanced object lock (with warning)
-  and placement. Delete bucket: typed-name confirmation when non-empty.
+- [ ] User profile: a profile page where users set a default budget number
+  (index/worktag), stored in SQLite. (blocked: Q2)
+- [ ] Bucket list with usage, quota and budget number. Create bucket: name
+  checked against the admin naming rules, a **required** budget number
+  (index/worktag) prefilled from the user's profile default, versioning, and
+  under Advanced object lock (with warning) and placement. Delete bucket:
+  typed-name confirmation when non-empty. (blocked: Q2)
 - [ ] Versioning toggle (enable/suspend).
 - [ ] Shared-document helpers for bucket policy and lifecycle: read-modify-write
   that only touches `bucketeer-*` Sids/IDs. Unit-test heavily.
@@ -75,7 +79,8 @@ QUESTIONS.md. Skip it, and skip anything that depends on it.
 
 ## Phase 3: Admin
 
-- [ ] Admin page gated by `LDAP_ADMIN_GROUP_DN`: all users and buckets, set
+- [ ] Admin page gated by `LDAP_ADMIN_GROUP_DN`: all users and buckets (with
+  budget numbers), set
   quotas, suspend and unsuspend.
 - [ ] Admin settings: bucket naming rules, placement defaults, default quota,
   uid mappings, notification endpoint allowlist.

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Bucketeer is a self-service S3 portal for Ceph clusters managed by **croit**. Users log in with AD, get their S3 (RGW) access/secret keys with ready-to-paste `~/.aws/config` and `~/.aws/credentials` snippets, and manage their buckets: create, delete, versioning, sharing, scoped keys, lifecycle, and the full set of S3 bucket features. Admins get an admin page. See "Product design" below for decisions already made, and `TODO.md` for the phased plan.
 
-The repo is greenfield; see `TODO.md` for what exists so far. Code layout: `app.py` (uvicorn entry point), the `bucketeer/` package (`config.py` settings, `main.py` app factory), `static/` (frontend, served at `/`), `tests/`. JSON endpoints go under `/api/...`; the static mount at `/` is registered last so it never shadows them or `/health`.
+The repo is greenfield; see `TODO.md` for what exists so far. Code layout: `app.py` (uvicorn entry point), the `bucketeer/` package (`config.py` settings, `main.py` app factory), `static/` (frontend, served at `/`), `tests/`, and `mock/` (dev/test-only mock croit API). JSON endpoints go under `/api/...`; the static mount at `/` is registered last so it never shadows them or `/health`.
 
 ### Commands
 
@@ -14,10 +14,13 @@ The repo is greenfield; see `TODO.md` for what exists so far. Code layout: `app.
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt   # setup
 cp .env.default .env   # then fill in the REQUIRED values
 .venv/bin/python3 app.py                       # run locally, same as appmotel
+.venv/bin/python3 mock/croit_mock.py           # mock croit API on :18080 (CROIT_URL=http://127.0.0.1:18080/api), prints its tokens
 .venv/bin/ruff check .                         # lint
 .venv/bin/pytest                               # all tests
 .venv/bin/pytest tests/test_config.py::test_parsing   # single test
 ```
+
+`mock/croit_mock.py` is an in-memory FastAPI mock of the croit API (seeded users `alice`, `bob`, `acme$carol`, admin and viewer API tokens, `admin`/`admin` login). Tests use `create_app(task_seconds=0)` in-process and `tests/test_croit_mock.py` validates its responses against `docs/api/api-1.yaml`. It never imports from `bucketeer/`, and `bucketeer/` never imports it. Options are the `CROIT_MOCK_*` variables listed in its docstring.
 
 Settings read `./.env` only (no upward search). Tests never read a real `.env`: the fixture clears the settings variables and tests build settings with `Settings(_env_file=None, **REQUIRED)` (see `tests/conftest.py`).
 
@@ -83,7 +86,7 @@ Endpoints this app relies on:
 | Add / remove one key | `PUT` / `DELETE /s3/users/{uid}/keys/{accessKey}` | Use these for creating and rotating keys |
 | Suspend user | `PATCH /s3/users/{uid}` | `RgwUserUpdateRequest.suspended`, used by offboarding |
 | Quotas | `PUT /s3/users/{uid}/quota`, `PUT /s3/buckets/{bucketName}/quota` | |
-| Buckets | `PUT` / `PATCH` / `DELETE /s3/buckets/{bucketName}` | Create and delete return tasks. Deleting a non-empty bucket needs `deleteData` plus the confirmation sentence croit names in its first refusal |
+| Buckets | `PUT` / `PATCH` / `DELETE /s3/buckets/{bucketName}` | Create and delete return tasks. Deleting a non-empty bucket needs `deleteData` plus the confirmation sentence and the `ignoreWarning` token croit names in its first refusal (400 `IgnoreWarningResponse`) |
 
 - RGW uids can carry a tenant (`tenant$uid`). URL-encode the `$` in path parameters.
 - Errors come back as the `ErrorMessage` schema.
@@ -167,6 +170,7 @@ Several features write the same per-bucket policy and lifecycle configuration: b
   - multipart cleanup
   - subusers
   - placement and storage class choice, shown only when more than one exists
+- **Budget numbers:** every bucket must have a budget number (index/worktag) when it is created. Users can store a default in their profile, which prefills the create form. Format, storage and editing details: see QUESTIONS.md Q2.
 - There is no object/file browser. Presigned share links choose the object with a key field plus prefix autocomplete from a read-only listing (Q1).
 
 ### Admin page and storage

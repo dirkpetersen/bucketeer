@@ -12,7 +12,32 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 ## Open
 
-_None right now._
+### Q2: Budget numbers (index/worktag) on buckets: format and handling
+
+- **Blocks:** TODO "User profile" and "Bucket list ... Create bucket" (Phase 2)
+- **Decided by the owner:** every new bucket needs a budget number
+  (index/worktag). Users can save a default in their profile, and the
+  create-bucket form prefills it.
+- **Open points**, with a recommendation for each:
+  1. **Format and validation:** what does a valid budget number look like
+     (pattern or example)? Is there a system Bucketeer could check it
+     against? *Recommendation: an admin-editable regex on the admin page, plus
+     an optional example shown as the hint. No live lookup for now.*
+  2. **Where it is stored:** *Recommendation: in SQLite, and also as a
+     Bucketeer-managed bucket tag (`bucketeer-budget=<value>`) on RGW, so
+     that S3 tooling can see it and it survives if the database is lost. The
+     tagging editor under Advanced will protect `bucketeer-*` tags.*
+  3. **Changing it later:** can the owner change a bucket's budget number
+     after creation? *Recommendation: yes, with an audit-log entry recording
+     the old and new values.*
+  4. **Existing buckets** that have no budget number: *Recommendation: flag
+     them in the bucket list and on the admin page, and ask the owner to fill
+     one in. Don't block their use.*
+  5. **Reporting:** do admins need a chargeback export (bucket, owner,
+     budget number, usage)? *Recommendation: yes, a CSV export on the admin
+     page.*
+
+**Answer:**
 
 ## Resolved
 
