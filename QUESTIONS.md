@@ -76,6 +76,9 @@ Each question has a recommendation. Answering "ok" accepts it.
   3. **Email collision.** RGW rejects an email address that another RGW user
      already has, for example a legacy account with the same address, so
      auto-create would fail.
+- **Also revisit once answered:** the admin page finds a user's bucket keys by
+  treating their RGW uid as their AD username (`bucketeer/admin.py`). Adjust
+  that to the chosen mapping.
 - **Recommendations:**
   1. New uids are the lowercased `sAMAccountName`. At login, if an existing
      RGW user matches case-insensitively (checked against croit's uid list),

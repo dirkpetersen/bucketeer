@@ -45,3 +45,14 @@ export const getMe = () => api("/me", { announce401: false });
 export const login = (loginName, password) =>
   api("/login", { method: "POST", json: { login: loginName, password }, announce401: false });
 export const logout = () => api("/logout", { method: "POST", announce401: false });
+
+// Administrator endpoints (the server enforces the role on each of them).
+const enc = encodeURIComponent;
+export const adminUsers = () => api("/admin/users");
+export const adminBuckets = () => api("/admin/buckets");
+export const setUserQuota = (uid, quota) =>
+  api(`/admin/users/${enc(uid)}/quota`, { method: "PUT", json: quota });
+export const setBucketQuota = (bucket, quota) =>
+  api(`/admin/buckets/${enc(bucket)}/quota`, { method: "PUT", json: quota });
+export const suspendUser = (uid) => api(`/admin/users/${enc(uid)}/suspend`, { method: "POST" });
+export const unsuspendUser = (uid) => api(`/admin/users/${enc(uid)}/unsuspend`, { method: "POST" });

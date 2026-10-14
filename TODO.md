@@ -84,7 +84,7 @@ skips them too.
 
 ## Phase 3: Admin
 
-- [ ] Admin page gated by `LDAP_ADMIN_GROUP_DN`: all users and buckets (with
+- [x] Admin page gated by `LDAP_ADMIN_GROUP_DN`: all users and buckets (with
   budget numbers), set
   quotas, suspend and unsuspend.
 - [ ] Admin settings: bucket naming rules, placement defaults, default quota,

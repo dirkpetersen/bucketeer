@@ -87,6 +87,15 @@ MIGRATIONS: list[str] = [
     CREATE INDEX audit_log_actor ON audit_log (actor);
     CREATE INDEX audit_log_target ON audit_log (target_type, target);
     """,
+    # v2: who suspended a bucket key, so waking an owner never revives a key an
+    # admin suspended on its own. 'offboarding' is reserved for the daily job.
+    # Pre-existing suspensions are backfilled as 'direct': a wrong 'direct' only
+    # needs an explicit unsuspend, a wrong 'owner' would silently wake a key.
+    """
+    ALTER TABLE bucket_keys ADD COLUMN suspended_by TEXT
+        CHECK (suspended_by IN ('owner', 'direct', 'offboarding'));
+    UPDATE bucket_keys SET suspended_by = 'direct' WHERE suspended_at IS NOT NULL;
+    """,
 ]
 
 _MISSING: Any = object()
@@ -420,22 +429,34 @@ class BucketKeys(_Repo):
             )
             return cur.rowcount > 0
 
-    def set_suspended(self, key_id: int, suspended: bool) -> bool:
+    def set_suspended(self, key_id: int, suspended: bool, by: str = "direct") -> bool:
+        """`by` is 'owner', 'direct' or 'offboarding'; unsuspending clears both columns."""
         with self.db.tx() as c:
             cur = c.execute(
-                "UPDATE bucket_keys SET suspended_at = ? WHERE id = ?",
-                (now() if suspended else None, key_id),
+                "UPDATE bucket_keys SET suspended_at = ?, suspended_by = ? WHERE id = ?",
+                (now(), by, key_id) if suspended else (None, None, key_id),
             )
             return cur.rowcount > 0
 
-    def set_owner_suspended(self, owner: str, suspended: bool) -> int:
-        """Offboarding: (un)suspend all of an owner's live keys. Returns count."""
+    def set_owner_suspended(self, owner: str, suspended: bool, by: str = "owner") -> int:
+        """Cascade from an owner: suspend their live keys that are not suspended yet,
+        or wake only the live keys that this same cascade (`by`) suspended. A key
+        suspended directly stays as it is. Returns the number of keys changed."""
         with self.db.tx() as c:
-            cur = c.execute(
-                "UPDATE bucket_keys SET suspended_at = ? "
-                "WHERE owner_ad_username = ? AND revoked_at IS NULL",
-                (now() if suspended else None, owner),
-            )
+            if suspended:
+                cur = c.execute(
+                    "UPDATE bucket_keys SET suspended_at = ?, suspended_by = ? "
+                    "WHERE owner_ad_username = ? AND revoked_at IS NULL "
+                    "AND suspended_at IS NULL",
+                    (now(), by, owner),
+                )
+            else:
+                cur = c.execute(
+                    "UPDATE bucket_keys SET suspended_at = NULL, suspended_by = NULL "
+                    "WHERE owner_ad_username = ? AND revoked_at IS NULL "
+                    "AND suspended_by = ?",
+                    (owner, by),
+                )
             return cur.rowcount
 
 

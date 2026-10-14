@@ -1,6 +1,7 @@
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
 import { load, save } from "../storage.js";
+import { renderAdmin } from "./admin.js";
 
 const THEMES = [["system", "monitor", "Theme: system"], ["light", "sun", "Theme: light"], ["dark", "moon", "Theme: dark"]];
 
@@ -31,7 +32,7 @@ function section(iconName, title, note, body, adv) {
     h("p", { class: "adv-only", text: adv }));
 }
 
-export function renderDashboard({ me, appName, onLogout }) {
+export function renderDashboard({ me, appName, onLogout, page = "home" }) {
   const root = document.documentElement;
 
   // Advanced mode: visual placeholder only; server-side persistence comes later.
@@ -68,7 +69,7 @@ export function renderDashboard({ me, appName, onLogout }) {
   const menuId = "user-menu";
   const header = h("header", { class: "hdr" },
     h("div", { class: "hdr-in" },
-      h("a", { class: "brand", href: "./", "aria-label": `${appName} home` },
+      h("a", { class: "brand", href: "#/", "aria-label": `${appName} home` },
         h("img", { src: "img/mark.svg", alt: "", width: 30, height: 30 }), h("span", { class: "brand-name", text: appName })),
       sw, themeBtn,
       h("div", { class: "user" },
@@ -77,9 +78,12 @@ export function renderDashboard({ me, appName, onLogout }) {
         h("div", { class: "menu", id: menuId, popover: "auto" },
           h("div", { class: "menu-who" }, h("b", { text: name }), h("span", { text: me.email || me.username }),
             me.isAdmin && h("span", {}, h("span", { class: "chip chip-accent", text: "Administrator" }))),
+          me.isAdmin && (page === "admin"
+            ? h("a", { class: "btn btn-ghost", href: "#/" }, icon("home"), "My workspace")
+            : h("a", { class: "btn btn-ghost", href: "#/admin" }, icon("shield"), "Administration")),
           h("button", { class: "btn btn-ghost", type: "button", on: { click: onLogout } }, icon("logout"), "Sign out")))));
 
-  const main = h("main", { class: "main", id: "main" },
+  const home = () => h("main", { class: "main", id: "main" },
     h("div", { class: "hero" },
       h("span", { class: "eyebrow", text: "Your workspace" }),
       h("h1", { text: `${greeting()}, ${first}.` }),
@@ -94,7 +98,7 @@ export function renderDashboard({ me, appName, onLogout }) {
 
   shell.append(
     h("a", { class: "skip-link", href: "#main", text: "Skip to content" }),
-    header, main,
+    header, page === "admin" && me.isAdmin ? renderAdmin() : home(),
     h("footer", { class: "foot", text: `${appName} · signed in as ${me.username}` }));
   return shell;
 }
