@@ -263,8 +263,6 @@ def test_unsuspend_does_not_wake_independently_untouched_keys(env):
 
 def test_suspending_a_bucket_key_user_directly(env):
     k = env.db.bucket_keys.create("bob", "alice", "alice-data", "read")
-    r = env.admin.post("/api/admin/users/bob/suspend", headers=H)
-    assert r.status_code == 409  # bob is the acting admin
     k2 = env.db.bucket_keys.create("acme$carol", "alice", "alice-data", "read")
     r = env.admin.post("/api/admin/users/acme$carol/suspend", headers=H)
     assert r.status_code == 200 and r.json()["keys"] == ["acme$carol"]

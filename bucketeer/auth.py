@@ -361,6 +361,7 @@ async def login(request: Request, response: Response, db: Annotated[Database, De
     await _audit(
         db, user.username, "login.success", {"ip": ip, "admin": user.is_admin, "login_as": actor}
     )
+    state.rgw.warm(user)  # best effort in the background: login never depends on croit
     return SessionUser(user.username, user.display_name, user.email, user.is_admin, 0).public()
 
 

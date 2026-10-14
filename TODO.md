@@ -50,7 +50,7 @@ skips them too.
 - [x] Login throttle: raise the per-typed-login and per-account limits from 5
   to 10 attempts per 15 minutes (Q3), and keep the IP limit at 20. Update the
   tests and CLAUDE.md.
-- [ ] RGW user resolution: sAMAccountName → uid, honoring admin uid mappings.
+- [x] RGW user resolution: sAMAccountName → uid, honoring admin uid mappings.
   Auto-create on first login with the default quota.
 - [ ] Credentials API and screen: show access and secret keys (secret masked,
   reveal and copy) and the `~/.aws/config` + `~/.aws/credentials` snippets,
@@ -132,6 +132,18 @@ available, and fix the client and the mock if reality differs:
   rejects them, switch to id-based Sids mapped to uids in SQLite.
 - [ ] (needs cluster) Resource ARN form for buckets in a tenant
   (`arn:aws:s3:::<bucket>` vs `arn:aws:s3::<tenant>:<bucket>`).
+- [ ] (needs cluster) Duplicate-email error on `POST /s3/users`: status code and
+  wording. The resolver looks for "email" in the error text.
+- [ ] (needs cluster) Creating a uid that already exists: 409, or an idempotent
+  200?
+- [ ] (needs cluster) Tenant users in `/s3/user-names` and `/s3/users`: is it
+  `tenant$uid`, or a bare uid plus a separate `tenant` field? `get_user`'s
+  exact match assumes `tenant$uid`. Does an unknown `uid` filter return 404 or
+  an empty list?
+- [ ] (needs cluster) User quota: `maxObjects` null means unlimited and
+  `maxSize` is in bytes (1 TiB default).
+- [ ] (needs cluster) RGW uids are case-sensitive (`Alice` and `alice` are
+  different users).
 - [ ] (needs cluster) Bucket keys: a zero user quota doesn't block writes to the shared
   bucket, because writes count against the bucket owner's quota.
 

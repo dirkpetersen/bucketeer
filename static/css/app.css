@@ -91,6 +91,14 @@
   padding: var(--sp-3) var(--sp-4); border: 1px dashed var(--border-strong); border-radius: var(--r-md); }
 [data-advanced="true"] .panel .adv-only { display: block; }
 
+/* Account status (Credentials card) */
+.acct { display: grid; gap: var(--sp-2); align-content: start; }
+.acct-line { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); color: var(--text); }
+.acct-sub { color: var(--text-muted); font-size: var(--fs-sm); }
+.acct-uid { font-family: var(--font-mono); font-size: var(--fs-sm); background: var(--surface-2);
+  padding: 0.1em 0.45em; border-radius: var(--r-sm); overflow-wrap: anywhere; }
+.acct .btn { width: fit-content; margin-top: var(--sp-2); }
+
 /* Skeletons */
 .skel { display: grid; gap: var(--sp-3); }
 .skel-row { display: grid; grid-template-columns: 2.25rem 1fr auto; gap: var(--sp-3); align-items: center; }

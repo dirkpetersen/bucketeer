@@ -2,10 +2,11 @@
 
 Stores and validates bucket naming rules, placement defaults, the default user
 quota, AD-to-RGW uid mappings and the notification endpoint allowlist. Nothing
-here applies a setting to a feature: bucket create, first-login user creation
-and notifications call the helpers in `policy_settings` later. Every change is
-audited with before/after values; no response or audit entry carries a secret
-(endpoints have no credentials in v1).
+here applies a setting to a feature except uid mappings and the default quota,
+which `rgw_user` reads at login; bucket create and notifications call the
+helpers in `policy_settings` later. Every change is audited with before/after
+values; no response or audit entry carries a secret (endpoints have no
+credentials in v1).
 """
 
 import asyncio
@@ -14,7 +15,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from .admin import Admin, Croit, Db, _audit, croit_http_error
+from .admin import Admin, Croit, Db, Rgw, _audit, croit_http_error
 from .auth import require_admin
 from .croit import CroitClientError
 from .policy_settings import (
@@ -210,8 +211,19 @@ async def unset_default_quota(admin: Admin, db: Db):
 # -- uid mappings --------------------------------------------------------------------
 
 
+def _invalidate_mapping(rgw, ad: str, *targets: str | None) -> None:
+    """Forget cached resolutions a mapping change can alter: the AD user, whoever
+    resolved to an old or new target, and the AD user whose default name is a
+    target's bare uid (their cached `uid_taken` or old result)."""
+    rgw.invalidate(username=ad)
+    for t in targets:
+        if t:
+            rgw.invalidate(uid=t)
+            rgw.invalidate(username=t.rpartition("$")[2])
+
+
 @router.put("/uid-mappings/{ad_username}")
-async def put_mapping(ad_username: str, body: Body_, admin: Admin, croit: Croit, db: Db):
+async def put_mapping(ad_username: str, body: Body_, admin: Admin, croit: Croit, db: Db, rgw: Rgw):
     if set(body) - {"rgwUid"}:
         raise HTTPException(422, "Unknown field.")
     try:
@@ -229,6 +241,7 @@ async def put_mapping(ad_username: str, body: Body_, admin: Admin, croit: Croit,
         await db.run(db.uid_mappings.set, ad, uid, admin.username)
     except sqlite3.IntegrityError as e:
         raise HTTPException(409, f"{uid} is already mapped from another user.") from e
+    _invalidate_mapping(rgw, ad, uid, before and before["rgw_uid"])
     known = await _known_uids(croit)
     exists = None if known is None else uid in known
     saved = await db.run(db.uid_mappings.get, ad)
@@ -236,14 +249,15 @@ async def put_mapping(ad_username: str, body: Body_, admin: Admin, croit: Croit,
                  {"before": before and before["rgw_uid"], "after": uid, "rgwUserExists": exists})
     warning = None
     if exists is False:
-        warning = f"No RGW user {uid} exists yet. The mapping is saved anyway."
+        warning = (f"No RGW user {uid} exists yet. The mapping is saved, but the user cannot "
+                   "use S3 until that RGW user exists.")
     elif exists is None:
         warning = "Could not check whether that RGW user exists (croit unreachable)."
     return {**_mapping_view(saved, exists), "warning": warning}
 
 
 @router.delete("/uid-mappings/{ad_username}")
-async def delete_mapping(ad_username: str, admin: Admin, db: Db):
+async def delete_mapping(ad_username: str, admin: Admin, db: Db, rgw: Rgw):
     try:
         ad = validate_ad_username(ad_username)
     except SettingsError as e:
@@ -252,6 +266,7 @@ async def delete_mapping(ad_username: str, admin: Admin, db: Db):
     if before is None:
         raise HTTPException(404, "No such mapping.")
     await db.run(db.uid_mappings.delete, ad)
+    _invalidate_mapping(rgw, ad, before["rgw_uid"])
     await _audit(db, admin, "admin.settings.uid_mapping.delete", "uid_mapping",
                  before["ad_username"], {"before": before["rgw_uid"], "after": None})
     return {"adUsername": before["ad_username"], "deleted": True}

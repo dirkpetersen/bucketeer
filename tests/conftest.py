@@ -20,6 +20,15 @@ def clean_env(monkeypatch):
         monkeypatch.delenv(name.upper(), raising=False)
 
 
+@pytest.fixture(autouse=True)
+def no_login_warmup(monkeypatch):
+    """Login normally resolves the RGW user in the background; tests that are not
+    about that must not reach for the (fake) croit host."""
+    from bucketeer.rgw_user import RgwResolver
+
+    monkeypatch.setattr(RgwResolver, "warm_on_login", False)
+
+
 @pytest.fixture
 def settings(tmp_path):
     from bucketeer.config import Settings

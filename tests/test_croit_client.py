@@ -281,9 +281,21 @@ async def test_user_lifecycle(croit):
     assert user["suspended"] is True and user["name"] == "David"
     assert [u["uid"] for u in await croit.list_users(["dave", "alice"])] == ["dave", "alice"]
     await croit.delete_user("dave")
-    with pytest.raises(CroitError) as exc:
-        await croit.get_user("dave")
-    assert exc.value.status == 404
+    assert await croit.get_user("dave") is None
+
+
+async def test_get_user_requires_an_exact_uid_and_tenant_match(croit, monkeypatch):
+    assert await croit.get_user("ALICE") is None
+    assert await croit.get_user("carol") is None  # only acme$carol exists
+
+    async def sloppy(uids=None):  # croit answering with other users than asked for
+        return [{"uid": "bob"}, {"uid": "acme$carol"}]
+
+    monkeypatch.setattr(croit, "list_users", sloppy)
+    assert await croit.get_user("alice") is None
+    assert await croit.get_user("carol") is None
+    assert (await croit.get_user("acme$carol"))["uid"] == "acme$carol"
+    assert (await croit.get_user("bob"))["uid"] == "bob"
 
 
 async def test_key_add_rotate_delete_without_whole_set_put(croit, recorder):

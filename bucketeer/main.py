@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import admin, admin_settings, auth
+from . import admin, admin_settings, auth, rgw_user
 from .config import Settings
 from .croit import CroitClient
 from .db import DB_FILENAME, Database
@@ -57,6 +57,7 @@ def create_app(
         try:
             yield
         finally:
+            await _app.state.rgw.aclose()
             await client.aclose()
             if owned:
                 _app.state.db.close()
@@ -71,6 +72,7 @@ def create_app(
     app.state.authenticator = authenticator or AdAuthenticator(settings)
     app.state.sessions = auth.SessionManager(settings, clock)
     app.state.throttle = auth.LoginThrottle(clock)
+    app.state.rgw = rgw_user.RgwResolver(client, lambda: app.state.db, settings.s3_tenant)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next: Callable) -> Response:
@@ -99,6 +101,7 @@ def create_app(
     # state-changing methods; never add a route to `app` under /api directly.
     api = APIRouter(prefix="/api", dependencies=[Depends(auth.csrf_protect)])
     api.include_router(auth.router)
+    api.include_router(rgw_user.router)
     api.include_router(admin.router)
     api.include_router(admin_settings.router)
     app.include_router(api)

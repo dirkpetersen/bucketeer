@@ -46,6 +46,10 @@ export const login = (loginName, password) =>
   api("/login", { method: "POST", json: { login: loginName, password }, announce401: false });
 export const logout = () => api("/logout", { method: "POST", announce401: false });
 
+// The signed-in user's RGW account: {uid, status, reason, message, displayName, quota, created}.
+// status: ready | suspended | creation_failed | unavailable. Never carries keys.
+export const getAccount = () => api("/account");
+
 // Administrator endpoints (the server enforces the role on each of them).
 const enc = encodeURIComponent;
 export const adminUsers = () => api("/admin/users");

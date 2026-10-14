@@ -303,11 +303,23 @@ class CroitClient:
         """All users, or only `uids`. Note the spec marks `uid` as required."""
         return await self._request("GET", "/s3/users", params={"uid": uids} if uids else None)
 
-    async def get_user(self, uid: str) -> dict:
-        users = await self.list_users([uid])
-        if not users:
-            raise CroitError(404, 404, f"User {uid} not found")
-        return users[0]
+    async def list_user_names(self) -> list[str]:
+        """Every RGW uid (`tenant$uid` with a tenant), a cheap list of strings."""
+        return await self._request("GET", "/s3/user-names")
+
+    async def get_user(self, uid: str) -> dict | None:
+        """The user, or None. croit's filter may return more or other users than
+        asked for, so the uid (tenant included) must match exactly."""
+        try:
+            users = await self.list_users([uid])
+        except CroitError as e:
+            if e.status == 404:  # croit answers 404 for an unknown uid in the filter
+                return None
+            raise
+        for u in users:
+            if str(u.get("uid")) == uid:
+                return u
+        return None
 
     async def create_user(
         self,

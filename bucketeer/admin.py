@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
 from .auth import SessionUser, require_admin
 from .croit import CroitClient, CroitClientError, CroitError, CroitUnavailable, get_croit
 from .db import Database, get_db
+from .rgw_user import RgwResolver, ad_names_for_uid, get_resolver
 
 log = logging.getLogger("bucketeer.admin")
 
@@ -24,6 +25,7 @@ router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(requir
 Admin = Annotated[SessionUser, Depends(require_admin)]
 Croit = Annotated[CroitClient, Depends(get_croit)]
 Db = Annotated[Database, Depends(get_db)]
+Rgw = Annotated[RgwResolver, Depends(get_resolver)]
 
 MAX_QUOTA = 2**62  # sane upper bound, below int64
 _UID = re.compile(r"^[^\x00-\x1f\x7f/\\?#%]{1,128}$")  # tenant$uid allowed
@@ -158,9 +160,12 @@ def _bucket_view(b: dict, meta: dict | None) -> dict[str, Any]:
 
 async def _fetch_user(croit: CroitClient, uid: str) -> dict:
     try:
-        return await croit.get_user(uid)
+        user = await croit.get_user(uid)
     except CroitClientError as e:
         raise croit_http_error(e) from e
+    if user is None:
+        raise HTTPException(404, f"Not found: User {uid} not found")
+    return user
 
 
 async def _fetch_bucket(croit: CroitClient, name: str) -> dict:
@@ -240,10 +245,15 @@ async def set_bucket_quota(bucket: str, body: QuotaBody, admin: Admin, croit: Cr
 
 
 async def _set_suspended(
-    uid: str, suspend: bool, admin: SessionUser, croit: CroitClient, db: Database
+    uid: str, suspend: bool, admin: SessionUser, croit: CroitClient, db: Database,
+    rgw: RgwResolver,
 ):
     uid = _uid(uid)
-    if suspend and uid.lower() == admin.username.lower():
+    # Bucket-key owners are AD usernames, and the uid is not always one (mapping,
+    # tenant prefix): go through the same resolution rules as login.
+    owners = await db.run(ad_names_for_uid, db, uid, rgw.tenant)
+    owner_set = {o.lower() for o in owners}
+    if suspend and admin.username.lower() in owner_set:
         raise HTTPException(409, "You cannot suspend your own account.")
     user = await _fetch_user(croit, uid)
     was = bool(user.get("suspended"))
@@ -251,6 +261,7 @@ async def _set_suspended(
         await croit.update_user(uid, suspended=suspend)
     except CroitClientError as e:
         raise croit_http_error(e) from e
+    rgw.invalidate(uid=uid)
 
     # Bucket keys follow their owner (CLAUDE.md "Offboarding"), but only the ones
     # the owner cascade suspended ('owner'); a key suspended on its own ('direct')
@@ -260,9 +271,13 @@ async def _set_suspended(
     is_key_user = (
         own is not None
         and own["revoked_at"] is None
-        and own["owner_ad_username"].lower() != uid.lower()
+        and own["owner_ad_username"].lower() not in owner_set
     )
-    live = await db.run(db.bucket_keys.list, uid)
+    live = [
+        k
+        for owner in owners
+        for k in await db.run(db.bucket_keys.list, owner)
+    ]
     if is_key_user:
         keys, by = [own], "direct"
         keys = [k for k in keys if suspend or k["suspended_at"]]
@@ -299,12 +314,12 @@ async def _set_suspended(
 
 
 @router.post("/users/{uid}/suspend")
-async def suspend_user(uid: str, admin: Admin, croit: Croit, db: Db):
-    return await _set_suspended(uid, True, admin, croit, db)
+async def suspend_user(uid: str, admin: Admin, croit: Croit, db: Db, rgw: Rgw):
+    return await _set_suspended(uid, True, admin, croit, db, rgw)
 
 
 @router.post("/users/{uid}/unsuspend")
-async def unsuspend_user(uid: str, admin: Admin, croit: Croit, db: Db):
-    return await _set_suspended(uid, False, admin, croit, db)
+async def unsuspend_user(uid: str, admin: Admin, croit: Croit, db: Db, rgw: Rgw):
+    return await _set_suspended(uid, False, admin, croit, db, rgw)
 
 
