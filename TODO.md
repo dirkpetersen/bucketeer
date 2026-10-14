@@ -40,10 +40,13 @@ skips them too.
 
 ## Phase 1: Login and credentials (MVP)
 
-- [ ] AD login over LDAPS (CLAUDE.md "Authentication"): service bind, filter
+- [x] AD login over LDAPS (CLAUDE.md "Authentication"): service bind, filter
   with `{login}`, exactly one match, nested-group check, user bind, reject
   empty passwords. Signed session cookie, `SESSION_MAX_AGE`. Tests use a fake
   LDAP layer.
+- [ ] Login throttle fix: a successful login resets the per-account counter but
+  not its "already reported" flag in `bucketeer/auth.py`, so the next block on
+  that account may not write a `login.throttled` audit entry. Reset both.
 - [ ] RGW user resolution: sAMAccountName → uid, honoring admin uid mappings.
   Auto-create on first login with the default quota.
 - [ ] Credentials API and screen: show access and secret keys (secret masked,

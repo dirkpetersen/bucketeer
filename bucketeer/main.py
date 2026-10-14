@@ -1,23 +1,32 @@
 import logging
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from . import auth
 from .config import Settings
 from .croit import CroitClient
 from .db import DB_FILENAME, Database
+from .ldapauth import AdAuthenticator
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 
 def create_app(
-    settings: Settings, croit: CroitClient | None = None, db: Database | None = None
+    settings: Settings,
+    croit: CroitClient | None = None,
+    db: Database | None = None,
+    authenticator: AdAuthenticator | None = None,
+    clock: Callable[[], float] = time.time,
 ) -> FastAPI:
     """`croit` lets tests inject a client (e.g. on an ASGI transport); `db` an
-    already-open database (e.g. in-memory), which the caller then closes."""
+    already-open database (e.g. in-memory), which the caller then closes;
+    `authenticator` a fake-LDAP one; `clock` drives session expiry and the
+    login throttle."""
     logging.basicConfig(
         level=settings.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -44,12 +53,22 @@ def create_app(
     app.state.croit = client  # one client per app, closed on shutdown
     app.state.db = db  # else opened in the lifespan; /health never touches it
 
+    app.state.authenticator = authenticator or AdAuthenticator(settings)
+    app.state.sessions = auth.SessionManager(settings, clock)
+    app.state.throttle = auth.LoginThrottle(clock)
+
     # Cheap liveness probe: must never contact LDAP or croit.
     @app.get(settings.health_check_path, include_in_schema=False)
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    # JSON endpoints live under /api/... and are registered before this mount,
-    # which serves the frontend at / and so must come last.
+    # JSON endpoints live under /api/... and are registered before the static
+    # mount below, which serves the frontend at / and so must come last. Every
+    # /api router is included into `api`, which enforces the CSRF header on
+    # state-changing methods; never add a route to `app` under /api directly.
+    api = APIRouter(prefix="/api", dependencies=[Depends(auth.csrf_protect)])
+    api.include_router(auth.router)
+    app.include_router(api)
+
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app

@@ -39,6 +39,27 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 **Answer:**
 
+### Q3: What should users see when an account's login limit is reached?
+
+- **Blocks:** nothing. Current behavior stays until you answer.
+- **Context:** after 5 failed logins on one AD account within 15 minutes,
+  Bucketeer stops trying passwords for that account, to protect it from AD
+  lockout. Today it answers "Too many attempts, try again later" (HTTP 429).
+  An attacker who has already spent 5 real attempts on an account can use
+  that message to tell that the account exists. That costs 5 attempts per
+  account, so it can't be used to check many accounts cheaply.
+- **Options:**
+  1. Keep "Too many attempts". This is clearer for real users who mistype
+     their password.
+  2. Answer "Invalid username or password" for the first few blocked
+     attempts, then "Too many attempts", the same way for real and unknown
+     accounts. This closes the leak, but a user who types the right password
+     while blocked is told it's wrong.
+- **Recommendation:** 1. The leak is expensive to use, and option 2
+  confuses legitimate users.
+
+**Answer:**
+
 ## Resolved
 
 ### Q1: How does a user choose the object for a presigned share link?

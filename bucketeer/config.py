@@ -74,6 +74,22 @@ class Settings(BaseSettings):
             return [u.strip() for u in v.split(",") if u.strip()]
         return v
 
+    @field_validator("ldap_url")
+    @classmethod
+    def _ldaps_only(cls, v: list[str]) -> list[str]:
+        # Passwords travel over this connection: plain ldap:// is never allowed.
+        for u in v:
+            if not u.lower().startswith("ldaps://") or len(u) <= len("ldaps://"):
+                raise ValueError("every URL must be ldaps://host[:port] (plain ldap:// is refused)")
+        return v
+
+    @field_validator("ldap_user_filter")
+    @classmethod
+    def _filter_has_login(cls, v: str) -> str:
+        if "{login}" not in v:
+            raise ValueError("must contain the {login} placeholder")
+        return v
+
     @field_validator("log_level")
     @classmethod
     def _check_level(cls, v: str) -> str:
