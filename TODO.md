@@ -47,7 +47,7 @@ skips them too.
 - [x] Login throttle fix: a successful login resets the per-account counter but
   not its "already reported" flag in `bucketeer/auth.py`, so the next block on
   that account may not write a `login.throttled` audit entry. Reset both.
-- [ ] Login throttle: raise the per-typed-login and per-account limits from 5
+- [x] Login throttle: raise the per-typed-login and per-account limits from 5
   to 10 attempts per 15 minutes (Q3), and keep the IP limit at 20. Update the
   tests and CLAUDE.md.
 - [ ] RGW user resolution: sAMAccountName → uid, honoring admin uid mappings.

@@ -512,8 +512,8 @@ def test_all_unsafe_api_routes_are_csrf_protected(env):
 # -- throttle ------------------------------------------------------------------------
 
 
-def test_throttle_blocks_after_five_failures_without_contacting_ldap(env):
-    for _ in range(5):
+def test_throttle_blocks_after_login_limit_failures_without_contacting_ldap(env):
+    for _ in range(auth.THROTTLE_LOGIN_LIMIT):
         assert env.login("alice", "bad").status_code == 401
     n = len(env.fake.events)
     r = env.login("alice", SECRET_PW)  # even the right password
@@ -525,7 +525,7 @@ def test_throttle_blocks_after_five_failures_without_contacting_ldap(env):
 
 
 def test_throttle_window_expires(env):
-    for _ in range(5):
+    for _ in range(auth.THROTTLE_LOGIN_LIMIT):
         env.login("alice", "bad")
     assert env.login("alice").status_code == 429
     env.now[0] += auth.THROTTLE_WINDOW - 1
@@ -535,10 +535,10 @@ def test_throttle_window_expires(env):
 
 
 def test_success_resets_login_counter(env):
-    for _ in range(4):
+    for _ in range(auth.THROTTLE_LOGIN_LIMIT - 1):
         env.login("alice", "bad")
     assert env.login("alice").status_code == 200
-    for _ in range(4):
+    for _ in range(auth.THROTTLE_LOGIN_LIMIT - 1):
         assert env.login("alice", "bad").status_code == 401
 
 
@@ -576,7 +576,7 @@ def test_audit_entries_and_no_password(env):
     env.login("Alice", "wrong-" + SECRET_PW)
     env.login("alice")
     env.client.post("/api/logout", headers=H)
-    for _ in range(6):
+    for _ in range(auth.THROTTLE_LOGIN_LIMIT + 1):
         env.login("mallory", "x" + SECRET_PW)
     rows = env.audit()
     actions = [(r["actor"], r["action"]) for r in reversed(rows)]
@@ -670,8 +670,9 @@ def test_unencodable_password_is_401_not_503_and_never_connects(real_env, pw):
 def test_unencodable_passwords_count_against_throttle(real_env):
     client, _, _ = real_env
     body = {"login": "alice", "password": "\x00"}
-    codes = [client.post("/api/login", json=body, headers=H).status_code for _ in range(6)]
-    assert codes == [401] * 5 + [429]
+    n = auth.THROTTLE_LOGIN_LIMIT + 1
+    codes = [client.post("/api/login", json=body, headers=H).status_code for _ in range(n)]
+    assert codes == [401] * auth.THROTTLE_LOGIN_LIMIT + [429]
 
 
 @pytest.mark.parametrize("pw", WEIRD_PASSWORDS + [""])
@@ -709,21 +710,22 @@ def test_account_throttle_counts_all_spellings_together(tmp_path):
 
 def test_unknown_login_throttles_at_the_same_attempt_as_a_known_one(tmp_path):
     e = _by_spelling_env(tmp_path)
-    known = [e.login("bob", "bad").status_code for _ in range(6)]
-    unknown = [e.login("nobody", "bad").status_code for _ in range(6)]
-    assert known == unknown == [401] * 5 + [429]
+    n = auth.THROTTLE_LOGIN_LIMIT + 1
+    known = [e.login("bob", "bad").status_code for _ in range(n)]
+    unknown = [e.login("nobody", "bad").status_code for _ in range(n)]
+    assert known == unknown == [401] * auth.THROTTLE_LOGIN_LIMIT + [429]
     assert e.login("bob").text.count("Too many") == e.login("nobody").text.count("Too many") == 1
 
 
 def test_account_throttle_cleared_by_success_and_not_charged_for_non_members(tmp_path):
     e = Env(tmp_path)
-    for _ in range(4):
+    for _ in range(auth.THROTTLE_USER_LIMIT - 1):
         e.login("bob", "bad")
     assert e.login("bob").status_code == 200
-    for _ in range(4):
+    for _ in range(auth.THROTTLE_USER_LIMIT - 1):
         assert e.login("bob", "bad").status_code == 401
     # carol is not in the group: refused before any password check, so no account charge
-    for _ in range(4):
+    for _ in range(auth.THROTTLE_USER_LIMIT - 1):
         e.login("carol", "bad")
     assert ("user", "carol") not in e.app.state.throttle._hits
 
@@ -747,16 +749,16 @@ def test_throttled_audit_written_again_after_success_resets_the_counter(env):
     def throttled():
         return [r for r in env.audit() if r["action"] == "login.throttled"]
 
-    for _ in range(3):
+    for _ in range(auth.THROTTLE_LOGIN_LIMIT - 2):
         env.login("bob", "bad")
     env.now[0] += 500
     for _ in range(2):
         env.login("bob", "bad")
     assert env.login("bob").status_code == 429  # block 1
     assert len(throttled()) == 1
-    env.now[0] += 401  # the first three failures age out; two remain
+    env.now[0] += 401  # the first failures age out; two remain
     assert env.login("bob").status_code == 200  # success clears the counters
-    for _ in range(5):
+    for _ in range(auth.THROTTLE_LOGIN_LIMIT):
         assert env.login("bob", "bad").status_code == 401
     assert env.login("bob").status_code == 429  # block 2
     assert len(throttled()) == 2

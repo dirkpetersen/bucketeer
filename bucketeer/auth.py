@@ -36,8 +36,8 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 # Throttle numbers (deliberately not env settings).
 THROTTLE_WINDOW = 900  # seconds
-THROTTLE_LOGIN_LIMIT = 5  # attempts per login name per window
-THROTTLE_USER_LIMIT = 5  # per resolved account (all login spellings), below AD's lockout threshold
+THROTTLE_LOGIN_LIMIT = 10  # attempts per login name per window
+THROTTLE_USER_LIMIT = 10  # per resolved account (all login spellings), below AD's lockout threshold
 THROTTLE_IP_LIMIT = 20  # per client IP per window; higher so a shared NAT is not locked out
 MAX_FIELD_LEN = 512  # login / password length cap
 CLOCK_SKEW = 60  # tolerated issued-at in the future, seconds
