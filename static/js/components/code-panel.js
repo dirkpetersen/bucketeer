@@ -6,6 +6,7 @@ import { toast } from "./toast.js";
 
 // <code-panel> with tabs, copy, download and INI highlighting.
 //   panel.tabs = [{ label: "~/.aws/config", filename: "config", content: "..." }, ...]
+//   A tab may set `locked: "reason"`: copy and download are disabled and the reason is shown.
 //   panel.hint = "Optional note shown under the code."
 // Tabs follow the WAI-ARIA pattern (arrow keys, Home/End, roving tabindex).
 let seq = 0;
@@ -17,7 +18,7 @@ class CodePanel extends HTMLElement {
   #id = `cp${++seq}`;
   #timer = 0;
 
-  set tabs(v) { this.#tabs = v ?? []; this.#active = 0; this.#render(); }
+  set tabs(v) { this.#tabs = v ?? []; this.#active = Math.min(this.#active, Math.max(0, this.#tabs.length - 1)); this.#render(); }
   get tabs() { return this.#tabs; }
   set hint(v) { this.#hint = v ?? ""; this.#render(); }
 
@@ -66,6 +67,10 @@ class CodePanel extends HTMLElement {
     const dlBtn = h("button", { class: "btn btn-ghost", type: "button", "aria-label": `Download ${cur.filename}` },
       icon("download"), h("span", { class: "cp-label", text: "Download" }));
     dlBtn.addEventListener("click", () => this.#download(cur));
+    if (cur.locked) {
+      copyBtn.disabled = dlBtn.disabled = true;
+      copyBtn.title = dlBtn.title = cur.locked;
+    }
 
     const body = h("pre", {
       class: "cp-body", id: `${this.#id}-p`, role: "tabpanel", tabindex: "0",
@@ -79,7 +84,7 @@ class CodePanel extends HTMLElement {
           h("div", { class: "cp-tabs", role: "tablist", "aria-label": "Files" }, tabEls),
           h("div", { class: "cp-actions" }, copyBtn, dlBtn)),
         body,
-        this.#hint && h("p", { class: "cp-hint", text: this.#hint })),
+        (cur.locked || this.#hint) && h("p", { class: "cp-hint", text: [cur.locked, this.#hint].filter(Boolean).join(" ") })),
     );
   }
 

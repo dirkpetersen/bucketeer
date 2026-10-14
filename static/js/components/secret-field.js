@@ -5,6 +5,9 @@ import { toast } from "./toast.js";
 
 // <secret-field label="Secret access key" ttl="15">
 //   field.value = "...";   // set via property so the secret never sits in an attribute
+//   field.fetcher = async () => "...";   // OR: fetch on demand (reveal/copy call it);
+//     the value is dropped again whenever the field re-masks, so a secret never
+//     lingers in memory. Fires bubbling "sf-reveal" / "sf-mask" events (no payload).
 // Masked by default (a fixed-length mask, so the real length is not leaked).
 // The eye button toggles reveal (a toggle, not press-and-hold, so it works with
 // keyboard and touch); it re-masks itself after `ttl` seconds, with a draining
@@ -17,9 +20,13 @@ class SecretField extends HTMLElement {
   #timer = 0;
   #copyTimer = 0;
   #revealed = false;
+  #busy = false;
+  #gen = 0; // bumped on every mask/clear/set: a fetch that finishes later is discarded
+  fetcher = null;
 
   get value() { return this.#value; }
   set value(v) {
+    this.#gen++;
     this.#value = String(v ?? "");
     this.removeAttribute("value"); // a secret must never sit in an attribute
     this.#mask();
@@ -55,18 +62,53 @@ class SecretField extends HTMLElement {
     this.#value = ""; // do not keep a secret around in a detached element
   }
 
-  #reveal(ttl) {
+  // Run the fetcher once, guarding against double clicks; null on failure (toasted).
+  async #fetch() {
+    if (this.#value) return this.#value;
+    if (!this.fetcher || this.#busy) return null;
+    this.#busy = true;
+    const gen = this.#gen;
+    this.revealBtn.disabled = this.copyBtn.disabled = true;
+    try {
+      const got = String((await this.fetcher()) ?? "");
+      if (gen !== this.#gen) return null; // cleared or changed meanwhile: drop it
+      this.#value = got;
+      return got || null;
+    } catch (err) {
+      if (err?.name !== "ApiError" || err.status !== 401) toast.error(err?.message ?? "Could not load the secret.");
+      return null;
+    } finally {
+      this.#busy = false;
+      this.revealBtn.disabled = this.copyBtn.disabled = false;
+    }
+  }
+
+  async #reveal(ttl) {
+    if (!(await this.#fetch())) return;
+    if (!this.isConnected) return this.#drop();
     this.#revealed = true;
     this.#paint();
     clearTimeout(this.#timer);
     this.#timer = setTimeout(() => this.#mask(), ttl * 1000);
+    this.dispatchEvent(new CustomEvent("sf-reveal", { bubbles: true }));
+  }
+
+  #drop() {
+    if (this.fetcher) this.#value = "";
   }
 
   #mask() {
+    this.#gen++;
     clearTimeout(this.#timer);
+    const was = this.#revealed || (this.fetcher && this.#value);
     this.#revealed = false;
+    this.#drop();
     this.#paint();
+    if (was) this.dispatchEvent(new CustomEvent("sf-mask", { bubbles: true }));
   }
+
+  /** Mask now and forget a fetched value (e.g. when the key selection changes). */
+  clear() { this.#mask(); }
 
   #paint() {
     if (!this.root) return;
@@ -87,8 +129,11 @@ class SecretField extends HTMLElement {
   }
 
   async #copy() {
-    if (!this.#value) return toast.error("Nothing to copy.");
-    const ok = await copyText(this.#value);
+    const wasRevealed = this.#revealed;
+    const value = await this.#fetch();
+    if (!value) return this.fetcher ? undefined : toast.error("Nothing to copy.");
+    const ok = await copyText(value);
+    if (!wasRevealed) this.#drop(); // copied while masked: do not keep it around
     if (!ok) return toast.error("Could not copy. Select the value and copy it manually.");
     this.copyBtn.dataset.done = "true";
     this.copyBtn.replaceChildren(icon("check"));

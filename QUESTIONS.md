@@ -12,43 +12,7 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 ## Open
 
-### Q5: What should happen when RGW rejects a new user's email address?
-
-- **Blocks:** nothing. The current safe behavior is described below.
-- **Context:** this is not about logging in with an email address; that is
-  settled in Q4. When Bucketeer auto-creates the RGW user on first login, it
-  passes the user's AD email to croit. RGW refuses an email that another RGW
-  user already has, for example an old or shared S3 account registered with
-  the same address, so the create fails.
-- **Current behavior (safe placeholder):** the login succeeds, but the user
-  sees "Your S3 account couldn't be created, contact your administrator", and
-  an audit entry names the conflict. No account is created.
-- **Options:**
-  1. Keep it that way: an admin resolves the conflict, for example by adding
-     a uid mapping to the existing RGW user.
-  2. Create the RGW user without an email and audit a warning, so the user
-     gets access immediately.
-- **Recommendation:** 2. The email on the RGW user is informational, and
-  blocking the user helps nobody.
-
-**Answer:**
-
-### Q6: Storage classes and notification broker logins
-
-- **Blocks:** TODO "Bucket notifications" (Phase 4), for part 2 only.
-- **Context:** the admin Settings tab is being built now.
-  1. **Storage class:** in S3 a storage class is chosen per object at upload.
-     Bucketeer has no upload, so users only pick a placement for a new bucket,
-     and storage classes are shown read-only. Should users ever choose a
-     storage class, for example as a default?
-  2. **Broker logins:** bucket notifications can go to HTTP(S), AMQP or Kafka
-     endpoints on the admin allowlist. Do your AMQP or Kafka brokers need a
-     username and password? If they do, Bucketeer would store them write-only:
-     saved, never shown again or sent to the browser.
-- **Recommendations:** 1. No, placement only. 2. Only if your brokers need
-  them; otherwise leave credentials out of v1.
-
-**Answer:**
+_None right now._
 
 ## Resolved
 
@@ -155,3 +119,45 @@ Each question has a recommendation. Answering "ok" accepts it.
 **Answer:** 1. yes 2. the default quota is hardcoded 1TB and can be changed. 3. We want to allow email address login but what actually happens is that if an email address is used this may or may not be the User principal name it may be the email So then we have to search Active Directory for that email and then look up the associated user SAM account name We would never create an account based on an email address
 
 **Decision:** 1 accepted. 2: the default quota defaults to 1 TiB and admins can change it. 3: the answer clarified email login. An email address is resolved through AD to the sAMAccountName, and a uid is never derived from an email address. The original sub-question (RGW rejecting a duplicate email on create) moves to Q5. Recorded in CLAUDE.md.
+
+### Q5: What should happen when RGW rejects a new user's email address?
+
+- **Blocks:** nothing. The current safe behavior is described below.
+- **Context:** this is not about logging in with an email address; that is
+  settled in Q4. When Bucketeer auto-creates the RGW user on first login, it
+  passes the user's AD email to croit. RGW refuses an email that another RGW
+  user already has, for example an old or shared S3 account registered with
+  the same address, so the create fails.
+- **Current behavior (safe placeholder):** the login succeeds, but the user
+  sees "Your S3 account couldn't be created, contact your administrator", and
+  an audit entry names the conflict. No account is created.
+- **Options:**
+  1. Keep it that way: an admin resolves the conflict, for example by adding
+     a uid mapping to the existing RGW user.
+  2. Create the RGW user without an email and audit a warning, so the user
+     gets access immediately.
+- **Recommendation:** 2. The email on the RGW user is informational, and
+  blocking the user helps nobody.
+
+**Answer:** OK , But only if Kroid actually requires an email if Kroid only requires a user then emails should never be passed there instead we should look up the username by the email address and then pass that to But of course if Croyd requires username and email then we should provide both The username is also always a valid email
+
+**Decision:** croit's `NewUserRequest` requires only `uid` and `name` (email is optional), so Bucketeer never sends an email address when creating an RGW user. The uid always comes from the sAMAccountName; an email login is resolved through AD first. If croit ever requires an email, pass both. Recorded in CLAUDE.md; added as a TODO item.
+
+### Q6: Storage classes and notification broker logins
+
+- **Blocks:** TODO "Bucket notifications" (Phase 4), for part 2 only.
+- **Context:** the admin Settings tab is being built now.
+  1. **Storage class:** in S3 a storage class is chosen per object at upload.
+     Bucketeer has no upload, so users only pick a placement for a new bucket,
+     and storage classes are shown read-only. Should users ever choose a
+     storage class, for example as a default?
+  2. **Broker logins:** bucket notifications can go to HTTP(S), AMQP or Kafka
+     endpoints on the admin allowlist. Do your AMQP or Kafka brokers need a
+     username and password? If they do, Bucketeer would store them write-only:
+     saved, never shown again or sent to the browser.
+- **Recommendations:** 1. No, placement only. 2. Only if your brokers need
+  them; otherwise leave credentials out of v1.
+
+**Answer:** OK
+
+**Decision:** recommendations accepted. Users choose a placement only, never a storage class, and there are no broker credentials in v1. Recorded in CLAUDE.md; bucket notifications unblocked.

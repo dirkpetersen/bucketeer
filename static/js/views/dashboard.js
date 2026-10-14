@@ -1,7 +1,6 @@
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
-import { getAccount } from "../api.js";
-import { quotaText } from "../format.js";
+import { credentialsCard } from "./credentials.js";
 import { load, save } from "../storage.js";
 import { renderAdmin } from "./admin.js";
 
@@ -32,47 +31,6 @@ function section(iconName, title, note, body, adv) {
     h("p", { class: "panel-note", text: note }),
     body,
     h("p", { class: "adv-only", text: adv }));
-}
-
-// Account status in the Credentials card: ready / being created / suspended /
-// creation failed (contact admin) / unavailable (retry). Credentials come next.
-function accountStatus() {
-  const body = h("div", { class: "acct", "aria-live": "polite" });
-  const chip = h("span", { class: "chip" });
-  const paint = (cls, label, ...content) => {
-    chip.className = `chip ${cls}`;
-    chip.replaceChildren(h("span", { class: "dot" }), label);
-    body.replaceChildren(...content);
-  };
-  const refresh = async () => {
-    paint("", "Setting up", h("div", { class: "acct-line" }, h("span", { class: "spinner", "aria-hidden": "true" }),
-      h("span", { text: "Preparing your S3 account. This takes a moment the first time." })));
-    let a;
-    try {
-      a = await getAccount();
-    } catch (err) {
-      if (err.name === "ApiError" && err.status === 401) return;
-      a = { status: "unavailable", message: err.message };
-    }
-    if (a.status === "ready") {
-      paint("chip-ok", "Account ready",
-        h("p", { class: "acct-line" }, "Signed in to S3 as ", h("code", { class: "acct-uid", text: a.uid })),
-        h("p", { class: "acct-sub", text: `Storage limit: ${quotaText(a.quota)}` }),
-        h("p", { class: "acct-sub", text: "Your access keys and ready-to-paste config will appear here shortly." }));
-    } else if (a.status === "suspended") {
-      paint("chip-warn", "Suspended",
-        h("p", { class: "acct-line", text: "Your S3 account is suspended. Contact your administrator to restore access." }));
-    } else if (a.status === "creation_failed") {
-      paint("chip-warn", "Needs an administrator",
-        h("p", { class: "acct-line", text: a.message || "Your S3 account couldn't be created, contact your administrator." }));
-    } else {
-      paint("chip-warn", "Unavailable",
-        h("p", { class: "acct-line", text: a.message || "The storage service is temporarily unavailable. Try again shortly." }),
-        h("button", { class: "btn", type: "button", on: { click: refresh } }, icon("refresh"), "Try again"));
-    }
-  };
-  refresh();
-  return { chip, body };
 }
 
 export function renderDashboard({ me, appName, onLogout, page = "home" }) {
@@ -126,23 +84,14 @@ export function renderDashboard({ me, appName, onLogout, page = "home" }) {
             : h("a", { class: "btn btn-ghost", href: "#/admin" }, icon("shield"), "Administration")),
           h("button", { class: "btn btn-ghost", type: "button", on: { click: onLogout } }, icon("logout"), "Sign out")))));
 
-  const credentials = () => {
-    const { chip, body } = accountStatus();
-    return h("section", { class: "card panel", "aria-labelledby": "h-Credentials" },
-      h("div", { class: "panel-head" }, h("h2", { id: "h-Credentials", text: "Credentials" }), chip),
-      h("p", { class: "panel-note", text: "Access keys with ready-to-paste AWS config and credentials files." }),
-      body,
-      h("p", { class: "adv-only", text: "Advanced: scoped keys and subusers will appear here." }));
-  };
-
   const home = () => h("main", { class: "main", id: "main" },
     h("div", { class: "hero" },
       h("span", { class: "eyebrow", text: "Your workspace" }),
       h("h1", { text: `${greeting()}, ${first}.` }),
-      h("p", { text: "Your S3 credentials and buckets will live here. We are putting the finishing touches on them." }),
+      h("p", { text: "Your S3 credentials are below. Bucket management is coming next." }),
       h("span", { class: "chip adv-note" }, h("span", { class: "dot" }), "Advanced mode on")),
     h("div", { class: "grid" },
-      credentials(),
+      credentialsCard(),
       section("bucket", "Buckets", "Create, share and manage your buckets, with usage at a glance.", skeletonRows(4),
         "Advanced: policies, CORS, lifecycle and tagging will appear here.")));
 

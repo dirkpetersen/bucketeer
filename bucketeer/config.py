@@ -5,14 +5,23 @@ REQUIRED: the app refuses to start while it is unset or empty. Field defaults
 must equal the values in `.env.default` (tests/test_config.py enforces this).
 """
 
+import re
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from dotenv import load_dotenv
 from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 LOG_LEVELS = ("debug", "info", "warning", "error")
+
+# Values that end up in the generated ~/.aws files. Anything outside these
+# alphabets is refused at startup so a setting can never add INI lines/keys.
+PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}\Z")
+REGION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}\Z")
+ENDPOINT_URL_RE = re.compile(
+    r"^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~%/-]*)?\Z"
+)
 
 
 class Settings(BaseSettings):
@@ -62,10 +71,35 @@ class Settings(BaseSettings):
     # S3
     s3_endpoint_url: str = ""
     s3_region: str = "us-east-1"
+    s3_addressing_style: Literal["path", "virtual", "auto"] = "path"
     aws_profile_name: str = "bucketeer"
     s3_tenant: str = ""
     s3_ca_cert_file: str = ""
     s3_tls_verify: bool = True
+
+    @field_validator("aws_profile_name")
+    @classmethod
+    def _check_profile(cls, v: str) -> str:
+        if not PROFILE_NAME_RE.match(v):
+            raise ValueError(
+                "must be 1-63 letters, digits, '.', '_' or '-' (no spaces, brackets or newlines)"
+            )
+        return v
+
+    @field_validator("s3_region")
+    @classmethod
+    def _check_region(cls, v: str) -> str:
+        if not REGION_RE.match(v):
+            raise ValueError("must be letters, digits, '-' or '_' only, e.g. us-east-1")
+        return v
+
+    @field_validator("s3_endpoint_url")
+    @classmethod
+    def _check_endpoint(cls, v: str) -> str:
+        v = v.strip().rstrip("/")
+        if v and not ENDPOINT_URL_RE.match(v):
+            raise ValueError("must look like https://host[:port] (no spaces, quotes or newlines)")
+        return v
 
     @field_validator("ldap_url", mode="before")
     @classmethod

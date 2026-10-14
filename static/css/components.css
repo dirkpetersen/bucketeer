@@ -42,7 +42,7 @@ code-panel { display: block; container-type: inline-size; }
   padding: 0 var(--sp-2) 0 var(--sp-2);
   background: var(--surface-2); border-bottom: 1px solid var(--border);
 }
-.cp-tabs { display: flex; gap: var(--sp-1); overflow-x: auto; scrollbar-width: none; padding-top: var(--sp-2); }
+.cp-tabs { display: flex; flex: 1; min-width: 0; gap: var(--sp-1); overflow-x: auto; scrollbar-width: none; padding-top: var(--sp-2); }
 .cp-tab {
   position: relative; padding: var(--sp-2) var(--sp-3) var(--sp-3);
   border: 0; background: none; cursor: pointer; white-space: nowrap;
@@ -69,6 +69,13 @@ code-panel { display: block; container-type: inline-size; }
   .cp-actions .btn .cp-label { display: none; }
   .cp-actions .btn { width: 2rem; padding: 0; }
   .cp-body { padding-inline: var(--sp-4); }
+  .cp-tab { padding-inline: var(--sp-2); }
+}
+@container (max-width: 24rem) {
+  .cp-bar { flex-wrap: wrap; }
+  .cp-tabs { flex-basis: 100%; }
+  .cp-actions { margin-left: auto; }
+  .cp-tab::after { inset-inline: var(--sp-2); }
 }
 .syn-comment { color: var(--syn-comment); font-style: italic; }
 .syn-section { color: var(--syn-section); font-weight: 600; }

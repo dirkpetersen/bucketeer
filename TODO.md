@@ -52,10 +52,13 @@ skips them too.
   tests and CLAUDE.md.
 - [x] RGW user resolution: sAMAccountName → uid, honoring admin uid mappings.
   Auto-create on first login with the default quota.
-- [ ] Credentials API and screen: show access and secret keys (secret masked,
+- [x] Credentials API and screen: show access and secret keys (secret masked,
   reveal and copy) and the `~/.aws/config` + `~/.aws/credentials` snippets,
   with copy and download. Endpoint comes from `S3_ENDPOINT_URL` or the croit
   `.s3cfg`.
+- [ ] Stop sending the AD email to croit when auto-creating an RGW user (Q5):
+  pass only uid and display name. Remove the `email_conflict` path and its
+  message, and update the tests and CLAUDE.md.
 - [ ] Key management: create an additional key, rotate (add new, then remove
   old), delete. Never use the whole-set PUT.
 - [x] Visual design system: CSS tokens, Beaver Orange accent, light and dark,
@@ -113,8 +116,8 @@ skips them too.
 - [ ] Object lock: default retention, plus legal hold and retention for a given
   object key.
 - [ ] Full lifecycle editor: transitions, prefix and tag filters.
-- [ ] Bucket notifications, with endpoints from the admin allowlist only.
-  (blocked: Q6)
+- [ ] Bucket notifications, with endpoints from the admin allowlist only
+  (no broker credentials, Q6).
 - [ ] Multipart upload cleanup (list and abort).
 - [ ] Subusers (read/write/readwrite/full) and their keys.
 
@@ -140,6 +143,8 @@ available, and fix the client and the mock if reality differs:
   `tenant$uid`, or a bare uid plus a separate `tenant` field? `get_user`'s
   exact match assumes `tenant$uid`. Does an unknown `uid` filter return 404 or
   an empty list?
+- [ ] (needs cluster) Key `user` field for tenant users in `GET /s3/users/{uid}/keys`:
+  `tenant$uid` (assumed) or bare uid? If bare, tenant users see "no access keys".
 - [ ] (needs cluster) User quota: `maxObjects` null means unlimited and
   `maxSize` is in bytes (1 TiB default).
 - [ ] (needs cluster) RGW uids are case-sensitive (`Alice` and `alice` are

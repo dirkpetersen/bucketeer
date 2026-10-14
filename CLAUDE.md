@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Bucketeer is a self-service S3 portal for Ceph clusters managed by **croit**. Users log in with AD, get their S3 (RGW) access/secret keys with ready-to-paste `~/.aws/config` and `~/.aws/credentials` snippets, and manage their buckets: create, delete, versioning, sharing, scoped keys, lifecycle, and the full set of S3 bucket features. Admins get an admin page. See "Product design" below for decisions already made, and `TODO.md` for the phased plan.
 
-The repo is greenfield; see `TODO.md` for what exists so far. Code layout: `app.py` (uvicorn entry point), the `bucketeer/` package (`config.py` settings, `main.py` app factory, `croit.py` croit client, `db.py` SQLite storage, `s3docs.py` shared bucket policy/lifecycle/tag helpers, `ldapauth.py` AD login, `auth.py` sessions/CSRF/throttle/login routes, `rgw_user.py` RGW user resolution, `admin.py` admin API, `admin_settings.py` + `policy_settings.py` admin settings), `static/` (frontend, served at `/`), `tests/`, and `mock/` (dev/test-only mock croit API). JSON endpoints go under `/api/...`; the static mount at `/` is registered last so it never shadows them or `/health`.
+The repo is greenfield; see `TODO.md` for what exists so far. Code layout: `app.py` (uvicorn entry point), the `bucketeer/` package (`config.py` settings, `main.py` app factory, `croit.py` croit client, `db.py` SQLite storage, `s3docs.py` shared bucket policy/lifecycle/tag helpers, `ldapauth.py` AD login, `auth.py` sessions/CSRF/throttle/login routes, `rgw_user.py` RGW user resolution, `credentials.py` keys/snippet API, `admin.py` admin API, `admin_settings.py` + `policy_settings.py` admin settings), `static/` (frontend, served at `/`), `tests/`, and `mock/` (dev/test-only mock croit API). JSON endpoints go under `/api/...`; the static mount at `/` is registered last so it never shadows them or `/health`.
 
 ### Commands
 
@@ -122,7 +122,11 @@ Endpoints this app relies on:
 
 Formats in the two files differ, so keep them straight:
 - `~/.aws/credentials`: `[<profile>]` with `aws_access_key_id` / `aws_secret_access_key`.
-- `~/.aws/config`: `[profile <profile>]` (bare `[default]` for the default profile) with `endpoint_url` pointing at the RGW gateway, plus `region`. Ceph doesn't need a region, but the AWS SDKs do. AWS CLI v2 and current boto3 honor `endpoint_url` in the config file.
+- `~/.aws/config`: `[profile <profile>]` (bare `[default]` when the profile is `default`) with `region`, `endpoint_url` (the RGW gateway), `request_checksum_calculation` / `response_checksum_validation = when_required` (newer AWS SDKs/CLI send CRC checksums that many Ceph RGW versions reject) and `s3 =` / `addressing_style = <path|virtual|auto>` as the last, indented block. Ceph doesn't need a region, but the AWS SDKs do. AWS CLI v2 and current boto3 honor `endpoint_url` in the config file.
+
+**Credentials API** (`bucketeer/credentials.py`, `/api/credentials`, uid only from the session via `require_active_rgw_user`, so suspended users get nothing): `GET` returns `{profile, region, endpointUrl, addressingStyle, keys:[{accessKey}]}` and **never a secret**; `POST /reveal {accessKey}` returns `{accessKey, secretKey}` only for a key found in the user's own croit key list (exact match, else 404), audits `credentials.reveal` (actor, uid, access key; **never the secret**) before answering, and sends `Cache-Control: no-store`. **Reveal rule:** a secret key may leave the server only through that endpoint; no other response, log line, audit entry or error may contain one. The snippets are built in the browser (`static/js/awsconfig.js`) from the GET data plus the revealed secret; `secret-field` takes a `fetcher` so the secret exists in memory only while revealed (60 s) and is dropped on re-mask, key change or navigation. Never put a secret in a DOM attribute, URL, storage or console.
+- **Endpoint:** `S3_ENDPOINT_URL`, else `https?://host_base` from the user's croit `.s3cfg` (`CroitClient.cfg_file`; comment lines ignored; cached 5 min, a miss 30 s, in `EndpointResolver`), else null and the UI tells users to ask an administrator.
+- **Safe values:** `Settings` refuses at startup an `AWS_PROFILE_NAME` / `S3_REGION` / `S3_ENDPOINT_URL` outside a strict alphabet (no spaces, brackets, `=`, `#`, newlines), so nothing can add INI lines. `S3_ADDRESSING_STYLE` is `path` (default, RGW without wildcard DNS), `virtual` or `auto`.
 
 ## `tools/`: standalone croit scripts
 
@@ -150,7 +154,7 @@ Formats in the two files differ, so keep them straight:
 - The RGW uid is the **lowercased** AD `sAMAccountName` (Q4). At login, an existing RGW user whose uid matches case-insensitively (checked against croit's uid list) is used instead, with an audit entry. Admin uid mappings always win.
 - Logging in with an email address or UPN only finds the account: the AD search resolves it to the `sAMAccountName`. A uid is **never** derived from an email address.
 - The first login creates the RGW user automatically with the default user quota. That default is **1 TiB** unless an admin changes it on the Settings tab, so a quota is always applied (Q4).
-- If RGW rejects the AD email because another RGW user already has it, auto-create refuses: the user sees "contact your administrator", and an audit entry names the conflict. This is a safe placeholder until QUESTIONS.md Q5 is answered.
+- **Never send an email address to croit when creating an RGW user (Q5).** `NewUserRequest` only requires `uid` and `name`, and email is optional, so the uid comes from the sAMAccountName (an email login is first resolved to the sAMAccountName through AD) and `email` stays empty. That also rules out RGW's duplicate-email rejection. Pass an email only if a future croit version makes it required, and then pass both.
 - Admins are members of `LDAP_ADMIN_GROUP_DN`. They see all users and buckets, set quotas, suspend users, and edit settings.
 - **Offboarding:** a daily job suspends (`PATCH /s3/users/{uid}` with `suspended`) every RGW user whose AD account is disabled or no longer in the group, together with that user's bucket keys. It never deletes anything; an admin decides what happens to the data.
 
@@ -161,7 +165,7 @@ Formats in the two files differ, so keep them straight:
 - **Statuses:** `ready`, `suspended`, `creation_failed` (email collision, Q5 placeholder: no retry without email; invalid username; ambiguous uid; uid_taken; mapping_target_missing), `unavailable` (any croit trouble, or a 4xx that is not an email conflict).
 - **Concurrency/cache:** per-username `asyncio.Lock`; a 400/409/422 from create re-checks `/s3/user-names` and counts "exists" as success. Results cached 5 min per username (`CACHE_TTL`), never `unavailable`. `invalidate(username=|uid=)` is called on admin mapping put/delete (AD name, old and new targets, and the targets' bare names) and suspend/unsuspend; other changes (offboarding later!) must call it too.
 - **Login:** `RgwResolver.warm` resolves in a background task after a successful login (best effort; login never waits for croit). Tests switch it off (`warm_on_login`, autouse fixture in `tests/conftest.py`).
-- Frontend: `accountStatus()` in `views/dashboard.js` shows the state in the Credentials card.
+- Frontend: `accountStatus()` in `views/credentials.js` shows the state in the Credentials card.
 
 ### Bucket keys: keys scoped to one bucket
 
@@ -229,6 +233,8 @@ Several features write the same per-bucket policy and lifecycle configuration: b
   - **Editing:** the bucket owner can change it later; the audit log records the old and new values.
   - **Existing buckets without one** are flagged in the bucket list and on the admin page, but not blocked.
   - **Reporting:** the admin page offers a CSV chargeback export (bucket, owner, budget number, usage).
+- **Storage classes (Q6):** users choose only a placement for a new bucket, never a storage class. Storage classes are shown read-only.
+- **Notification endpoints (Q6):** the admin allowlist holds no broker credentials in v1. URLs with userinfo are refused.
 - There is no object/file browser. Presigned share links choose the object with a key field plus prefix autocomplete from a read-only listing (Q1).
 
 ### Admin page and storage

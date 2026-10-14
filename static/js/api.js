@@ -50,6 +50,13 @@ export const logout = () => api("/logout", { method: "POST", announce401: false 
 // status: ready | suspended | creation_failed | unavailable. Never carries keys.
 export const getAccount = () => api("/account");
 
+// The signed-in user's S3 keys and snippet values: {profile, region, endpointUrl,
+// addressingStyle, keys: [{accessKey}]}. No secrets.
+export const getCredentials = () => api("/credentials");
+// The secret of one of the user's own access keys: {accessKey, secretKey}. Audited
+// server-side. Keep the result in memory only, for as short a time as possible.
+export const revealSecret = (accessKey) => api("/credentials/reveal", { method: "POST", json: { accessKey } });
+
 // Administrator endpoints (the server enforces the role on each of them).
 const enc = encodeURIComponent;
 export const adminUsers = () => api("/admin/users");

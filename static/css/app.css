@@ -99,6 +99,20 @@
   padding: 0.1em 0.45em; border-radius: var(--r-sm); overflow-wrap: anywhere; }
 .acct .btn { width: fit-content; margin-top: var(--sp-2); }
 
+/* Credentials: key, secret, snippets, test command */
+.panel-wide { grid-column: 1 / -1; }
+.creds { display: grid; gap: var(--sp-4); margin-top: var(--sp-3); }
+.cred-key, .cred-cmd { display: flex; align-items: center; gap: var(--sp-1); min-height: 3rem;
+  padding: 0 var(--sp-2) 0 var(--sp-4); border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  background: var(--surface-sunken); }
+.cred-key code, .cred-cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none;
+  font: 500 var(--fs-sm) / 3rem var(--font-mono); }
+.cred-test { display: grid; gap: var(--sp-2); }
+.cred-warn { padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); border: 1px solid var(--border-strong);
+  background: var(--surface-2); color: var(--text); font-size: var(--fs-sm); }
+select.input { appearance: auto; }
+.acct-line .acct-sub { margin-left: var(--sp-2); }
+
 /* Skeletons */
 .skel { display: grid; gap: var(--sp-3); }
 .skel-row { display: grid; grid-template-columns: 2.25rem 1fr auto; gap: var(--sp-3); align-items: center; }
