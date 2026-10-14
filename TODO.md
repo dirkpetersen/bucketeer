@@ -59,7 +59,7 @@ skips them too.
 - [x] Stop sending the AD email to croit when auto-creating an RGW user (Q5):
   pass only uid and display name. Remove the `email_conflict` path and its
   message, and update the tests and CLAUDE.md.
-- [ ] Key management: create an additional key, rotate (add new, then remove
+- [x] Key management: create an additional key, rotate (add new, then remove
   old), delete. Never use the whole-set PUT.
 - [x] Visual design system: CSS tokens, Beaver Orange accent, light and dark,
   login and dashboard layouts, motion with reduced-motion support. Vanilla JS
@@ -67,6 +67,13 @@ skips them too.
 
 ## Phase 2: Buckets
 
+- [ ] Local demo (owner request, do this next): `mock/demo.py` starts the
+  mock croit with moto and Bucketeer on localhost, with a built-in fake
+  directory (a few users incl. one admin, fixed demo passwords printed on
+  start), injected through `create_app(authenticator=...)`. No production code
+  path or setting can enable it. It uses a temporary DATA_DIR and plain-http
+  cookies, binds 127.0.0.1 only, and shows a "Demo mode" banner. One command:
+  `.venv/bin/python3 mock/demo.py`. Document it in CLAUDE.md and README.md.
 - [ ] User profile: a profile page where users set a default budget number
   (index/worktag), stored in SQLite.
 - [ ] Bucket list with usage, quota and budget number. Create bucket: name

@@ -201,24 +201,24 @@ class CroitClient:
 
     # -- plumbing --
 
-    def _scrub(self, text: str) -> str:
-        for secret in self._secrets:
+    def _scrub(self, text: str, extra: tuple[str, ...] = ()) -> str:
+        for secret in (*self._secrets, *(x for x in extra if x)):
             text = text.replace(secret, REDACTED)
         return text
 
-    def _error_for(self, resp: httpx.Response) -> CroitError:
+    def _error_for(self, resp: httpx.Response, extra: tuple[str, ...] = ()) -> CroitError:
         status = resp.status_code
         try:
             body = resp.json()
         except ValueError:
             body = None
         if not isinstance(body, dict) or "message" not in body:
-            text = self._scrub(resp.text.strip())[:200] or resp.reason_phrase
+            text = self._scrub(resp.text.strip(), extra)[:200] or resp.reason_phrase
             return CroitError(status, None, text)
         code = body.get("code")
-        message = self._scrub(str(body["message"]))
+        message = self._scrub(str(body["message"]), extra)
         details = body.get("details")
-        details = self._scrub(str(details)) if details else None
+        details = self._scrub(str(details), extra) if details else None
         warning = body.get("ignorableWarning")
         if status == 400 and isinstance(warning, dict) and warning.get("token"):
             return CroitWarning(
@@ -239,6 +239,7 @@ class CroitClient:
         *,
         params: dict[str, Any] | None = None,
         json: Any = None,
+        secrets: tuple[str, ...] = (),
     ) -> Any:
         # `path` is relative ("s3/users"), so it joins onto the base URL's /api.
         try:
@@ -252,7 +253,7 @@ class CroitClient:
                 f"croit unreachable: {method} {path} ({type(e).__name__})"
             ) from e
         if not resp.is_success:
-            raise self._error_for(resp)
+            raise self._error_for(resp, secrets)
         if resp.status_code == 204 or not resp.content:
             return None
         try:
@@ -396,10 +397,13 @@ class CroitClient:
     async def put_key(self, uid: str, access_key: str, secret_key: str) -> None:
         """Add one key (or replace the secret of an existing one). The secret goes in
         the query string because that is how croit takes it."""
+        # `secrets` makes the client scrub the secret (echoed query string) from any
+        # croit error text before it is truncated or stored.
         await self._request(
             "PUT",
             _path("/s3/users/{uid}/keys/{access_key}", uid=uid, access_key=access_key),
             params={"secretKey": secret_key},
+            secrets=(secret_key,),
         )
 
     async def delete_key(self, uid: str, access_key: str) -> None:

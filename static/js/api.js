@@ -57,6 +57,12 @@ export const getCredentials = () => api("/credentials");
 // server-side. Keep the result in memory only, for as short a time as possible.
 export const revealSecret = (accessKey) => api("/credentials/reveal", { method: "POST", json: { accessKey } });
 
+// Key management (the server holds the secrets; none of these returns one).
+// create -> {accessKey}; rotate -> {accessKey, oldKeyRemoved, message?}; delete -> {accessKey}.
+export const createKey = () => api("/credentials/keys", { method: "POST" });
+export const rotateKey = (accessKey) => api(`/credentials/keys/${enc(accessKey)}/rotate`, { method: "POST" });
+export const deleteKey = (accessKey) => api(`/credentials/keys/${enc(accessKey)}`, { method: "DELETE" });
+
 // Administrator endpoints (the server enforces the role on each of them).
 const enc = encodeURIComponent;
 export const adminUsers = () => api("/admin/users");

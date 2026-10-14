@@ -107,6 +107,8 @@
   background: var(--surface-sunken); }
 .cred-key code, .cred-cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none;
   font: 500 var(--fs-sm) / 3rem var(--font-mono); }
+.cred-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.cred-actions .btn { margin-top: 0; }
 .cred-test { display: grid; gap: var(--sp-2); }
 .cred-warn { padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); border: 1px solid var(--border-strong);
   background: var(--surface-2); color: var(--text); font-size: var(--fs-sm); }

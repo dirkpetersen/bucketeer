@@ -252,6 +252,22 @@ def test_already_exists_from_croit_counts_as_success(env):
     other = RgwResolver(env.rgw.croit, lambda: env.db, env.rgw.tenant)
 
     async def go():
+        # Force the race: each POST is held until both resolvers have reached
+        # their create (both already saw "dave" missing), then both go out.
+        both_at_create = asyncio.Event()
+        arrived = 0
+        inner = env.transport.handle_async_request
+
+        async def gated(request):
+            nonlocal arrived
+            if request.method == "POST" and request.url.path.endswith("/s3/users"):
+                arrived += 1
+                if arrived >= 2:
+                    both_at_create.set()
+                await asyncio.wait_for(both_at_create.wait(), 5)
+            return await inner(request)
+
+        env.transport.handle_async_request = gated
         return await asyncio.gather(
             env.rgw.resolve("dave", "Dave X"),
             other.resolve("dave", "Dave X"),
