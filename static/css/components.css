@@ -130,3 +130,7 @@ confirm-dialog { display: contents; }
   content: ""; display: block; width: 2rem; height: 3px; margin-bottom: var(--sp-3);
   border-radius: 3px; background: var(--danger-solid);
 }
+
+/* Names in dialogs: no awkward breaks at hyphens; very long names wrap anywhere. */
+.nm { white-space: nowrap; }
+.nm-long { white-space: normal; overflow-wrap: anywhere; }

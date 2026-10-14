@@ -1,0 +1,62 @@
+/* Buckets card (home page) and the create-bucket dialog. */
+
+.bk-title { display: flex; align-items: center; gap: var(--sp-3); }
+.bk-title .chip { font-variant-numeric: tabular-nums; }
+.panel-head .btn { min-height: 2.5rem; }
+.bk-body { min-height: 6rem; }
+
+.bk-list { list-style: none; margin: 0; padding: 0; display: grid; border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.bk-row {
+  display: grid; grid-template-columns: 2.5rem minmax(0, 1fr); gap: var(--sp-2) var(--sp-3); align-items: center;
+  padding: var(--sp-3) var(--sp-4); background: var(--surface); transition: background-color var(--dur-fast);
+}
+.bk-row + .bk-row { border-top: 1px solid var(--border); }
+.bk-row:hover { background: var(--accent-soft); }
+.bk-row[data-busy="true"] { opacity: 0.55; pointer-events: none; }
+.bk-ic { display: grid; place-items: center; width: 2.5rem; height: 2.5rem; border-radius: var(--r-md);
+  background: var(--accent-soft); color: var(--accent-text); grid-row: span 3; align-self: start; }
+.bk-ic svg { width: 1.25rem; height: 1.25rem; }
+.bk-main { display: grid; gap: var(--sp-1); min-width: 0; }
+.bk-name { font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: 600; overflow-wrap: anywhere; }
+.bk-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); font-size: var(--fs-xs); color: var(--text-muted); }
+.bk-meta .chip { text-transform: none; letter-spacing: 0; }
+.bk-usage { display: grid; gap: var(--sp-1); font-size: var(--fs-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 0; }
+.bk-usage-text b { color: var(--text); font-weight: 600; }
+.bk-meter { width: 100%; max-width: 14rem; margin-top: 0; }
+.bk-noquota { font-size: var(--fs-xs); color: var(--text-faint); }
+.bk-tail { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; }
+.bk-budget { display: inline-flex; align-items: center; gap: var(--sp-2); min-width: 0; font-size: var(--fs-xs); }
+.bk-budget-l { color: var(--text-muted); font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
+.bk-budget code { font-family: var(--font-mono); font-size: var(--fs-xs); background: var(--surface-2); color: var(--text);
+  padding: 0.15rem 0.45rem; border-radius: var(--r-sm); overflow-wrap: anywhere; }
+.bk-row .chip-warn { text-transform: none; letter-spacing: 0; }
+.bk-row .chip-warn svg { width: 0.9rem; height: 0.9rem; }
+
+/* Wide card: the row becomes columns. */
+@container (min-width: 44rem) {
+  .bk-row { grid-template-columns: 2.5rem minmax(0, 1.4fr) minmax(0, 1fr) 13rem; }
+  .bk-ic { grid-row: auto; align-self: center; }
+  .bk-tail { flex-direction: column; align-items: flex-end; gap: var(--sp-2); flex-wrap: nowrap; }
+}
+@container (max-width: 30rem) {
+  .bk-del-l { display: none; }
+  .bk-row .btn-sm { width: 2.25rem; padding: 0; }
+}
+.bk-row .btn-sm { min-height: 2.25rem; }
+
+.bk .empty { border: 1px dashed var(--border-strong); border-radius: var(--r-md); }
+.bk .set-unavail { padding: var(--sp-4); border: 1px dashed var(--border-strong); border-radius: var(--r-md); }
+
+/* Create dialog (builds on .cd and .qd) */
+.cb form { max-height: calc(100dvh - 2 * var(--sp-5)); overflow-y: auto; }
+.cb .qd-check { align-items: flex-start; }
+.cb .qd-check input { margin-top: 0.15rem; }
+.cb-opt { font-weight: 450; color: var(--text-muted); }
+.cb-adv { display: grid; gap: var(--sp-3); border: 1px dashed var(--border-strong); border-radius: var(--r-md); padding: var(--sp-4); margin: 0; min-width: 0; }
+.cb-adv legend { padding: 0 var(--sp-2); }
+.cb-adv .chip { text-transform: uppercase; }
+.cb .set-warn[hidden] { display: none; }
+.cb .set-warn svg { flex: none; }
+.cb .qd-check input:disabled + span { opacity: 0.75; }
+.cb .qd-check > span { display: grid; gap: 2px; }
+.cb .qd-check small { color: var(--text-muted); font-size: var(--fs-xs); font-weight: 450; }

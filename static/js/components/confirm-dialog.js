@@ -6,6 +6,9 @@ import { h } from "../dom.js";
 // until the user types exactly that text. Esc / Cancel / backdrop resolve false.
 let seq = 0;
 
+// A name (bucket, user) that does not break at its hyphens; very long ones may wrap anywhere.
+export const nameSpan = (text) => h("strong", { class: text.length > 28 ? "nm nm-long" : "nm", text });
+
 class ConfirmDialog extends HTMLElement {
   ask({ title, message = "", confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false, requireText = "" }) {
     const id = `cd${++seq}`;
@@ -13,13 +16,13 @@ class ConfirmDialog extends HTMLElement {
     const cancelBtn = h("button", { class: "btn", type: "submit", value: "no", formNoValidate: true, text: cancelLabel });
     const msg = h("p", { class: "cd-msg", id: `${id}-m` }, message);
     let input = null;
-    const kids = [h("h2", { id: `${id}-t`, text: title }), msg];
+    const kids = [h("h2", { id: `${id}-t` }, title), msg];
     if (requireText) {
       input = h("input", { class: "input", id: `${id}-i`, autocomplete: "off", autocapitalize: "off", spellcheck: "false" });
       confirmBtn.disabled = true;
       input.addEventListener("input", () => (confirmBtn.disabled = input.value !== requireText));
       kids.push(h("div", { class: "field" },
-        h("label", { for: `${id}-i` }, "Type ", h("strong", { text: requireText }), " to confirm"), input));
+        h("label", { for: `${id}-i` }, "Type ", nameSpan(requireText), " to confirm"), input));
     }
     kids.push(h("div", { class: "cd-actions" }, cancelBtn, confirmBtn));
     const form = h("form", { method: "dialog" }, ...kids);

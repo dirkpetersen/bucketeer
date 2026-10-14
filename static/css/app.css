@@ -150,6 +150,7 @@ select.input { appearance: auto; }
 .sc-title { font: 480 var(--fs-3xl) / 1.05 var(--font-display); letter-spacing: -0.02em; margin: var(--sp-2) 0; }
 
 /* "Demo mode" pill: only rendered when the server reports demo (mock/demo.py). */
+.has-demo { padding-bottom: 4rem; } /* the fixed pill never covers the last content */
 .demo-banner {
   position: fixed; inset-block-end: var(--sp-3); inset-inline: 0; margin-inline: auto; width: max-content;
   max-width: calc(100vw - 2 * var(--gutter)); z-index: 40; pointer-events: none;

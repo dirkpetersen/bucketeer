@@ -96,6 +96,11 @@ MIGRATIONS: list[str] = [
         CHECK (suspended_by IN ('owner', 'direct', 'offboarding'));
     UPDATE bucket_keys SET suspended_by = 'direct' WHERE suspended_at IS NOT NULL;
     """,
+    # v3: 0 = the bucketeer-budget tag still has to be written to the bucket (the
+    # S3 call failed after the bucket was created); the bucket list reconciles it.
+    """
+    ALTER TABLE buckets ADD COLUMN tag_synced INTEGER NOT NULL DEFAULT 1;
+    """,
 ]
 
 _MISSING: Any = object()
@@ -338,13 +343,20 @@ class Buckets(_Repo):
         owner_uid: str,
         budget_number: str | None = None,
         by: str | None = None,
+        tag_synced: bool = True,
     ) -> None:
         with self.db.tx() as c:
             c.execute(
                 "INSERT INTO buckets (name, owner_uid, budget_number, created_at, "
-                "created_by) VALUES (?, ?, ?, ?, ?)",
-                (name, owner_uid, budget_number, now(), by),
+                "created_by, tag_synced) VALUES (?, ?, ?, ?, ?, ?)",
+                (name, owner_uid, budget_number, now(), by, int(tag_synced)),
             )
+
+    def set_tag_synced(self, name: str, synced: bool) -> bool:
+        with self.db.tx() as c:
+            return c.execute(
+                "UPDATE buckets SET tag_synced = ? WHERE name = ?", (int(synced), name)
+            ).rowcount > 0
 
     def get(self, name: str) -> dict[str, Any] | None:
         return self.db.query_one("SELECT * FROM buckets WHERE name = ?", (name,))

@@ -4,6 +4,7 @@ import { credentialsCard } from "./credentials.js";
 import { load, save } from "../storage.js";
 import { renderAdmin } from "./admin.js";
 import { renderProfile } from "./profile.js";
+import { bucketsCard } from "./buckets.js";
 
 const THEMES = [["system", "monitor", "Theme: system"], ["light", "sun", "Theme: light"], ["dark", "moon", "Theme: dark"]];
 
@@ -14,24 +15,6 @@ function initials(name) {
 function greeting() {
   const hr = new Date().getHours();
   return hr < 5 ? "Working late" : hr < 12 ? "Good morning" : hr < 18 ? "Good afternoon" : "Good evening";
-}
-
-function skeletonRows(n) {
-  return h("div", { class: "skel", "aria-hidden": "true" },
-    Array.from({ length: n }, () =>
-      h("div", { class: "skel-row" }, h("div", { class: "skel-dot" }),
-        h("div", { class: "skel-stack" }, h("div", { class: "skel-line w60" }), h("div", { class: "skel-line w40" })),
-        h("div", { class: "skel-pill" }))));
-}
-
-function section(iconName, title, note, body, adv) {
-  return h("section", { class: "card panel", "aria-labelledby": `h-${title}` },
-    h("div", { class: "panel-head" },
-      h("h2", { id: `h-${title}`, text: title }),
-      h("span", { class: "chip chip-accent" }, icon(iconName, "icon"), "Coming soon")),
-    h("p", { class: "panel-note", text: note }),
-    body,
-    h("p", { class: "adv-only", text: adv }));
 }
 
 export function renderDashboard({ me, appName, onLogout, page = "home" }) {
@@ -92,12 +75,11 @@ export function renderDashboard({ me, appName, onLogout, page = "home" }) {
     h("div", { class: "hero" },
       h("span", { class: "eyebrow", text: "Your workspace" }),
       h("h1", { text: `${greeting()}, ${first}.` }),
-      h("p", { text: "Your S3 credentials are below. Bucket management is coming next." }),
+      h("p", { text: "Your S3 credentials and your buckets, in one place." }),
       h("span", { class: "chip adv-note" }, h("span", { class: "dot" }), "Advanced mode on")),
     h("div", { class: "grid" },
       credentialsCard(),
-      section("bucket", "Buckets", "Create, share and manage your buckets, with usage at a glance.", skeletonRows(4),
-        "Advanced: policies, CORS, lifecycle and tagging will appear here.")));
+      bucketsCard({ isAdvanced: () => advanced })));
 
   shell.append(
     h("a", { class: "skip-link", href: "#main", text: "Skip to content" }),

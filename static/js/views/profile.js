@@ -2,22 +2,11 @@ import { h } from "../dom.js";
 import { icon } from "../icons.js";
 import { getProfile, saveProfile } from "../api.js";
 import { toast } from "../components/toast.js";
+import { checkBudget as check } from "../budget.js";
 
 // The user's profile: name and email come from AD (read-only); the default
 // budget number prefills the budget field when creating a bucket. The server
 // validates; the same base rules run here only to give instant feedback.
-
-const MAX_LEN = 64;
-const ALLOWED = /^[A-Za-z0-9 +\-=._:/@]+$/;
-
-function check(raw) {
-  const v = raw.trim();
-  if (!v) return "";
-  if (v.length > MAX_LEN) return `At most ${MAX_LEN} characters.`;
-  if (/[\p{Cc}\p{Cf}]/u.test(v)) return "Control characters are not allowed.";
-  if (!ALLOWED.test(v)) return "Use only letters (A-Z), digits, spaces and the characters + - = . _ : / @";
-  return "";
-}
 
 function identity(me) {
   const row = (label, value) => h("div", { class: "pf-row" }, h("dt", { text: label }), h("dd", { text: value || "-" }));

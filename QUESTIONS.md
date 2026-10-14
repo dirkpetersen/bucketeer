@@ -12,7 +12,22 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 ## Open
 
-_None right now._
+### Q7: Should versioning be on by default for new buckets?
+
+- **Blocks:** nothing. New buckets currently default to versioning **off**,
+  as plain S3 does.
+- **Context:** versioning keeps every overwritten or deleted object version,
+  which protects against accidents. But old versions count toward the quota,
+  and users must add lifecycle rules (expire noncurrent versions) to clean
+  them up. The create dialog has a checkbox either way.
+- **Options:**
+  1. Default off, as now.
+  2. Default on, with the simple "expire noncurrent versions after N days"
+     lifecycle rule suggested once that feature exists.
+- **Recommendation:** 2, on by default. Accidental deletes are the most
+  common data-loss case, and the quota cost is visible in the bucket list.
+
+**Answer:**
 
 ## Resolved
 

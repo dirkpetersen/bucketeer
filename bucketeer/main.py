@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import admin, admin_settings, auth, credentials, profile, rgw_user
+from . import admin, admin_settings, auth, buckets, credentials, profile, rgw_user, s3client
 from .config import Settings
 from .croit import CroitClient
 from .db import DB_FILENAME, Database
@@ -75,6 +75,7 @@ def create_app(
     app.state.rgw = rgw_user.RgwResolver(client, lambda: app.state.db, settings.s3_tenant)
 
     app.state.endpoints = credentials.EndpointResolver(client, settings, clock)
+    app.state.s3 = s3client.S3Clients(client, settings, app.state.endpoints)
     # Always False here. Only mock/demo.py flips it on the finished app object;
     # no setting or environment variable can (tests/test_demo.py).
     app.state.demo = False
@@ -117,6 +118,7 @@ def create_app(
     api.include_router(rgw_user.router)
     api.include_router(credentials.router)
     api.include_router(profile.router)
+    api.include_router(buckets.router)
     api.include_router(admin.router)
     api.include_router(admin_settings.router)
     app.include_router(api)

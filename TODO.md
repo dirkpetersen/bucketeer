@@ -76,7 +76,7 @@ skips them too.
   `.venv/bin/python3 mock/demo.py`. Document it in CLAUDE.md and README.md.
 - [x] User profile: a profile page where users set a default budget number
   (index/worktag), stored in SQLite.
-- [ ] Bucket list with usage, quota and budget number. Create bucket: name
+- [x] Bucket list with usage, quota and budget number. Create bucket: name
   checked against the admin naming rules, a **required** budget number
   (index/worktag) prefilled from the user's profile default, versioning, and
   under Advanced object lock (with warning) and placement. Delete bucket:

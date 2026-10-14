@@ -62,6 +62,7 @@ window.addEventListener("bucketeer:unauthorized", () => {
 getDemo()
   .then(({ demo }) => {
     if (!demo) return;
+    document.body.classList.add("has-demo");
     document.body.append(
       h(
         "div",

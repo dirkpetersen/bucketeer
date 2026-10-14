@@ -4,11 +4,12 @@
 // login announces "bucketeer:unauthorized" so app.js can show the login view.
 
 export class ApiError extends Error {
-  constructor(status, message, { retryAfter = null } = {}) {
+  constructor(status, message, { retryAfter = null, body = null } = {}) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.retryAfter = retryAfter; // seconds, from Retry-After on 429
+    this.body = body; // the parsed JSON error body (extra fields such as requiresConfirmation)
   }
 }
 
@@ -38,7 +39,7 @@ export async function api(path, { method = "GET", json, signal, announce401 = tr
   }
   const detail = typeof body?.detail === "string" ? body.detail : `Request failed (${res.status}).`;
   const ra = Number.parseInt(res.headers.get("Retry-After") ?? "", 10);
-  throw new ApiError(res.status, detail, { retryAfter: Number.isFinite(ra) ? ra : null });
+  throw new ApiError(res.status, detail, { retryAfter: Number.isFinite(ra) ? ra : null, body });
 }
 
 // {demo: bool}; true only when mock/demo.py wrapped the app (never in production).
@@ -69,6 +70,17 @@ export const deleteKey = (accessKey) => api(`/credentials/keys/${enc(accessKey)}
 // Saving "" or null clears the default budget number; a 422 carries the message to show.
 export const getProfile = () => api("/profile");
 export const saveProfile = (defaultBudgetNumber) => api("/profile", { method: "PUT", json: { defaultBudgetNumber } });
+
+// The signed-in user's own buckets. list -> {buckets: [{name, tenant, createdAt, objects, bytes,
+// quota, versioning, budgetNumber, budgetMissing, tagPending}]}; options -> {naming, placements,
+// defaultPlacement, defaultBudgetNumber, budgetRequired, budgetExample}; create -> {name, ..., warning?}.
+// A delete of a non-empty bucket without confirmName fails with 409 and err.body.requiresConfirmation.
+export const listBuckets = () => api("/buckets");
+export const bucketOptions = () => api("/buckets/options");
+export const createBucket = (body) => api("/buckets", { method: "POST", json: body });
+export const reconcileBuckets = () => api("/buckets/reconcile", { method: "POST" });
+export const deleteBucket = (name, confirmName) =>
+  api(`/buckets/${encodeURIComponent(name)}`, { method: "DELETE", json: confirmName ? { confirmName } : {} });
 
 // Administrator endpoints (the server enforces the role on each of them).
 const enc = encodeURIComponent;
