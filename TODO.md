@@ -47,13 +47,13 @@ skips them too.
 - [x] Login throttle fix: a successful login resets the per-account counter but
   not its "already reported" flag in `bucketeer/auth.py`, so the next block on
   that account may not write a `login.throttled` audit entry. Reset both.
-- [ ] RGW user resolution: sAMAccountName → uid, honoring admin uid mappings.
+- [ ] (blocked: Q4) RGW user resolution: sAMAccountName → uid, honoring admin uid mappings.
   Auto-create on first login with the default quota.
-- [ ] Credentials API and screen: show access and secret keys (secret masked,
+- [ ] (blocked: Q4) Credentials API and screen: show access and secret keys (secret masked,
   reveal and copy) and the `~/.aws/config` + `~/.aws/credentials` snippets,
   with copy and download. Endpoint comes from `S3_ENDPOINT_URL` or the croit
   `.s3cfg`.
-- [ ] Key management: create an additional key, rotate (add new, then remove
+- [ ] (blocked: Q4) Key management: create an additional key, rotate (add new, then remove
   old), delete. Never use the whole-set PUT.
 - [ ] Visual design system: CSS tokens, Beaver Orange accent, light and dark,
   login and dashboard layouts, motion with reduced-motion support. Vanilla JS

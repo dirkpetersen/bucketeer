@@ -60,6 +60,35 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 **Answer:**
 
+### Q4: How are AD accounts mapped to RGW users, and created on first login?
+
+- **Blocks:** TODO "RGW user resolution", and the items that need a
+  resolved uid: "Credentials API and screen" and "Key management"
+- **Context:** CLAUDE.md says the RGW uid is the AD `sAMAccountName`, with
+  admin mappings for exceptions, and that the first login auto-creates the
+  RGW user with the default quota from the admin page. Three details are
+  open:
+  1. **Case.** AD names are case-insensitive (`JDoe` and `jdoe` are the same
+     account), but RGW uids are case-sensitive. Existing RGW users may use
+     either case.
+  2. **No default quota set yet.** What happens on first login before an
+     admin has set the default quota on the admin page?
+  3. **Email collision.** RGW rejects an email address that another RGW user
+     already has, for example a legacy account with the same address, so
+     auto-create would fail.
+- **Recommendations:**
+  1. New uids are the lowercased `sAMAccountName`. At login, if an existing
+     RGW user matches case-insensitively (checked against croit's uid list),
+     use that one and write an audit entry. Admin mappings always win.
+  2. Create the user **without** a quota, show a "default quota not set"
+     warning on the admin page, and audit the creation, so admins can tidy
+     up later. The alternative is to refuse auto-create until a default is
+     set (safer on cost, but it blocks users on day one).
+  3. Retry the creation without an email, and write an audit warning naming
+     the conflicting address, so the user still gets access.
+
+**Answer:**
+
 ## Resolved
 
 ### Q1: How does a user choose the object for a presigned share link?
