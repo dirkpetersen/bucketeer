@@ -140,6 +140,7 @@ def create_app(
     api.include_router(profile.router)
     api.include_router(buckets.router)
     api.include_router(bucket_keys.router)
+    api.include_router(bucket_keys.admin_router)
     api.include_router(lifecycle.router)
     api.include_router(share_links.router)
     api.include_router(admin.router)

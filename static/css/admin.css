@@ -20,7 +20,8 @@
 .admin-card { padding: 0; overflow: hidden; animation: rise var(--dur-slow) var(--ease-out) both; }
 .admin-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
   padding: var(--sp-2) var(--sp-4) 0; border-bottom: 1px solid var(--border); }
-.tabs { display: flex; gap: var(--sp-1); }
+.tabs { display: flex; gap: var(--sp-1); min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.tab { white-space: nowrap; flex: none; }
 .tab {
   position: relative; display: inline-flex; align-items: center; gap: var(--sp-2); min-height: 3rem;
   padding: 0 var(--sp-3); border: 0; background: none; cursor: pointer; border-radius: var(--r-sm) var(--r-sm) 0 0;
@@ -101,6 +102,8 @@
 /* Phones: rows become stacked cards, no horizontal page scroll */
 @media (max-width: 47.99em) {
   .admin-bar { padding-inline: var(--sp-3); }
+  .tab { padding-inline: var(--sp-2); gap: var(--sp-1); }
+  .tab > svg { display: none; }
   .admin-filters { padding-inline: var(--sp-3); }
   .tbl, .tbl tbody, .tbl tr, .tbl td { display: block; }
   .tbl thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

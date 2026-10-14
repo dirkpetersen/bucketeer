@@ -1,6 +1,6 @@
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
-import { adminBuckets, adminUsers, setBucketQuota, setUserQuota, suspendUser, unsuspendUser } from "../api.js";
+import { adminBucketKeys, adminBuckets, adminRevokeBucketKey, adminUsers, setBucketQuota, setUserQuota, suspendUser, unsuspendUser } from "../api.js";
 import { formatBytes, formatCount, quotaText } from "../format.js";
 import { toast } from "../components/toast.js";
 import { confirmDialog } from "../components/confirm-dialog.js";
@@ -63,15 +63,39 @@ function bucketColumns(act) {
   ];
 }
 
+const ACCESS = { read: "Read only", readwrite: "Read and write" };
+const KEY_STATE = { active: ["chip-ok", "Active"], suspended: ["chip-warn", "Suspended"], pending: ["chip-warn", "Needs clean-up"], failed: ["chip-warn", "Needs clean-up"], revoked: ["", "Revoked"] };
+const shortDate = (iso) => (iso ? iso.slice(0, 10) : "");
+
+function keyColumns(act) {
+  const stateOf = (r) => (r.state !== "revoked" && r.suspended ? "suspended" : r.state);
+  return [
+    { key: "bucket", label: "Bucket", sort: (r) => r.bucket, cell: (r) => h("div", { class: "who" },
+        h("b", { class: "mono", text: r.bucket }), h("span", { class: "sub", text: `key ${r.label}` })) },
+    { key: "owner", label: "Owner", sort: (r) => r.ownerAd, cell: (r) => h("code", { text: r.ownerAd }) },
+    { key: "access", label: "Access", sort: (r) => r.access, cell: (r) => badge(ACCESS[r.access] ?? r.access) },
+    { key: "state", label: "State", sort: (r) => stateOf(r), cell: (r) => {
+        const [cls, label] = KEY_STATE[stateOf(r)] ?? ["", r.state];
+        return h("div", { class: "chips" }, badge(label, cls),
+          r.statementPendingCleanup && badge("Policy entry left", "chip-warn"));
+      } },
+    { key: "created", label: "Created", sort: (r) => r.createdAt, cell: (r) => h("span", { text: shortDate(r.createdAt) }) },
+    { key: "actions", label: "Actions", noSort: true, cell: (r) => h("div", { class: "acts" },
+        r.state === "revoked"
+          ? (r.statementPendingCleanup ? act.button("refresh", "Retry clean-up", () => act.revokeKey(r), `Retry removing the policy entry of key ${r.label}`) : null)
+          : act.button("trash", "Revoke", () => act.revokeKey(r), `Revoke key ${r.label} of ${r.ownerAd}`, "danger")) },
+  ];
+}
+
 // --- the view -----------------------------------------------------------------
 
 export function renderAdmin() {
   const state = {
     tab: "users",
     q: "",
-    sort: { users: { key: "user", dir: 1 }, buckets: { key: "bucket", dir: 1 } },
-    only: { users: false, buckets: false }, // suspended only / missing budget only
-    data: { users: { status: "loading", rows: [] }, buckets: { status: "loading", rows: [] } },
+    sort: { users: { key: "user", dir: 1 }, buckets: { key: "bucket", dir: 1 }, keys: { key: "bucket", dir: 1 } },
+    only: { users: false, buckets: false, keys: false }, // suspended only / missing budget only / revoked too
+    data: { users: { status: "loading", rows: [] }, buckets: { status: "loading", rows: [] }, keys: { status: "loading", rows: [] } },
   };
   const busy = new Set();
 
@@ -99,6 +123,23 @@ export function renderAdmin() {
         render();
       }
     },
+    async revokeKey(row) {
+      const retry = row.state === "revoked";
+      const ok = await confirmDialog(retry
+        ? { title: "Retry the clean-up?", message: `The key ${row.label} is already revoked. This removes its leftover entry from the policy of ${row.bucket}.`, confirmLabel: "Retry" }
+        : { title: `Revoke key ${row.label}?`, message: `${row.ownerAd}'s tools that use this key for ${row.bucket} stop working right away, and the key cannot be restored. The owner's own S3 key is not affected.`, confirmLabel: "Revoke key", danger: true });
+      if (!ok || busy.has(`key${row.id}`)) return;
+      busy.add(`key${row.id}`);
+      try {
+        const res = await adminRevokeBucketKey(row.id);
+        toast.show(res.statementRemoved ? `Key ${row.label} revoked.` : `Key ${row.label} revoked. Its policy entry is harmless and stays until the owner's account works again.`);
+      } catch (err) {
+        toast.error(err.message);
+      } finally {
+        busy.delete(`key${row.id}`);
+        load("keys");
+      }
+    },
     async suspend(row, suspend) {
       const ok = await confirmDialog(suspend
         ? { title: `Suspend ${row.uid}?`, message: `${row.name || row.uid} loses S3 access right away, and so do all of their bucket keys. Nothing is deleted; you can unsuspend at any time.`, confirmLabel: "Suspend", danger: true }
@@ -119,14 +160,14 @@ export function renderAdmin() {
       }
     },
   };
-  const columns = { users: userColumns(act), buckets: bucketColumns(act) };
+  const columns = { users: userColumns(act), buckets: bucketColumns(act), keys: keyColumns(act) };
 
   // --- data ---
   async function load(tab) {
     state.data[tab] = { status: "loading", rows: state.data[tab].rows };
     render();
     try {
-      const res = await (tab === "users" ? adminUsers() : adminBuckets());
+      const res = await (tab === "users" ? adminUsers() : tab === "keys" ? adminBucketKeys() : adminBuckets());
       state.data[tab] = { status: "ready", rows: res[tab] };
     } catch (err) {
       if (err.status !== 401) state.data[tab] = { status: "error", rows: [], error: err.message };
@@ -148,8 +189,8 @@ export function renderAdmin() {
   const countEl = h("span", { class: "count", "aria-live": "polite" });
   const tableHost = h("div", { class: "table-host" });
   const settings = renderSettings();
-  const TAB_KEYS = ["users", "buckets", "settings"];
-  const tabs = [["users", "Users", "users"], ["buckets", "Buckets", "bucket"], ["settings", "Settings", "sliders"]].map(([key, label, ic]) =>
+  const TAB_KEYS = ["users", "buckets", "keys", "settings"];
+  const tabs = [["users", "Users", "users"], ["buckets", "Buckets", "bucket"], ["keys", "Bucket keys", "key"], ["settings", "Settings", "sliders"]].map(([key, label, ic]) =>
     h("button", { class: "tab", type: "button", role: "tab", id: `tab-${key}`, "aria-controls": "admin-panel", on: { click: () => switchTab(key) } },
       icon(ic), label, h("span", { class: "tab-count", id: `tc-${key}` })));
   const tablist = h("div", { class: "tabs", role: "tablist", "aria-label": "Administration" }, tabs);
@@ -179,7 +220,7 @@ export function renderAdmin() {
   function paintControls() {
     const tab = state.tab;
     if (tab === "settings") return;
-    search.placeholder = tab === "users" ? "Search users, names, e-mail" : "Search buckets, owners, budget numbers";
+    search.placeholder = tab === "users" ? "Search users, names, e-mail" : tab === "keys" ? "Search owners, buckets, labels" : "Search buckets, owners, budget numbers";
     sortSel.replaceChildren(...columns[tab].filter((c) => !c.noSort).map((c) =>
       h("option", { value: c.key, selected: c.key === state.sort[tab].key, text: `Sort: ${c.label}` })));
   }
@@ -190,7 +231,8 @@ export function renderAdmin() {
     const tab = state.tab;
     const cols = columns[tab];
     let rows = state.data[tab].rows;
-    if (state.only[tab]) rows = rows.filter((r) => (tab === "users" ? r.suspended : !r.budgetNumber));
+    if (tab === "keys") { if (!state.only.keys) rows = rows.filter((r) => r.state !== "revoked"); }
+    else if (state.only[tab]) rows = rows.filter((r) => (tab === "users" ? r.suspended : !r.budgetNumber));
     if (state.q) rows = rows.filter((r) => text(r).includes(state.q));
     const { key, dir } = state.sort[tab];
     const col = cols.find((c) => c.key === key) ?? cols[0];
@@ -202,7 +244,7 @@ export function renderAdmin() {
   }
 
   function paintStats() {
-    const { users, buckets } = state.data;
+    const { users, buckets, keys } = state.data;
     const stat = (label, value, warn) => h("div", { class: `stat ${warn ? "stat-warn" : ""}`.trim() },
       h("span", { class: "stat-v", text: value ?? "–" }), h("span", { class: "stat-l", text: label }));
     const u = users.status === "ready", b = buckets.status === "ready";
@@ -216,6 +258,8 @@ export function renderAdmin() {
       stat("Stored", b ? formatBytes(buckets.rows.reduce((s, r) => s + r.bytes, 0)) : null));
     document.getElementById("tc-users")?.replaceChildren(u ? formatCount(users.rows.length) : "");
     document.getElementById("tc-buckets")?.replaceChildren(b ? formatCount(buckets.rows.length) : "");
+    const liveKeys = keys.status === "ready" ? keys.rows.filter((r) => r.state !== "revoked").length : null;
+    document.getElementById("tc-keys")?.replaceChildren(liveKeys == null ? "" : formatCount(liveKeys));
   }
 
   function skeleton() {
@@ -247,7 +291,7 @@ export function renderAdmin() {
     const body = rows.map((r) => h("tr", { "data-suspended": String(!!r.suspended) },
       columns[tab].map((c) => h("td", { class: `${c.num ? "num" : ""} ${c.key === "actions" ? "td-acts" : ""}`.trim(), "data-label": c.key === "actions" ? null : c.label }, c.cell(r)))));
     return h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" },
-      h("caption", { class: "visually-hidden", text: tab === "users" ? "RGW users" : "Buckets" }),
+      h("caption", { class: "visually-hidden", text: tab === "users" ? "RGW users" : tab === "keys" ? "Bucket keys" : "Buckets" }),
       h("thead", {}, head), h("tbody", {}, body)));
   }
 
@@ -267,7 +311,7 @@ export function renderAdmin() {
     }
     const d = state.data[tab];
     exportEl.hidden = tab !== "buckets";
-    onlyBtn.textContent = tab === "users" ? "Suspended only" : "Missing budget number";
+    onlyBtn.textContent = tab === "users" ? "Suspended only" : tab === "keys" ? "Show revoked" : "Missing budget number";
     onlyBtn.setAttribute("aria-pressed", String(state.only[tab]));
     onlyBtn.classList.toggle("on", state.only[tab]);
     const s = state.sort[tab];
@@ -289,13 +333,14 @@ export function renderAdmin() {
       return;
     }
     const rows = visibleRows();
-    const noun = tab === "users" ? "user" : "bucket";
-    countEl.textContent = rows.length === d.rows.length ? `${formatCount(rows.length)} ${noun}${rows.length === 1 ? "" : "s"}` : `${formatCount(rows.length)} of ${formatCount(d.rows.length)}`;
+    const noun = tab === "users" ? "user" : tab === "keys" ? "key" : "bucket";
+    const total = tab === "keys" && !state.only.keys ? d.rows.filter((r) => r.state !== "revoked").length : d.rows.length;
+    countEl.textContent = rows.length === total ? `${formatCount(rows.length)} ${noun}${rows.length === 1 ? "" : "s"}` : `${formatCount(rows.length)} of ${formatCount(total)}`;
     if (!rows.length) {
-      const filtered = state.q || state.only[tab];
+      const filtered = state.q || (state.only[tab] && tab !== "keys");
       tableHost.replaceChildren(filtered
         ? emptyState("Nothing matches", "Try a different search or clear the filter.",
-          [h("button", { class: "btn", type: "button", on: { click: () => { state.q = ""; search.value = ""; state.only[tab] = false; render(); } } }, "Clear filters")])
+          [h("button", { class: "btn", type: "button", on: { click: () => { state.q = ""; search.value = ""; if (tab !== "keys") state.only[tab] = false; render(); } } }, "Clear filters")])
         : emptyState(`No ${noun}s yet`, `There are no ${noun}s on the cluster.`));
       return;
     }
@@ -306,6 +351,7 @@ export function renderAdmin() {
   settings.load();
   load("users");
   load("buckets");
+  load("keys");
 
   return h("main", { class: "main admin", id: "main" },
     h("div", { class: "hero" },

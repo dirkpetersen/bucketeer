@@ -101,6 +101,8 @@ export const deleteBucket = (name, confirmName) =>
 const enc = encodeURIComponent;
 export const adminUsers = () => api("/admin/users");
 export const adminBuckets = () => api("/admin/buckets");
+export const adminBucketKeys = (state = "all") => api(`/admin/bucket-keys?state=${enc(state)}`);
+export const adminRevokeBucketKey = (id) => api(`/admin/bucket-keys/${Number(id)}`, { method: "DELETE" });
 export const setUserQuota = (uid, quota) =>
   api(`/admin/users/${enc(uid)}/quota`, { method: "PUT", json: quota });
 export const setBucketQuota = (bucket, quota) =>

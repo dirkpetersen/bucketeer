@@ -34,6 +34,11 @@ as `failed` so a revoke can finish the cleanup. A crash can leave a live `pendin
 the same way; `cleanup_pending` (background task at startup) rolls such rows back.
 Audit: `bucket_key.create|create_failed|reveal|revoke|revoke_failed|cleanup`
 (never a secret).
+
+Admin (`admin_router`, `/api/admin/bucket-keys`, see the end of this module):
+`GET ?state=live|revoked|all&owner=&bucket=` lists keys of all owners (never a secret,
+admins cannot reveal either); `DELETE /{id}` revokes any key, audited
+`admin.bucket_key.revoke` with the admin as actor.
 """
 
 import asyncio
@@ -48,6 +53,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import s3docs
 from .admin import croit_http_error
+from .auth import SessionUser, require_admin
 from .credentials import _key_locks, generate_key_pair
 from .croit import CroitClient, CroitClientError, CroitError
 from .rgw_user import RgwAccount, require_active_rgw_user, same_uid, split_uid
@@ -569,3 +575,111 @@ async def _cleanup_pending(app, grace, delays) -> dict[str, int]:
         log.warning("bucket key clean-up gave up on %d pending row(s) until next start",
                     len(todo))
     return result
+
+
+# -- admin: list and revoke any bucket key ---------------------------------------------
+
+admin_router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
+Admin = Annotated[SessionUser, Depends(require_admin)]
+
+
+def admin_view(row: dict) -> dict[str, Any]:
+    """The admin list entry: public facts only (never a secret)."""
+    return {
+        "id": row["id"], "ownerAd": row["owner_ad_username"], "ownerUid": _owner_uid(row),
+        "bucket": _short(row["bucket_name"]), "bucketFull": row["bucket_name"],
+        "label": row["label"], "access": row["access"], "uid": row["rgw_uid"],
+        "accessKey": row["access_key"],
+        "state": "revoked" if row["revoked_at"] else row["state"],
+        "suspended": bool(row["suspended_at"]), "suspendedBy": row["suspended_by"],
+        "createdAt": row["created_at"], "revokedAt": row["revoked_at"],
+        "statementPendingCleanup": bool(row["statement_pending_cleanup"]),
+    }
+
+
+@admin_router.get("/bucket-keys")
+async def admin_list_keys(_a: Admin, request: Request, state: str = "live",
+                          owner: str | None = None, bucket: str | None = None):
+    if state not in ("live", "revoked", "all"):
+        raise HTTPException(422, "state must be live, revoked or all.")
+    db = request.app.state.db
+    rows = await db.run(db.bucket_keys.list, None, None, state != "live")
+    if state == "revoked":
+        rows = [r for r in rows if r["revoked_at"]]
+    if owner:
+        rows = [r for r in rows if r["owner_ad_username"].lower() == owner.lower()]
+    if bucket:
+        rows = [r for r in rows if bucket.lower() in (r["bucket_name"].lower(),
+                                                      _short(r["bucket_name"]).lower())]
+    return {"keys": [admin_view(r) for r in rows]}
+
+
+async def _owner_suspended(croit: CroitClient, owner_uid: str) -> bool:
+    try:
+        user = await croit.get_user(owner_uid)
+    except CroitClientError:
+        return False
+    return bool((user or {}).get("suspended"))
+
+
+@admin_router.delete("/bucket-keys/{key_id}")
+async def admin_revoke_key(key_id: int, admin: Admin, request: Request, response: Response):
+    """Revoke any key. The credential dies first (the key user is deleted in croit; RGW
+    refuses a deleted user), then the policy statement is removed with the OWNER's S3
+    client. If that cannot be done (owner suspended or without a key, bucket unreachable)
+    the harmless dangling statement is left and the row records `statement_pending_cleanup`;
+    calling this again on such a revoked row retries the removal. Idempotent."""
+    response.headers["Cache-Control"] = "no-store"
+    croit, db = request.app.state.croit, request.app.state.db
+    row = await db.run(db.bucket_keys.get, key_id)
+    if row is None:
+        raise HTTPException(404, "Bucket key not found.")
+    owner_uid = _owner_uid(row)
+    short = _short(row["bucket_name"])
+    sid = sid_for(key_id)
+    async with _key_locks(request)(owner_uid), _bucket_lock(request, row["bucket_name"]):
+        row = await db.run(db.bucket_keys.get, key_id)  # may have changed while waiting
+        was_revoked = row["revoked_at"] is not None
+        if was_revoked and not row["statement_pending_cleanup"]:
+            return {"id": key_id, "revoked": True, "statementRemoved": True}
+        if not was_revoked:
+            try:  # 1) credential dead
+                await _delete_key_user(croit, row["rgw_uid"])
+            except CroitClientError as e:
+                log.warning("admin revoke: user %s not deleted: %s", row["rgw_uid"],
+                            type(e).__name__)
+                suspended = False
+                try:  # at least stop the credential
+                    await croit.update_user(row["rgw_uid"], suspended=True)
+                    # "direct" overrides "owner": an owner unsuspend must not wake it
+                    await db.run(db.bucket_keys.set_suspended, key_id, True, "direct")
+                    suspended = True
+                except CroitClientError:
+                    pass
+                await _audit(request, admin.username, "admin.bucket_key.revoke_failed",
+                             str(key_id), uid=row["rgw_uid"], bucket=row["bucket_name"],
+                             owner=row["owner_ad_username"], suspended=suspended)
+                raise HTTPException(502, "The key user could not be deleted in the storage "
+                                         "system. The key was suspended if possible; try "
+                                         "again.") from None
+        # 2) statement, with the owner's client; skipped when it cannot work
+        removed, why = False, ""
+        if await _owner_suspended(croit, owner_uid):
+            why = "owner suspended"
+        else:
+            try:
+                removed = await _remove_statement(request, owner_uid, short, sid)
+            except Exception as e:
+                why = ("owner has no usable S3 client" if isinstance(e, HTTPException)
+                       else type(e).__name__)
+                log.warning("admin revoke: statement %s left: %s", sid, why)
+        # 3) record
+        if not was_revoked:
+            await db.run(db.bucket_keys.revoke, key_id)
+        await db.run(db.bucket_keys.set_statement_pending, key_id, not removed)
+        await _audit(request, admin.username, "admin.bucket_key.revoke", str(key_id),
+                     uid=row["rgw_uid"], bucket=row["bucket_name"],
+                     owner=row["owner_ad_username"], statement_removed=removed,
+                     **({"statement_left": why} if why else {}),
+                     retry=was_revoked, access_key=row["access_key"])
+    return {"id": key_id, "revoked": True, "statementRemoved": removed}

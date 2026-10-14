@@ -110,6 +110,11 @@ MIGRATIONS: list[str] = [
         CHECK (state IN ('pending', 'active', 'failed'));
     ALTER TABLE bucket_keys ADD COLUMN access_key TEXT;
     """,
+    # v5: 1 = an admin revoked the key while the owner's S3 client could not edit the
+    # bucket policy, so the (harmless, principal gone) statement is still in the policy.
+    """
+    ALTER TABLE bucket_keys ADD COLUMN statement_pending_cleanup INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 _MISSING: Any = object()
@@ -470,6 +475,13 @@ class BucketKeys(_Repo):
                 (now(), key_id),
             )
             return cur.rowcount > 0
+
+    def set_statement_pending(self, key_id: int, pending: bool) -> bool:
+        with self.db.tx() as c:
+            return c.execute(
+                "UPDATE bucket_keys SET statement_pending_cleanup = ? WHERE id = ?",
+                (1 if pending else 0, key_id),
+            ).rowcount > 0
 
     def set_suspended(self, key_id: int, suspended: bool, by: str = "direct") -> bool:
         """`by` is 'owner', 'direct' or 'offboarding'; unsuspending clears both columns."""

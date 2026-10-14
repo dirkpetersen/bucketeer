@@ -46,6 +46,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "POST /api/buckets/{name}/keys": ("bucket_key.create",),
     "POST /api/bucket-keys/{key_id}/reveal": ("bucket_key.reveal",),
     "DELETE /api/bucket-keys/{key_id}": ("bucket_key.revoke",),
+    "DELETE /api/admin/bucket-keys/{key_id}": ("admin.bucket_key.revoke",),
     "PUT /api/admin/users/{uid}/quota": ("admin.user.quota",),
     "PUT /api/admin/buckets/{bucket}/quota": ("admin.bucket.quota",),
     "POST /api/admin/users/{uid}/suspend": ("admin.user.suspend",),
@@ -224,6 +225,10 @@ def run(tmp_path_factory, moto_server):
     r.step("event", lambda: env.session("dave").get("/api/credentials"))
 
     # admin
+    abk = ok(a.post("/api/buckets/alice-data/keys", json={"label": "adm", "access": "read"},
+                    headers=H)).json()
+    r.step("DELETE /api/admin/bucket-keys/{key_id}", lambda: b.delete(
+        f"/api/admin/bucket-keys/{abk['id']}", headers=H))
     quota = {"enabled": True, "maxSize": 5 * 2**30, "maxObjects": None}
     r.step("PUT /api/admin/users/{uid}/quota", lambda: b.put(
         "/api/admin/users/alice/quota", json=quota, headers=H))

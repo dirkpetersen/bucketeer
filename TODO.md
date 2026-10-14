@@ -114,7 +114,7 @@ skips them too.
   setting defaults to 1 TiB instead of "Not set" (Q4).
 - [x] Chargeback CSV export on the admin page: bucket, owner, budget number,
   usage (Q2).
-- [ ] Admin: list all bucket keys (owner, bucket, access, status) and revoke
+- [x] Admin: list all bucket keys (owner, bucket, access, status) and revoke
   any of them, audited as the admin.
 - [ ] Audit log viewer with filters.
 - [ ] Offboarding job (daily, in-process): suspend RGW users and their bucket
