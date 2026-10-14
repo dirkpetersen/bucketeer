@@ -173,6 +173,11 @@ class LoginThrottle:
             self._reported.discard(key)
         return dq
 
+    def _clear(self, key: tuple[str, str]) -> None:
+        """Forget a key's hits and its 'already reported' flag together."""
+        self._hits.pop(key, None)
+        self._reported.discard(key)
+
     def acquire(self, login: str, ip: str) -> tuple[int, bool] | None:
         """None if the attempt may proceed (and is counted). Otherwise
         (retry_after_seconds, first_time_reported)."""
@@ -213,8 +218,8 @@ class LoginThrottle:
 
     def success(self, login: str, ip: str, username: str) -> None:
         """Right password: forget the failures, refund the IP's attempt."""
-        self._hits.pop(("login", login), None)
-        self._hits.pop(("user", username), None)
+        self._clear(("login", login))
+        self._clear(("user", username))
         self._refund(("ip", ip))
 
     def refund(self, login: str, ip: str, username: str | None = None) -> None:
@@ -229,7 +234,7 @@ class LoginThrottle:
         if dq:
             dq.pop()
             if not dq:
-                del self._hits[key]
+                self._clear(key)
 
 
 # -- dependencies -----------------------------------------------------------------

@@ -741,3 +741,22 @@ def test_connection_error_still_fails_over_to_next_server(tmp_path):
     assert e.login("alice").status_code == 200
     urls = [b[1] for b in e.fake.binds()]
     assert urls[:3] == ["ldaps://dc1:636", "ldaps://dc2:636", "ldaps://dc3:636"]
+
+
+def test_throttled_audit_written_again_after_success_resets_the_counter(env):
+    def throttled():
+        return [r for r in env.audit() if r["action"] == "login.throttled"]
+
+    for _ in range(3):
+        env.login("bob", "bad")
+    env.now[0] += 500
+    for _ in range(2):
+        env.login("bob", "bad")
+    assert env.login("bob").status_code == 429  # block 1
+    assert len(throttled()) == 1
+    env.now[0] += 401  # the first three failures age out; two remain
+    assert env.login("bob").status_code == 200  # success clears the counters
+    for _ in range(5):
+        assert env.login("bob", "bad").status_code == 401
+    assert env.login("bob").status_code == 429  # block 2
+    assert len(throttled()) == 2
