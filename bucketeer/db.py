@@ -101,6 +101,15 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE buckets ADD COLUMN tag_synced INTEGER NOT NULL DEFAULT 1;
     """,
+    # v4: bucket keys. `state` tracks creation ('pending' while the multi-step create
+    # runs, 'failed' when its rollback could not finish, so the key user may still
+    # exist and a revoke retries the cleanup); `access_key` is the key's public half
+    # (never a secret), so listing needs no croit call.
+    """
+    ALTER TABLE bucket_keys ADD COLUMN state TEXT NOT NULL DEFAULT 'active'
+        CHECK (state IN ('pending', 'active', 'failed'));
+    ALTER TABLE bucket_keys ADD COLUMN access_key TEXT;
+    """,
 ]
 
 _MISSING: Any = object()
@@ -392,14 +401,35 @@ class BucketKeys(_Repo):
         bucket_name: str,
         access: str,
         label: str = "",
+        state: str = "active",
+        access_key: str | None = None,
     ) -> dict[str, Any]:
         with self.db.tx() as c:
             cur = c.execute(
                 "INSERT INTO bucket_keys (rgw_uid, owner_ad_username, bucket_name, "
-                "access, label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (rgw_uid, owner_ad_username, bucket_name, access, label, now()),
+                "access, label, created_at, state, access_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (rgw_uid, owner_ad_username, bucket_name, access, label, now(), state,
+                 access_key),
             )
             return self.get(cur.lastrowid)  # type: ignore[return-value]
+
+    def set_state(self, key_id: int, state: str, access_key: str | None = None) -> bool:
+        """pending -> active / failed (creation progress); `access_key` is kept when None."""
+        with self.db.tx() as c:
+            return c.execute(
+                "UPDATE bucket_keys SET state = ?, access_key = COALESCE(?, access_key) "
+                "WHERE id = ?",
+                (state, access_key, key_id),
+            ).rowcount > 0
+
+    def count_live(self, owner: str, bucket_name: str | None = None) -> int:
+        """Live (not revoked) keys of an owner, pending and failed ones included."""
+        sql = ("SELECT COUNT(*) AS n FROM bucket_keys "
+               "WHERE owner_ad_username = ? AND revoked_at IS NULL")
+        params: tuple = (owner,)
+        if bucket_name is not None:
+            sql, params = sql + " AND bucket_name = ?", (owner, bucket_name)
+        return int(self.db.query_one(sql, params)["n"])
 
     def get(self, key_id: int) -> dict[str, Any] | None:
         return self.db.query_one("SELECT * FROM bucket_keys WHERE id = ?", (key_id,))

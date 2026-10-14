@@ -66,3 +66,36 @@
 .bk-vsw[disabled] { opacity: 0.55; cursor: not-allowed; }
 .bk-row .bk-vsw { min-height: 2.25rem; }
 .bk-row .bk-vsw .switch-label { display: inline; }
+
+/* Bucket keys dialog (builds on .cd and .qd) */
+.bkd { width: min(44rem, calc(100vw - 2 * var(--gutter))); }
+.bkd-body { display: grid; gap: var(--sp-4); padding: var(--sp-5); max-height: calc(100dvh - 2 * var(--sp-5)); overflow-y: auto; }
+.bkd-list { list-style: none; margin: 0; padding: 0; display: grid; border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.bkd-key { background: var(--surface); padding: var(--sp-3) var(--sp-4); display: grid; gap: var(--sp-3); }
+.bkd-key + .bkd-key { border-top: 1px solid var(--border); }
+.bkd-key[data-open="true"] { background: var(--accent-soft); }
+.bkd-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2) var(--sp-3); }
+.bkd-id { display: grid; gap: var(--sp-1); min-width: 0; }
+.bkd-label { font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: 600; overflow-wrap: anywhere; }
+.bkd-sub { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); font-size: var(--fs-xs); color: var(--text-muted); }
+.bkd-sub .chip { text-transform: none; letter-spacing: 0; }
+.bkd .btn-sm { min-height: 2.25rem; }
+.bkd-detail { display: grid; gap: var(--sp-4); padding-top: var(--sp-2); min-width: 0; }
+.bkd-empty { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-4); background: var(--surface); color: var(--text-muted); font-size: var(--fs-sm); }
+.bkd-empty svg { flex: none; width: 1.25rem; height: 1.25rem; color: var(--accent-text); }
+.bkd-form { display: grid; gap: var(--sp-3); padding: var(--sp-4); border: 1px dashed var(--border-strong); border-radius: var(--r-md); }
+.bkd-form h3 { font-size: var(--fs-md); font-weight: 650; }
+.bkd-access { display: grid; gap: var(--sp-2); border: 0; margin: 0; padding: 0; min-width: 0; }
+.bkd-opt { align-items: flex-start; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.bkd-opt input { margin-top: 0.15rem; }
+.bkd-opt > span { display: grid; gap: 2px; }
+.bkd-opt small { color: var(--text-muted); font-size: var(--fs-xs); font-weight: 450; }
+.bkd-opt:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+@media (max-width: 36em) {
+  .bkd-body { padding: var(--sp-4); }
+  .bkd .bk-del-l { display: none; }
+  .bkd .bk-acts .btn-sm { padding-inline: var(--sp-3); }
+}
+/* Let long code lines scroll inside their panel instead of widening the dialog (phone). */
+.bkd-body, .bkd-key, .bkd-detail, .bkd-form, .bkd-list { grid-template-columns: minmax(0, 1fr); }
+.bkd-body > *, .bkd-detail > *, .bkd-key > * { min-width: 0; }

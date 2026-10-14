@@ -49,7 +49,7 @@ CACHE_TTL = 300.0  # seconds a resolution is remembered (never "unavailable")
 DEFAULT_QUOTA = {"enabled": True, "maxSize": 2**40, "maxObjects": None}  # 1 TiB, Q4
 WARM_TIMEOUT = 30.0  # background resolve right after login
 
-_UID = re.compile(r"^[a-z0-9][a-z0-9._@+-]{0,63}\Z")  # same alphabet as validate_rgw_uid
+_UID = re.compile(r"^[a-z0-9][a-z0-9._@-]{0,63}\Z")  # same alphabet as validate_rgw_uid
 
 READY, SUSPENDED = "ready", "suspended"
 CREATION_FAILED, UNAVAILABLE = "creation_failed", "unavailable"
@@ -61,7 +61,7 @@ MESSAGES = {
     "uid_taken": "Your S3 account couldn't be created, contact your administrator.",
     "mapping_target_missing": "Your S3 account couldn't be created, contact your administrator.",
 }
-UNCACHED_REASONS = {"mapping_target_missing"}  # an admin fixes it in croit; re-check at once
+UNCACHED_REASONS = {"mapping_target_missing", "uid_taken"}  # fixed elsewhere; re-check at once
 MSG_UNAVAILABLE = "The storage service is temporarily unavailable. Try again shortly."
 
 
@@ -308,6 +308,13 @@ class RgwResolver:
         elif await self._quota_pending(uid):
             await self._apply_default_quota(username, uid, user_created=False)
             user = await self._get(uid) or user
+        # A bucket key may have claimed this uid while we talked to croit: never hand
+        # its RGW user (and so its secret) to a human. Mapping targets are claimed on purpose.
+        if source != "mapping" and await db.run(uid_claimed, db, uid):
+            await self._audit(username, "rgw.user.uid_taken", uid,
+                              {"reason": "claimed during resolution"})
+            return RgwAccount(username, None, CREATION_FAILED, display_name,
+                              reason="uid_taken")
         return RgwAccount(
             username, uid, SUSPENDED if user.get("suspended") else READY,
             display_name or str(user.get("name") or ""),

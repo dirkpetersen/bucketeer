@@ -175,9 +175,9 @@ def test_share_statement_exact():
 
 
 def test_readwrite_and_tenant_and_key():
-    s = d.bucket_key_statement("data", "alice.backup-job", "acme", "readwrite", 12)
+    s = d.bucket_key_statement("data", "alice+backup-job", "acme", "readwrite", 12)
     assert s["Sid"] == "bucketeer-key-12"
-    assert s["Principal"] == {"AWS": "arn:aws:iam::acme:user/alice.backup-job"}
+    assert s["Principal"] == {"AWS": "arn:aws:iam::acme:user/alice+backup-job"}
     assert s["Action"] == [*d.READ_ACTIONS, *d.WRITE_ACTIONS]
     assert d.share_statement("b", "u", "", "read")["Principal"]["AWS"] == "arn:aws:iam:::user/u"
 
@@ -212,7 +212,7 @@ def test_bucket_key_validation(uid, tenant):
 def test_bucket_key_bad_key_id_and_bucket():
     for kid in ("a b", "", "*", 'x"'):
         with pytest.raises(d.S3DocError):
-            d.bucket_key_statement("b", "k", None, "read", kid)
+            d.bucket_key_statement("b", "a+k", None, "read", kid)
     with pytest.raises(d.S3DocError):
         d.share_statement("b b", "k", None, "read")
 
@@ -235,7 +235,7 @@ def test_share_sid_is_unambiguous():
 
 def test_builders_pass_upsert_guard():
     doc = d.upsert_statements(None, [d.share_statement("b", "alice", None, "read"),
-                                     d.bucket_key_statement("b", "k", None, "read", "7")])
+                                     d.bucket_key_statement("b", "a+k", None, "read", "7")])
     assert [s["Sid"] for s in doc["Statement"]] == ["bucketeer-share-u-alice", "bucketeer-key-7"]
 
 

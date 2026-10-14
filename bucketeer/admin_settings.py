@@ -231,6 +231,13 @@ async def put_mapping(ad_username: str, body: Body_, admin: Admin, croit: Croit,
         uid = validate_rgw_uid(body.get("rgwUid"))
     except SettingsError as e:
         raise _bad(e) from e
+    from .bucket_keys import KEY_BARE
+    from .rgw_user import same_uid, split_uid
+    if KEY_BARE.match(split_uid(uid)[1].lower()) or any(
+            same_uid(k["rgw_uid"], uid)
+            for k in await db.run(db.bucket_keys.list, include_revoked=True)):
+        raise HTTPException(422, f"{uid} is reserved for a bucket key and cannot be a "
+                                 "mapping target.")
     existing = await db.run(db.uid_mappings.list)
     try:
         check_mapping_unique(ad, uid, existing)

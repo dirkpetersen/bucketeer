@@ -227,6 +227,16 @@ def test_mapping_crud_and_audit(env):
     assert env.transport.mutations() == []
 
 
+def test_mapping_to_a_bucket_key_uid_is_refused(env):
+    assert put(env, "/uid-mappings/dave", {"rgwUid": "john+backup"}).status_code == 422
+    assert put(env, "/uid-mappings/dave", {"rgwUid": "acme$john+x"}).status_code == 422
+    env.db.bucket_keys.create("legacy.key", "alice", "alice-data", "read")
+    env.db.bucket_keys.revoke(1)  # revoked rows stay reserved
+    r = put(env, "/uid-mappings/dave", {"rgwUid": "legacy.key"})
+    assert r.status_code == 422 and "bucket key" in r.json()["detail"]
+    assert env.db.uid_mappings.list() == []
+
+
 def test_mapping_warns_when_rgw_user_missing(env):
     r = put(env, "/uid-mappings/dave", {"rgwUid": "nobody-here"})
     assert r.status_code == 200  # a warning, not an error

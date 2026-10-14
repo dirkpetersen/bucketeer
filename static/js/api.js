@@ -109,3 +109,12 @@ export const saveEndpoint = (name, body) =>
   api(`/admin/settings/notification-endpoints/${enc(name)}`, { method: "PUT", json: body });
 export const deleteEndpoint = (name) =>
   api(`/admin/settings/notification-endpoints/${enc(name)}`, { method: "DELETE" });
+
+// Bucket keys: S3 keys that work for one bucket only (own buckets; the server checks).
+// list -> {keys: [{id, label, access: read|readwrite, uid, accessKey, bucket, createdAt, suspended,
+// status: active|suspended|pending|failed}]}; reveal -> {accessKey, secretKey} (audited).
+export const listBucketKeys = (bucket) => api(`/buckets/${encodeURIComponent(bucket)}/keys`);
+export const createBucketKey = (bucket, label, access) =>
+  api(`/buckets/${encodeURIComponent(bucket)}/keys`, { method: "POST", json: { label, access } });
+export const revealBucketKey = (id) => api(`/bucket-keys/${Number(id)}/reveal`, { method: "POST" });
+export const revokeBucketKey = (id) => api(`/bucket-keys/${Number(id)}`, { method: "DELETE" });

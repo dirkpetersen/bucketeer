@@ -7,7 +7,17 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import admin, admin_settings, auth, buckets, credentials, profile, rgw_user, s3client
+from . import (
+    admin,
+    admin_settings,
+    auth,
+    bucket_keys,
+    buckets,
+    credentials,
+    profile,
+    rgw_user,
+    s3client,
+)
 from .config import Settings
 from .croit import CroitClient
 from .db import DB_FILENAME, Database
@@ -119,6 +129,7 @@ def create_app(
     api.include_router(credentials.router)
     api.include_router(profile.router)
     api.include_router(buckets.router)
+    api.include_router(bucket_keys.router)
     api.include_router(admin.router)
     api.include_router(admin_settings.router)
     app.include_router(api)

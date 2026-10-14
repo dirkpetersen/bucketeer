@@ -8,7 +8,8 @@ or capitals never matches anything, so a user cannot address another tenant's bu
 
 - `GET /api/buckets` -> `{buckets: [{name, tenant, createdAt|null, objects, bytes,
   quota: {enabled, maxSize, maxObjects}, versioning: off|enabled|suspended|null,
-  budgetNumber|null, budgetMissing, tagPending}]}`. Only buckets croit lists for the
+  budgetNumber|null, budgetMissing, tagPending, keyCount}]}` (`keyCount`: live bucket keys).
+  Only buckets croit lists for the
   user's uid. Read-only; it never changes state (see `reconcile`).
 - `GET /api/buckets/options` -> `{naming: {prefix, hasPattern, hint}, placements: [...]
   (empty unless the user may choose), defaultPlacement, defaultBudgetNumber,
@@ -37,6 +38,8 @@ or capitals never matches anything, so a user cannot address another tenant's bu
   `changed: false`, no croit write. Suspending an object-lock bucket -> 409.
   The list also carries `objectLock: true|false|null` for versioned buckets (read with the
   user's own key; null = unknown).
+A successful delete also revokes the bucket's bucket keys (`bucket_keys.py`): the answer
+may carry `keysRevoked: n` and, if a key user could not be deleted, a `warning`.
 Audited: `bucket.create`, `bucket.delete`, `bucket.tag_sync`, `bucket.versioning`
 (before/after).
 """
@@ -223,6 +226,9 @@ async def list_buckets(request: Request, acct: Account):
     croit, db = request.app.state.croit, request.app.state.db
     rows = await _own_buckets(croit, acct.uid)
     meta = {m["name"]: m for m in await db.run(db.buckets.list, acct.uid)}
+    key_counts: dict[str, int] = {}
+    for k in await db.run(db.bucket_keys.list, acct.username):
+        key_counts[k["bucket_name"]] = key_counts.get(k["bucket_name"], 0) + 1
     sem = asyncio.Semaphore(8)
 
     async def versioning(b: dict) -> str | None:
@@ -263,6 +269,7 @@ async def list_buckets(request: Request, acct: Account):
             "objectLock": locks[i] if i < len(locks) else None,
             "budgetNumber": budget,
             "budgetMissing": budget is None,
+            "keyCount": key_counts.get(full, 0),
             "tagPending": bool(m and budget is not None and not m.get("tag_synced", 1)),
         })
     return {"buckets": out}
@@ -527,4 +534,13 @@ async def delete_bucket(name: str, request: Request, acct: Account, user: User,
     await db.run(db.buckets.delete, full)
     await _audit(request, user.username, "bucket.delete", full, uid=acct.uid,
                  objects=objects, bytes=size, dataDeleted=confirmed and objects > 0)
-    return {"name": short}
+    # The bucket's scoped keys have nothing left to reach: delete their RGW users.
+    from .bucket_keys import revoke_for_deleted_bucket
+    keys = await revoke_for_deleted_bucket(request, acct, full)
+    out: dict[str, Any] = {"name": short}
+    if keys["revoked"]:
+        out["keysRevoked"] = keys["revoked"]
+    if keys["failed"]:
+        out["warning"] = ("The bucket was deleted, but some of its keys could not be removed "
+                          "yet. Ask an administrator to check them.")
+    return out

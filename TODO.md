@@ -86,9 +86,11 @@ skips them too.
   that only touches `bucketeer-*` Sids/IDs. Unit-test heavily.
 - [ ] (blocked: Q8) Sharing: share a bucket with an AD user (read-only or read-write). Group
   share expands to member uids. List and revoke shares.
-- [ ] Bucket keys: create a scoped RGW user (zero quota) plus a policy
+- [x] Bucket keys: create a scoped RGW user (zero quota) plus a policy
   statement, and record ownership in SQLite. List, revoke, and show snippets
   for each key. Verify the zero-quota assumption on the real cluster.
+- [ ] Bucket keys cleanup: at startup, finish or roll back bucket-key rows
+  left `pending` by a crash (the same rollback as a failed create), audited.
 - [ ] Simple lifecycle rules: expire after N days, expire noncurrent versions,
   abort incomplete multipart uploads.
 - [ ] Presigned share links, 7 days at most. Choose the object with a key field
@@ -107,6 +109,8 @@ skips them too.
   setting defaults to 1 TiB instead of "Not set" (Q4).
 - [ ] Chargeback CSV export on the admin page: bucket, owner, budget number,
   usage (Q2).
+- [ ] Admin: list all bucket keys (owner, bucket, access, status) and revoke
+  any of them, audited as the admin.
 - [ ] Audit log viewer with filters.
 - [ ] Offboarding job (daily, in-process): suspend RGW users and their bucket
   keys when the AD account is disabled or removed from the group. Never delete

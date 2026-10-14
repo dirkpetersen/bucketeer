@@ -5,6 +5,7 @@ import { formatBytes, formatCount } from "../format.js";
 import { toast } from "../components/toast.js";
 import { confirmDialog, nameSpan } from "../components/confirm-dialog.js";
 import { createBucketDialog } from "../components/create-bucket-dialog.js";
+import { bucketKeysDialog } from "../components/bucket-keys-dialog.js";
 
 // The Buckets card on the home page: the user's own buckets with usage, quota and
 // budget number; create and delete. `isAdvanced()` tells whether the global
@@ -59,7 +60,7 @@ function usageBlock(b) {
   return out;
 }
 
-function row(b, onDelete, onToggle, busy) {
+function row(b, onDelete, onToggle, onKeys, busy) {
   const created = b.createdAt ? new Date(b.createdAt) : null;
   const meta = h("div", { class: "bk-meta" });
   if (created && !Number.isNaN(created.getTime())) {
@@ -74,13 +75,18 @@ function row(b, onDelete, onToggle, busy) {
     class: "btn btn-sm btn-quiet-danger", type: "button", disabled: busy, "aria-label": `Delete bucket ${b.name}`,
     on: { click: () => onDelete(b) },
   }, icon("trash"), h("span", { class: "bk-del-l", text: "Delete" }));
+  const keysBtn = h("button", {
+    class: "btn btn-sm", type: "button", disabled: busy, "aria-label": `Keys for bucket ${b.name}`,
+    title: "Keys that work for this bucket only",
+    on: { click: () => onKeys(b) },
+  }, icon("key"), h("span", { class: "bk-del-l", text: b.keyCount ? `Keys (${b.keyCount})` : "Keys" }));
   const vsw = versionSwitch(b, onToggle);
   budget.classList.add("bk-budget-slot");
   return h("li", { class: "bk-row", "data-busy": String(!!busy) },
     h("span", { class: "bk-ic", "aria-hidden": "true" }, icon("bucket")),
     h("div", { class: "bk-main" }, h("b", { class: "bk-name", text: b.name }), meta),
     usageBlock(b),
-    h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, vsw, del)));
+    h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, vsw, keysBtn, del)));
 }
 
 export function bucketsCard({ isAdvanced = () => false } = {}) {
@@ -107,7 +113,7 @@ export function bucketsCard({ isAdvanced = () => false } = {}) {
         h("div", { class: "empty-acts" }, h("button", { class: "btn btn-primary", type: "button", on: { click: create } }, icon("plus"), "Create your first bucket"))));
       return;
     }
-    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
+    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
   }
 
   function failed(err) {
@@ -160,8 +166,9 @@ export function bucketsCard({ isAdvanced = () => false } = {}) {
     deleting.add(b.name);
     paint();
     try {
-      await deleteBucket(b.name, confirmed || nonEmpty ? b.name : undefined);
-      toast.show(`Bucket ${b.name} deleted.`);
+      const res = await deleteBucket(b.name, confirmed || nonEmpty ? b.name : undefined);
+      if (res?.warning) toast.show(res.warning, { timeout: 9000 });
+      else toast.show(`Bucket ${b.name} deleted.`);
     } catch (err) {
       deleting.delete(b.name);
       if (err.status === 409 && err.body?.requiresConfirmation) {
@@ -178,6 +185,15 @@ export function bucketsCard({ isAdvanced = () => false } = {}) {
     }
     deleting.delete(b.name);
     await load({ quiet: true });
+  }
+
+  async function manageKeys(b) {
+    const res = await bucketKeysDialog({ bucket: b.name });
+    if (res.error) {
+      if (res.error.status !== 401) toast.error(res.error.message);
+      return;
+    }
+    if (res.changed) load({ quiet: true });
   }
 
   async function toggleVersioning(b) {

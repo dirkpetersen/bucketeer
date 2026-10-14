@@ -291,7 +291,12 @@ async def _set_suspended(
     for k in keys:
         try:
             if k["rgw_uid"].lower() != uid.lower():
-                await croit.update_user(k["rgw_uid"], suspended=suspend)
+                try:
+                    await croit.update_user(k["rgw_uid"], suspended=suspend)
+                except CroitError as e:
+                    # A pending/failed row whose user is already gone has nothing to suspend.
+                    if not (e.status == 404 and k.get("state") in ("pending", "failed")):
+                        raise
             await db.run(db.bucket_keys.set_suspended, k["id"], suspend, by)
             done.append(k["rgw_uid"])
         except CroitClientError as e:

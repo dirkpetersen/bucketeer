@@ -167,7 +167,7 @@ def test_tenant_case_match_stays_within_the_tenant(tenant_env):
 
 
 def test_invalid_sam_account_name_is_rejected_without_calling_croit(env):
-    for bad in ("a&b", "john smith", "x$", "-lead", "a" * 65, "täst", "a/b"):
+    for bad in ("a&b", "john smith", "x$", "-lead", "a" * 65, "täst", "a/b", "john+backup"):
         a = env.resolve(bad)
         assert (a.status, a.reason, a.uid) == ("creation_failed", "invalid_username", None), bad
     assert env.transport.mutations() == [] and env.posts() == []

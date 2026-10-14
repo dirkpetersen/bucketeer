@@ -66,6 +66,9 @@ WRITE_ACTIONS = (
 
 # Characters we allow in the part after `bucketeer-` for Sids / IDs we build.
 _SAFE_SUFFIX = re.compile(r"^[A-Za-z0-9._-]+$")
+# Bucket-key users are `<owner>+<label>`: `+` (valid in IAM user names, absent from AD
+# names) is allowed in a principal ARN for them only, never in a Sid or a human uid.
+_SAFE_KEY_UID = re.compile(r"^[A-Za-z0-9._-]+\+[A-Za-z0-9-]+$")
 
 
 class S3DocError(ValueError):
@@ -209,16 +212,18 @@ _TENANT = re.compile(r"^[A-Za-z0-9_]*$")
 _BUCKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-def _principal_arn(tenant: str | None, uid: str) -> str:
+def _principal_arn(tenant: str | None, uid: str, key_user: bool = False) -> str:
     tenant = tenant or ""
     if not isinstance(tenant, str) or not _TENANT.match(tenant):
         raise S3DocError(f"invalid tenant {tenant!r}")
-    if not isinstance(uid, str) or not _SAFE_SUFFIX.match(uid):
+    ok = _SAFE_KEY_UID if key_user else _SAFE_SUFFIX
+    if not isinstance(uid, str) or not ok.match(uid):
         raise S3DocError(f"invalid uid {uid!r}")
     return f"arn:aws:iam::{tenant}:user/{uid}"
 
 
-def _grant(sid: str, bucket: str, uid: str, tenant: str | None, access: str) -> dict:
+def _grant(sid: str, bucket: str, uid: str, tenant: str | None, access: str,
+           key_user: bool = False) -> dict:
     if access not in ("read", "readwrite"):
         raise S3DocError(f"access must be 'read' or 'readwrite', not {access!r}")
     if not isinstance(bucket, str) or not _BUCKET.match(bucket):
@@ -227,7 +232,7 @@ def _grant(sid: str, bucket: str, uid: str, tenant: str | None, access: str) -> 
     return {
         "Sid": sid,
         "Effect": "Allow",
-        "Principal": {"AWS": _principal_arn(tenant, uid)},
+        "Principal": {"AWS": _principal_arn(tenant, uid, key_user)},
         "Action": actions,
         "Resource": [f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/*"],
     }
@@ -262,7 +267,7 @@ def share_statement(bucket: str, principal_uid: str, tenant: str | None, access:
 def bucket_key_statement(bucket: str, key_uid: str, tenant: str | None, access: str,
                          key_id: str | int) -> dict:
     sid = PREFIX + "key-" + _suffix(key_id, "key id")
-    return _grant(sid, bucket, key_uid, tenant, access)
+    return _grant(sid, bucket, key_uid, tenant, access, key_user=True)
 
 
 # ------------------------------------------------------------------- lifecycle
