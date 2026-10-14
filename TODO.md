@@ -84,7 +84,7 @@ skips them too.
 - [x] Versioning toggle (enable/suspend).
 - [x] Shared-document helpers for bucket policy and lifecycle: read-modify-write
   that only touches `bucketeer-*` Sids/IDs. Unit-test heavily.
-- [ ] Sharing: share a bucket with an AD user (read-only or read-write). Group
+- [ ] (blocked: Q8) Sharing: share a bucket with an AD user (read-only or read-write). Group
   share expands to member uids. List and revoke shares.
 - [ ] Bucket keys: create a scoped RGW user (zero quota) plus a policy
   statement, and record ownership in SQLite. List, revoke, and show snippets

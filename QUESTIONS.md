@@ -29,6 +29,43 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 **Answer:**
 
+### Q8: Sharing a bucket: who can receive a share, and how?
+
+- **Blocks:** TODO "Sharing"
+- **Context:** sharing adds a bucket-policy statement that grants another
+  person's S3 user read-only or read-write access. To do that, Bucketeer has
+  to find the person in AD and know their S3 user.
+  1. **Recipient has no S3 account yet:** they have never logged in to
+     Bucketeer, so they have no RGW user to name in the policy.
+  2. **Recipient outside the required AD group:** can you share with someone
+     who isn't allowed to log in to Bucketeer?
+  3. **Group shares:** CLAUDE.md says a group is expanded to its members'
+     S3 users when you share, so later joiners don't get access
+     automatically. Which groups can be picked, and is there a size limit?
+- **Recommendations:**
+  1. Create their S3 account on the spot, with the default quota, the same
+     as their first login would. The share then works immediately and they
+     just need to log in to get keys.
+  2. No. Only members of `LDAP_REQUIRED_GROUP_DN` can receive shares, so
+     Bucketeer never creates accounts for people who couldn't use them.
+  3. Any AD group, found by name, with a cap of 50 members; larger groups
+     are refused with a message. The share list shows which members were
+     added, and re-sharing the group adds new members.
+
+**Answer:**
+
+### Q9: How many bucket keys can one user create?
+
+- **Blocks:** nothing. The default below is used until you answer.
+- **Context:** a bucket key is a separate S3 user that can only reach one
+  bucket, read-only or read-write. Each key adds an RGW user to the cluster.
+- **Default being built:** at most **10 live bucket keys per user** (revoked
+  keys don't count), and at most 5 per bucket.
+- **Recommendation:** keep 10 per user and 5 per bucket. Admins can always
+  see and revoke them.
+
+**Answer:**
+
 ## Resolved
 
 ### Q1: How does a user choose the object for a presigned share link?
