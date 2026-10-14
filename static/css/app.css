@@ -148,3 +148,14 @@ select.input { appearance: auto; }
 .swatch i { display: block; height: 3rem; }
 .swatch span { display: block; padding: var(--sp-2); font-family: var(--font-mono); }
 .sc-title { font: 480 var(--fs-3xl) / 1.05 var(--font-display); letter-spacing: -0.02em; margin: var(--sp-2) 0; }
+
+/* "Demo mode" pill: only rendered when the server reports demo (mock/demo.py). */
+.demo-banner {
+  position: fixed; inset-block-end: var(--sp-3); inset-inline: 0; margin-inline: auto; width: max-content;
+  max-width: calc(100vw - 2 * var(--gutter)); z-index: 40; pointer-events: none;
+  padding: var(--sp-1) var(--sp-4); border-radius: var(--r-pill);
+  background: var(--surface); color: var(--text-muted);
+  border: 1px solid var(--accent-ring); box-shadow: var(--sh-2);
+  font-size: var(--fs-xs);
+}
+.demo-banner strong { color: var(--accent-text); font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; margin-right: var(--sp-1); }

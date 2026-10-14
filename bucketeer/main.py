@@ -75,6 +75,16 @@ def create_app(
     app.state.rgw = rgw_user.RgwResolver(client, lambda: app.state.db, settings.s3_tenant)
 
     app.state.endpoints = credentials.EndpointResolver(client, settings, clock)
+    # Always False here. Only mock/demo.py flips it on the finished app object;
+    # no setting or environment variable can (tests/test_demo.py).
+    app.state.demo = False
+
+    demo_router = APIRouter()
+
+    @demo_router.get("/demo")
+    def demo_flag() -> dict[str, bool]:
+        """Public: lets the frontend show a "Demo mode" banner, also before login."""
+        return {"demo": app.state.demo is True}
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next: Callable) -> Response:
@@ -103,6 +113,7 @@ def create_app(
     # state-changing methods; never add a route to `app` under /api directly.
     api = APIRouter(prefix="/api", dependencies=[Depends(auth.csrf_protect)])
     api.include_router(auth.router)
+    api.include_router(demo_router)
     api.include_router(rgw_user.router)
     api.include_router(credentials.router)
     api.include_router(admin.router)

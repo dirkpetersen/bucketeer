@@ -1,6 +1,7 @@
-import { getMe, logout } from "./api.js";
+import { getDemo, getMe, logout } from "./api.js";
 import { renderLogin } from "./views/login.js";
 import { renderDashboard } from "./views/dashboard.js";
+import { h } from "./dom.js";
 import { toast } from "./components/toast.js";
 import "./components/secret-field.js";
 import "./components/code-panel.js";
@@ -55,6 +56,21 @@ window.addEventListener("bucketeer:unauthorized", () => {
     toast.show("Your session has ended. Please sign in again.");
   }
 });
+
+// "Demo mode" pill, only when the server says so (mock/demo.py).
+getDemo()
+  .then(({ demo }) => {
+    if (!demo) return;
+    document.body.append(
+      h(
+        "div",
+        { class: "demo-banner", role: "note" },
+        h("strong", {}, "Demo mode"),
+        " fake directory, mock croit, temporary data",
+      ),
+    );
+  })
+  .catch(() => {});
 
 (async function start() {
   try {

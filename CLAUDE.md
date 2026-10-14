@@ -16,6 +16,7 @@ cp .env.default .env   # then fill in the REQUIRED values
 .venv/bin/python3 app.py                       # run locally, same as appmotel
 .venv/bin/python3 mock/croit_mock.py           # mock croit API on :18080 (CROIT_URL=http://127.0.0.1:18080/api), prints its tokens
 CROIT_MOCK_S3=moto .venv/bin/python3 mock/croit_mock.py   # same, plus a moto S3 server on :18081 (S3_ENDPOINT_URL=http://127.0.0.1:18081) mirroring its buckets/keys
+.venv/bin/python3 mock/demo.py                # local demo: moto + mock croit + Bucketeer, fake users (demo password printed), http://127.0.0.1:8000
 .venv/bin/ruff check .                         # lint
 .venv/bin/pytest                               # all tests
 .venv/bin/pytest tests/test_config.py::test_parsing   # single test
@@ -24,6 +25,8 @@ CROIT_MOCK_S3=moto .venv/bin/python3 mock/croit_mock.py   # same, plus a moto S3
 `mock/croit_mock.py` is an in-memory FastAPI mock of the croit API (seeded users `alice`, `bob`, `acme$carol`, admin and viewer API tokens, `admin`/`admin` login). Tests use `create_app(task_seconds=0)` in-process and `tests/test_croit_mock.py` validates its responses against `docs/api/api-1.yaml`. It never imports from `bucketeer/`, and `bucketeer/` never imports it. Options are the `CROIT_MOCK_*` variables listed in its docstring.
 
 S3 tests use a session-wide `moto_server` (moto `ThreadedMotoServer` on a free port) and the per-test `s3_endpoint` fixture (resets moto) from `tests/conftest.py`. `mock/s3_bridge.py` implements `MockHooks` so seeded and later-created croit buckets, versioning/object-lock flags and deletions (objects and versions included) appear in moto, created with the owner's own keys; `tests/test_s3_backend.py` shows the wiring. Tenant bucket `acme:reports` is `reports` in moto. **moto does not enforce RGW identities:** it accepts any credentials and has one account, so ownership/authorization (a user touches only their own uid and buckets) must be tested at the Bucketeer layer, not through moto.
+
+**Demo code lives only in `mock/demo.py`.** It builds its own Settings (never the real `.env` or Settings env vars), injects a fake directory (`DemoDirectory`, the real authenticator interface) through `create_app(authenticator=...)`, uses a temp `DATA_DIR`, plain-http cookies and 127.0.0.1 only. The one production-side hook is `app.state.demo` (always False in `create_app`, set True only by `mock/demo.py`) behind the public `GET /api/demo`, which the frontend uses for the "Demo mode" pill. Never add a setting, env var or import of `mock/` in `bucketeer/` to enable it; `tests/test_demo.py` enforces this.
 
 Settings read `./.env` only (no upward search). Tests never read a real `.env`: the fixture clears the settings variables and tests build settings with `Settings(_env_file=None, **REQUIRED)` (see `tests/conftest.py`).
 

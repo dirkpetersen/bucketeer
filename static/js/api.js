@@ -41,6 +41,8 @@ export async function api(path, { method = "GET", json, signal, announce401 = tr
   throw new ApiError(res.status, detail, { retryAfter: Number.isFinite(ra) ? ra : null });
 }
 
+// {demo: bool}; true only when mock/demo.py wrapped the app (never in production).
+export const getDemo = () => api("/demo", { announce401: false });
 export const getMe = () => api("/me", { announce401: false });
 export const login = (loginName, password) =>
   api("/login", { method: "POST", json: { login: loginName, password }, announce401: false });

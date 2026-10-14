@@ -67,7 +67,7 @@ skips them too.
 
 ## Phase 2: Buckets
 
-- [ ] Local demo (owner request, do this next): `mock/demo.py` starts the
+- [x] Local demo: `mock/demo.py` starts the
   mock croit with moto and Bucketeer on localhost, with a built-in fake
   directory (a few users incl. one admin, fixed demo passwords printed on
   start), injected through `create_app(authenticator=...)`. No production code
