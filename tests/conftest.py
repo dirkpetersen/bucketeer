@@ -21,10 +21,25 @@ def clean_env(monkeypatch):
 
 
 @pytest.fixture
-def settings():
+def settings(tmp_path):
     from bucketeer.config import Settings
 
-    return Settings(_env_file=None, **REQUIRED)
+    return Settings(_env_file=None, data_dir=str(tmp_path / "data"), **REQUIRED)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def repo_db_untouched():
+    """Fail the session if any test creates or changes the repo's real database."""
+    from pathlib import Path
+
+    db = Path(__file__).resolve().parent.parent / "data" / "bucketeer.sqlite3"
+
+    def stamp():
+        return (db.stat().st_mtime_ns, db.stat().st_size) if db.exists() else None
+
+    before = stamp()
+    yield
+    assert stamp() == before, f"tests created or modified {db}"
 
 
 @pytest.fixture(scope="session")

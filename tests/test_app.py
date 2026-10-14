@@ -13,7 +13,7 @@ def test_health(settings):
 
 
 def test_health_path_configurable():
-    s = Settings(_env_file=None, health_check_path="/up", **REQUIRED)
+    s = Settings(_env_file=None, health_check_path="/up", **REQUIRED)  # no lifespan
     c = TestClient(create_app(s))
     assert c.get("/up").status_code == 200
 

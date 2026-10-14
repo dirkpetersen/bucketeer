@@ -4,7 +4,9 @@ Work top to bottom. Each `- [ ]` item should be one reviewable change: code,
 tests and docs together. Design decisions are in CLAUDE.md under "Product
 design"; don't re-decide them here. Tick an item (`- [x]`) in the same commit
 that completes it. An item tagged `(blocked: Qn)` waits for an answer in
-QUESTIONS.md. Skip it, and skip anything that depends on it.
+QUESTIONS.md. Skip it, and skip anything that depends on it. Items tagged
+`(needs cluster)` need a real croit/Ceph cluster or cluster changes; the loop
+skips them too.
 
 ## Phase 0: Foundations
 
@@ -33,7 +35,7 @@ QUESTIONS.md. Skip it, and skip anything that depends on it.
   bucket creation also creates the bucket in moto.
 - [x] croit client module: async httpx client, Bearer token, `ErrorMessage` →
   exception, task polling, `$` URL-encoding of uids.
-- [ ] SQLite storage under `DATA_DIR`: schema plus migrations for settings, uid
+- [x] SQLite storage under `DATA_DIR`: schema plus migrations for settings, uid
   mappings, bucket keys, and the audit log.
 
 ## Phase 1: Login and credentials (MVP)
@@ -108,18 +110,18 @@ QUESTIONS.md. Skip it, and skip anything that depends on it.
 
 Things the spec leaves unclear. Check each one once a real cluster is
 available, and fix the client and the mock if reality differs:
-- [ ] `GET /s3/users` without `uid` (the spec marks it required, but the
+- [ ] (needs cluster) `GET /s3/users` without `uid` (the spec marks it required, but the
   description says it lists all users).
-- [ ] Where croit puts the bucket-delete confirmation sentence (the client
+- [ ] (needs cluster) Where croit puts the bucket-delete confirmation sentence (the client
   reads `details`, then falls back to the message text), and the exact
   wording.
-- [ ] Bucket keys: a zero user quota doesn't block writes to the shared
+- [ ] (needs cluster) Bucket keys: a zero user quota doesn't block writes to the shared
   bucket, because writes count against the bucket owner's quota.
 
 ## Later (needs cluster work first)
 
-- [ ] Server-side encryption: SSE-KMS/SSE-S3 needs a key server
+- [ ] (needs cluster) Server-side encryption: SSE-KMS/SSE-S3 needs a key server
   (Vault/Barbican/KMIP), SSE-C needs HTTPS only.
-- [ ] Static website hosting: needs RGW website mode and wildcard DNS.
-- [ ] STS temporary credentials: needs an RGW STS key and roles. This also
+- [ ] (needs cluster) Static website hosting: needs RGW website mode and wildcard DNS.
+- [ ] (needs cluster) STS temporary credentials: needs an RGW STS key and roles. This also
   gives short-lived bucket-scoped keys.

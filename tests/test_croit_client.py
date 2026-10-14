@@ -552,8 +552,8 @@ async def test_client_against_mock_with_moto_bridge(s3_endpoint):
 # --- app lifecycle -------------------------------------------------------------
 
 
-def test_app_owns_one_client_and_closes_it_on_shutdown():
-    settings = make_settings()
+def test_app_owns_one_client_and_closes_it_on_shutdown(tmp_path):
+    settings = make_settings(data_dir=str(tmp_path / "data"))
     app = create_bucketeer_app(settings)
     client = app.state.croit
     assert isinstance(client, CroitClient) and not client.closed

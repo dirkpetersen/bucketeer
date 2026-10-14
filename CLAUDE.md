@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Bucketeer is a self-service S3 portal for Ceph clusters managed by **croit**. Users log in with AD, get their S3 (RGW) access/secret keys with ready-to-paste `~/.aws/config` and `~/.aws/credentials` snippets, and manage their buckets: create, delete, versioning, sharing, scoped keys, lifecycle, and the full set of S3 bucket features. Admins get an admin page. See "Product design" below for decisions already made, and `TODO.md` for the phased plan.
 
-The repo is greenfield; see `TODO.md` for what exists so far. Code layout: `app.py` (uvicorn entry point), the `bucketeer/` package (`config.py` settings, `main.py` app factory, `croit.py` croit client), `static/` (frontend, served at `/`), `tests/`, and `mock/` (dev/test-only mock croit API). JSON endpoints go under `/api/...`; the static mount at `/` is registered last so it never shadows them or `/health`.
+The repo is greenfield; see `TODO.md` for what exists so far. Code layout: `app.py` (uvicorn entry point), the `bucketeer/` package (`config.py` settings, `main.py` app factory, `croit.py` croit client, `db.py` SQLite storage), `static/` (frontend, served at `/`), `tests/`, and `mock/` (dev/test-only mock croit API). JSON endpoints go under `/api/...`; the static mount at `/` is registered last so it never shadows them or `/health`.
 
 ### Commands
 
@@ -186,6 +186,11 @@ Several features write the same per-bucket policy and lifecycle configuration: b
 - State lives in **SQLite** under `DATA_DIR`. That covers settings, uid mappings, bucket-key ownership and the **audit log** of who created or deleted buckets, keys and shares.
 - `DATA_DIR` defaults to `data/` in the repo (git-ignored). appmotel updates use `git reset --hard`, which keeps ignored files, and its backups and restores tar the repo, so the database is included.
 - Assume a single uvicorn process: SQLite plus in-process background jobs such as the offboarding sync.
+- **Code:** `bucketeer/db.py`. The file is `DATA_DIR/bucketeer.sqlite3` (WAL; file and `-wal`/`-shm` 0600; a data dir Bucketeer creates is 0700, an existing one keeps its mode and logs a warning if group/other can access it). `create_app` opens it in the lifespan (`app.state.db`, `get_db` dependency) and closes it on shutdown; tests pass `create_app(settings, db=Database(":memory:"))`. `/health` never touches it.
+  - One connection behind an RLock; repositories (`db.settings`, `uid_mappings`, `profiles`, `buckets`, `bucket_keys`, `audit`) are sync and return plain dicts. Async handlers call `await db.run(db.buckets.get, name)`. Multi-statement writes use `with db.tx():`.
+  - **Migrations:** `MIGRATIONS` in `db.py`, tracked by `PRAGMA user_version`, each applied in one transaction at startup. Append a new migration, never edit an applied one. The app refuses to start on a database newer than the code.
+  - **Audit log** is append-only: use `db.audit.add(...)` (no update/delete helpers exist). Never put secrets in `details`; keys named like secret/password/token are redacted as a safety net, not a license.
+  - `settings` takes caller-supplied defaults (`db.settings.get(key, default)`); the schema holds no policy values. `buckets.budget_number` is nullable and unvalidated until Q2 is answered.
 
 ### Later features
 
