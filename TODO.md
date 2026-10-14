@@ -8,7 +8,7 @@ QUESTIONS.md. Skip it, and skip anything that depends on it.
 
 ## Phase 0: Foundations
 
-- [ ] Project skeleton: `app.py` (uvicorn, `PORT`/`HOST`, proxy headers),
+- [x] Project skeleton: `app.py` (uvicorn, `PORT`/`HOST`, proxy headers),
   config loading from `.env` with REQUIRED/Default validation matching
   `.env.default`, `GET /health`, `requirements.txt`, `requirements-dev.txt`
   (pytest, ruff, httpx, moto[server]), `static/` served at `/`. Document the
@@ -69,7 +69,8 @@ QUESTIONS.md. Skip it, and skip anything that depends on it.
   for each key. Verify the zero-quota assumption on the real cluster.
 - [ ] Simple lifecycle rules: expire after N days, expire noncurrent versions,
   abort incomplete multipart uploads.
-- [ ] Presigned share links, 7 days at most. (blocked: Q1)
+- [ ] Presigned share links, 7 days at most. Choose the object with a key field
+  plus prefix autocomplete from a read-only listing (Q1); no tree browser.
 - [ ] Audit log entries for every bucket, key and share change.
 
 ## Phase 3: Admin

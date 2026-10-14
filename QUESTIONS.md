@@ -12,6 +12,10 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 ## Open
 
+_None right now._
+
+## Resolved
+
 ### Q1: How does a user choose the object for a presigned share link?
 
 - **Blocks:** TODO "Presigned share links" (Phase 2)
@@ -26,6 +30,6 @@ Each question has a recommendation. Answering "ok" accepts it.
 - **Recommendation:** 1. It is fast for users who know their paths, and it
   avoids building something close to a file browser.
 
-**Answer:**
+**Answer:** 1)
 
-## Resolved
+**Decision:** option 1, a key field with prefix autocomplete. Recorded in CLAUDE.md.

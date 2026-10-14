@@ -6,7 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Bucketeer is a self-service S3 portal for Ceph clusters managed by **croit**. Users log in with AD, get their S3 (RGW) access/secret keys with ready-to-paste `~/.aws/config` and `~/.aws/credentials` snippets, and manage their buckets: create, delete, versioning, sharing, scoped keys, lifecycle, and the full set of S3 bucket features. Admins get an admin page. See "Product design" below for decisions already made, and `TODO.md` for the phased plan.
 
-The repo is greenfield: so far only the README, LICENSE, a Python `.gitignore`, and the croit OpenAPI spec exist. There is no build, lint, or test tooling yet. When you add it, document the commands here, including how to run a single test. To match production, run the app locally with `python app.py` (see the appmotel section below).
+The repo is greenfield; see `TODO.md` for what exists so far. Code layout: `app.py` (uvicorn entry point), the `bucketeer/` package (`config.py` settings, `main.py` app factory), `static/` (frontend, served at `/`), `tests/`. JSON endpoints go under `/api/...`; the static mount at `/` is registered last so it never shadows them or `/health`.
+
+### Commands
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt   # setup
+cp .env.default .env   # then fill in the REQUIRED values
+.venv/bin/python3 app.py                       # run locally, same as appmotel
+.venv/bin/ruff check .                         # lint
+.venv/bin/pytest                               # all tests
+.venv/bin/pytest tests/test_config.py::test_parsing   # single test
+```
+
+Settings read `./.env` only (no upward search). Tests never read a real `.env`: the fixture clears the settings variables and tests build settings with `Settings(_env_file=None, **REQUIRED)` (see `tests/conftest.py`).
 
 ## Stack constraints (set by the owner)
 
@@ -52,7 +65,7 @@ The app has to deploy unmodified on [appmotel](https://github.com/dirkpetersen/a
 
 ## croit API
 
-- Spec: `docs/api/api-1.yaml` (OpenAPI 3.1, ~40k lines). Online docs: https://www.croit.io/api-docs. The file is too big to read whole, so grep for `^  /<path>:` and for `^    <SchemaName>:`. Ignore `docs/api/api-1.yaml:Zone.Identifier`, which is a Windows download artifact.
+- Spec: `docs/api/api-1.yaml` (OpenAPI 3.1, ~40k lines). Online docs: https://www.croit.io/api-docs. The file is too big to read whole, so grep for `^  /<path>:` and for `^    <SchemaName>:`.
 - The spec has no `servers` entry, so the croit base URL has to come from an environment variable (see Configuration).
 
 Endpoints this app relies on:
@@ -154,7 +167,7 @@ Several features write the same per-bucket policy and lifecycle configuration: b
   - multipart cleanup
   - subusers
   - placement and storage class choice, shown only when more than one exists
-- There is no object/file browser.
+- There is no object/file browser. Presigned share links choose the object with a key field plus prefix autocomplete from a read-only listing (Q1).
 
 ### Admin page and storage
 
