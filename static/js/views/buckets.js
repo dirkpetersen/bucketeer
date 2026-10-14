@@ -1,6 +1,6 @@
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
-import { deleteBucket, listBuckets, reconcileBuckets } from "../api.js";
+import { deleteBucket, listBuckets, reconcileBuckets, setBucketVersioning } from "../api.js";
 import { formatBytes, formatCount } from "../format.js";
 import { toast } from "../components/toast.js";
 import { confirmDialog, nameSpan } from "../components/confirm-dialog.js";
@@ -11,6 +11,22 @@ import { createBucketDialog } from "../components/create-bucket-dialog.js";
 // Advanced toggle is on at the moment the create dialog opens.
 
 const VERSIONING = { enabled: "Versioned", suspended: "Versioning paused" };
+
+function versionSwitch(b, onToggle) {
+  const on = b.versioning === "enabled";
+  const locked = on && b.objectLock === true;
+  const known = b.versioning === "off" || b.versioning === "enabled" || b.versioning === "suspended";
+  const note = locked ? "Object lock keeps versioning on for good."
+    : b.versioning === "suspended" ? "Versioning is paused. Switch on to resume it."
+    : b.versioning === "off" ? "Keep old versions of changed or deleted files."
+    : "Versioning state unavailable.";
+  const sw = h("button", {
+    class: "switch bk-vsw", type: "button", role: "switch", "aria-checked": String(on),
+    disabled: locked || !known, title: note, "aria-label": `Versioning for ${b.name}. ${note}`,
+    on: { click: () => onToggle(b) },
+  }, h("span", { class: "switch-label", text: "Versioning" }), h("span", { class: "switch-track", "aria-hidden": "true" }));
+  return sw;
+}
 
 function skeleton(n = 3) {
   return h("div", { class: "skel", "aria-hidden": "true" },
@@ -43,13 +59,14 @@ function usageBlock(b) {
   return out;
 }
 
-function row(b, onDelete, busy) {
+function row(b, onDelete, onToggle, busy) {
   const created = b.createdAt ? new Date(b.createdAt) : null;
   const meta = h("div", { class: "bk-meta" });
   if (created && !Number.isNaN(created.getTime())) {
     meta.append(h("time", { datetime: b.createdAt, text: `Created ${created.toLocaleDateString(undefined, { dateStyle: "medium" })}` }));
   }
   if (VERSIONING[b.versioning]) meta.append(h("span", { class: "chip chip-ok" }, h("span", { class: "dot" }), VERSIONING[b.versioning]));
+  if (b.objectLock === true) meta.append(h("span", { class: "chip", title: "Object lock keeps versioning on for good." }, "Object lock"));
   const budget = b.budgetMissing
     ? h("span", { class: "chip chip-warn", title: "This bucket has no budget number yet." }, icon("alert", "icon"), "Missing budget number")
     : h("span", { class: "bk-budget" }, h("span", { class: "bk-budget-l", text: "Budget" }), h("code", { text: b.budgetNumber }));
@@ -57,11 +74,13 @@ function row(b, onDelete, busy) {
     class: "btn btn-sm btn-quiet-danger", type: "button", disabled: busy, "aria-label": `Delete bucket ${b.name}`,
     on: { click: () => onDelete(b) },
   }, icon("trash"), h("span", { class: "bk-del-l", text: "Delete" }));
+  const vsw = versionSwitch(b, onToggle);
+  budget.classList.add("bk-budget-slot");
   return h("li", { class: "bk-row", "data-busy": String(!!busy) },
     h("span", { class: "bk-ic", "aria-hidden": "true" }, icon("bucket")),
     h("div", { class: "bk-main" }, h("b", { class: "bk-name", text: b.name }), meta),
     usageBlock(b),
-    h("div", { class: "bk-tail" }, budget, del));
+    h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, vsw, del)));
 }
 
 export function bucketsCard({ isAdvanced = () => false } = {}) {
@@ -88,7 +107,7 @@ export function bucketsCard({ isAdvanced = () => false } = {}) {
         h("div", { class: "empty-acts" }, h("button", { class: "btn btn-primary", type: "button", on: { click: create } }, icon("plus"), "Create your first bucket"))));
       return;
     }
-    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, deleting.has(b.name)))));
+    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
   }
 
   function failed(err) {
@@ -158,6 +177,28 @@ export function bucketsCard({ isAdvanced = () => false } = {}) {
       if (err.status !== 401) toast.error(err.message);
     }
     deleting.delete(b.name);
+    await load({ quiet: true });
+  }
+
+  async function toggleVersioning(b) {
+    const enable = b.versioning !== "enabled";
+    if (!enable) {
+      const ok = await confirmDialog({
+        title: ["Pause versioning on ", nameSpan(b.name), "?"], confirmLabel: "Pause versioning",
+        message: "New uploads will no longer create versions. Versions that already exist are kept and still count toward your quota. Versioning can never be turned off completely, only paused and resumed.",
+      });
+      if (!ok) return;
+    }
+    const key = `v:${b.name}`;
+    deleting.add(key);
+    paint();
+    try {
+      await setBucketVersioning(b.name, enable);
+      toast.show(enable ? `Versioning is on for ${b.name}.` : `Versioning is paused for ${b.name}.`);
+    } catch (err) {
+      if (err.status !== 401) toast.error(err.message);
+    }
+    deleting.delete(key);
     await load({ quiet: true });
   }
 

@@ -29,7 +29,16 @@ or capitals never matches anything, so a user cannot address another tenant's bu
   answers 409 `{requiresConfirmation: true, objects, bytes}` unless `confirmName` equals
   the bucket name exactly; then croit's confirmation handshake runs
   (`delete_bucket_and_data(user_confirmed=True)`) and all data goes.
-Audited: `bucket.create`, `bucket.delete`, `bucket.tag_sync`.
+- `PUT /api/buckets/{name}/versioning {enabled}` -> `{name, versioning, changed}`. Through
+  croit's `PATCH /s3/buckets/{name}` (admin plane, `versioning` ENABLED / SUSPENDED), after
+  ownership is verified in croit's list (404 otherwise). off -> enabled, enabled ->
+  suspended, suspended -> enabled; versioning can never go back to off. Already in the
+  requested state (including `enabled: false` on a never-versioned bucket) -> 200
+  `changed: false`, no croit write. Suspending an object-lock bucket -> 409.
+  The list also carries `objectLock: true|false|null` for versioned buckets (read with the
+  user's own key; null = unknown).
+Audited: `bucket.create`, `bucket.delete`, `bucket.tag_sync`, `bucket.versioning`
+(before/after).
 """
 
 import asyncio
@@ -37,6 +46,7 @@ import logging
 import re
 from typing import Annotated, Any
 
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -82,6 +92,11 @@ class CreateBody(BaseModel):
     versioning: bool = False
     objectLock: bool = False
     placement: str | None = Field(default=None, max_length=256)
+
+
+class VersioningBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
 
 
 class DeleteBody(BaseModel):
@@ -161,6 +176,21 @@ async def _try_tag(request: Request, uid: str, short: str, value: str) -> bool:
     return False
 
 
+def _object_lock_on(s3, bucket: str) -> bool:
+    """Whether the bucket has object lock (sync, user's own client)."""
+    try:
+        cfg = s3.get_object_lock_configuration(Bucket=bucket)
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") in (
+                "ObjectLockConfigurationNotFoundError", "NoSuchObjectLockConfiguration"):
+            return False
+        raise
+    return (cfg.get("ObjectLockConfiguration") or {}).get("ObjectLockEnabled") == "Enabled"
+
+
+_STATES = {"OFF": "off", "ENABLED": "enabled", "SUSPENDED": "suspended"}
+
+
 def _task_failure(e: CroitTaskError, what: str) -> HTTPException:
     """croit's task output is free-form (hosts, commands, other tenants' names): it goes
     to the server log only, never into the response."""
@@ -203,8 +233,19 @@ async def list_buckets(request: Request, acct: Account):
                 return None
         return {"OFF": "off", "ENABLED": "enabled", "SUSPENDED": "suspended"}.get(state)
 
+    async def locked(b: dict, state: str | None) -> bool | None:
+        if state not in ("enabled", "suspended"):
+            return False  # object lock requires versioning
+        async with sem:
+            try:
+                return await request.app.state.s3.call(
+                    acct.uid, _object_lock_on, _short(b["bucket"]))
+            except Exception:
+                return None
+
     rows.sort(key=lambda b: str(b.get("bucket", "")).lower())
     states = await asyncio.gather(*(versioning(b) for b in rows[:VERSIONING_LOOKUPS]))
+    locks = await asyncio.gather(*(locked(b, s) for b, s in zip(rows, states, strict=False)))
     out = []
     for i, b in enumerate(rows):
         full = b.get("bucket") or ""
@@ -219,6 +260,7 @@ async def list_buckets(request: Request, acct: Account):
             "bytes": size,
             "quota": _quota(b.get("bucket_quota")),
             "versioning": states[i] if i < len(states) else None,
+            "objectLock": locks[i] if i < len(locks) else None,
             "budgetNumber": budget,
             "budgetMissing": budget is None,
             "tagPending": bool(m and budget is not None and not m.get("tag_synced", 1)),
@@ -398,6 +440,54 @@ async def reconcile(request: Request, acct: Account, user: User):
         else:
             pending.append(short)
     return {"synced": synced, "pending": pending}
+
+
+# -- versioning ------------------------------------------------------------------
+
+
+@router.put("/{name}/versioning")
+async def set_versioning(name: str, body: VersioningBody, request: Request, acct: Account,
+                         user: User):
+    croit: CroitClient = request.app.state.croit
+    short = _own_name(name)
+    full = _full(acct.uid, short)
+    async with _user_lock(request, acct.uid):
+        if next((b for b in await _own_buckets(croit, acct.uid)
+                 if b.get("bucket") == full), None) is None:
+            raise HTTPException(404, "Bucket not found.")
+        try:
+            before = _STATES.get((await croit.get_bucket(full, owner=acct.uid)).get("versioning"))
+        except CroitClientError as e:
+            raise croit_http_error(e) from None
+        except AttributeError:
+            before = None
+        if before is None:
+            raise HTTPException(502, "Could not read the versioning state of this bucket.")
+        target = "enabled" if body.enabled else ("off" if before == "off" else "suspended")
+        if target == before:
+            return {"name": short, "versioning": before, "changed": False}
+        if target == "suspended":
+            try:
+                locked = await request.app.state.s3.call(acct.uid, _object_lock_on, short)
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(502, "Could not check whether this bucket has object "
+                                         "lock. Try again.") from None
+            if locked:
+                raise HTTPException(409, "This bucket has object lock, so versioning cannot be "
+                                         "paused.")
+        try:
+            await croit.update_bucket(full, owner=None, versioning=target.upper())
+        except CroitClientError as e:
+            raise croit_http_error(e) from None
+        try:
+            after = _STATES.get((await croit.get_bucket(full, owner=acct.uid)).get("versioning"))
+        except Exception:
+            after = target
+        await _audit(request, user.username, "bucket.versioning", full, uid=acct.uid,
+                     before=before, after=after)
+    return {"name": short, "versioning": after, "changed": True}
 
 
 # -- delete ----------------------------------------------------------------------

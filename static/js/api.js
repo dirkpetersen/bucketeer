@@ -79,6 +79,8 @@ export const listBuckets = () => api("/buckets");
 export const bucketOptions = () => api("/buckets/options");
 export const createBucket = (body) => api("/buckets", { method: "POST", json: body });
 export const reconcileBuckets = () => api("/buckets/reconcile", { method: "POST" });
+export const setBucketVersioning = (name, enabled) =>
+  api(`/buckets/${encodeURIComponent(name)}/versioning`, { method: "PUT", json: { enabled } });
 export const deleteBucket = (name, confirmName) =>
   api(`/buckets/${encodeURIComponent(name)}`, { method: "DELETE", json: confirmName ? { confirmName } : {} });
 

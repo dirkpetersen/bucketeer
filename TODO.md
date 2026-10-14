@@ -81,7 +81,7 @@ skips them too.
   (index/worktag) prefilled from the user's profile default, versioning, and
   under Advanced object lock (with warning) and placement. Delete bucket:
   typed-name confirmation when non-empty. Budget number rules: CLAUDE.md (Q2).
-- [ ] Versioning toggle (enable/suspend).
+- [x] Versioning toggle (enable/suspend).
 - [x] Shared-document helpers for bucket policy and lifecycle: read-modify-write
   that only touches `bucketeer-*` Sids/IDs. Unit-test heavily.
 - [ ] Sharing: share a bucket with an AD user (read-only or read-write). Group

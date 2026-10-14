@@ -60,3 +60,9 @@
 .cb .qd-check input:disabled + span { opacity: 0.75; }
 .cb .qd-check > span { display: grid; gap: 2px; }
 .cb .qd-check small { color: var(--text-muted); font-size: var(--fs-xs); font-weight: 450; }
+
+/* Versioning switch */
+.bk-acts { display: flex; align-items: center; gap: var(--sp-2); }
+.bk-vsw[disabled] { opacity: 0.55; cursor: not-allowed; }
+.bk-row .bk-vsw { min-height: 2.25rem; }
+.bk-row .bk-vsw .switch-label { display: inline; }
