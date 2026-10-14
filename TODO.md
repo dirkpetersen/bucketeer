@@ -137,7 +137,7 @@ skips them too.
 - [x] Raw bucket policy editor, with a warning before editing `bucketeer-*`
   statements.
 - [x] Bucket and object ACLs.
-- [ ] CORS rules editor.
+- [x] CORS rules editor.
 - [ ] Bucket tagging.
 - [ ] Object lock: default retention, plus legal hold and retention for a given
   object key.

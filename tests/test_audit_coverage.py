@@ -42,6 +42,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "POST /api/buckets/reconcile": ("bucket.tag_sync",),
     "PUT /api/buckets/{name}/versioning": ("bucket.versioning",),
     "PUT /api/buckets/{name}/lifecycle": ("bucket.lifecycle",),
+    "PUT /api/buckets/{name}/cors": ("bucket.cors",),
     "PUT /api/buckets/{name}/policy": ("bucket.policy",),
     "DELETE /api/buckets/{name}/policy": ("bucket.policy_delete",),
     "POST /api/buckets/{name}/share-link": ("bucket.share_link",),
@@ -231,6 +232,11 @@ def run(tmp_path_factory, moto_server):
     r.step("DELETE /api/buckets/{name}/policy", lambda: a.request(
         "DELETE", "/api/buckets/alice-tag/policy", json={"etag": put_p.json()["etag"]},
         headers=H))
+    # CORS editor
+    et = a.get("/api/buckets/alice-tag/cors").json()["etag"]
+    r.step("PUT /api/buckets/{name}/cors", lambda: a.put(
+        "/api/buckets/alice-tag/cors", headers=H, json={"etag": et, "rules": [{
+            "allowedOrigins": ["https://example.org"], "allowedMethods": ["GET"]}]}))
     # ACLs: bucket (moto keeps these) and object (moto ignores object ACL documents)
     et = a.get("/api/buckets/alice-data/acl").json()["etag"]
     r.step("PUT /api/buckets/{name}/acl", lambda: a.put(

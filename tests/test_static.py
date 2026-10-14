@@ -88,10 +88,21 @@ def test_referenced_assets_exist():
             assert (path.parent / url).is_file(), (path.name, url)
 
 
+def test_example_url_exemption_is_narrow():
+    pattern = r"https://(?:[\w*-]+\.)*example\.(?:org|com)(?![\w.-])"
+    for ok in ("https://example.org", "https://www.example.com/x", "https://*.example.org"):
+        assert re.fullmatch(pattern + r"(?:/\S*)?", ok), ok
+    for bad in ("https://evil-example.org/x.js", "https://example.com.evil.net/x.js",
+                "https://notexample.org/a"):
+        assert re.search(r"https?://", re.sub(pattern, "", bad)), bad
+
+
 def test_js_and_css_have_no_external_urls_or_innerhtml():
     for path in [*STATIC_DIR.rglob("*.js"), *STATIC_DIR.rglob("*.css")]:
         text = path.read_text().replace("http://www.w3.org/2000/svg", "")  # SVG namespace
         text = text.replace("https://s3.example.org", "")  # showcase demo data
+        # example URLs: example.org / example.com and their subdomains only
+        text = re.sub(r"https://(?:[\w*-]+\.)*example\.(?:org|com)(?![\w.-])", "", text)
         assert not re.search(r"https?://", text), path
         for bad in ("innerHTML", "insertAdjacentHTML", "outerHTML =", "document.write"):
             assert bad not in text, (path.name, bad)

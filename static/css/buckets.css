@@ -238,3 +238,41 @@
 .acl-load { display: flex; justify-content: flex-start; padding-top: var(--sp-1); }
 .acl .field { display: grid; gap: var(--sp-2); min-width: 0; }
 .acl .field > label { font-size: var(--fs-sm); font-weight: 600; }
+
+/* CORS editor (builds on .pol, .lcd and .qd) */
+.cors { width: min(48rem, calc(100vw - 2 * var(--gutter))); }
+.cors-rules { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-3); }
+.cors-rules[hidden], .cors-json[hidden] { display: none; }
+.cors-rule { display: grid; gap: var(--sp-3); padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); min-width: 0; }
+.cors-rule > * { min-width: 0; }
+.cors-rule-h { display: flex; align-items: center; gap: var(--sp-2); }
+.cors-rule .field > label, .cors-methods legend { font-size: var(--fs-sm); font-weight: 600; }
+.cors-hint { color: var(--text-muted); font-size: var(--fs-xs); }
+.cors-grid { display: grid; gap: var(--sp-3); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 40em) { .cors-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.cors-grid > .field { align-content: start; }
+.cors-chipbox { align-content: start; display: grid; gap: var(--sp-2); }
+.cors-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.cors-chips[hidden] { display: none; }
+.cors-chip { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid var(--border-strong); border-radius: var(--r-pill); background: var(--surface-2); font-size: var(--fs-xs); }
+.cors-chip-t { padding: 0.25rem 0.25rem 0.25rem 0.7rem; overflow-wrap: anywhere; }
+.cors-chip-t.mono { font-family: var(--font-mono); }
+.cors-chip-x { display: inline-grid; place-items: center; width: 1.75rem; height: 1.75rem; border: 0; background: transparent; color: var(--text-muted); border-radius: 50%; cursor: pointer; }
+.cors-chip-x:hover { color: var(--danger); }
+.cors-chip-x:focus-visible { outline: 2px solid var(--accent-ring); }
+.cors-chip-x svg { width: 0.8rem; height: 0.8rem; }
+.cors-chip-in { min-height: 2.5rem; font-family: var(--font-mono); font-size: var(--fs-xs); }
+.cors-age { width: 9rem; font-variant-numeric: tabular-nums; }
+.cors-methods { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-4); border: 0; margin: 0; padding: 0; }
+.cors-methods legend { float: left; margin-right: var(--sp-4); padding: 0; }
+.cors-method[data-write="true"] span { color: var(--text); }
+.cors-warn[hidden] { display: none; }
+.cors-empty { margin: 0; padding: var(--sp-5); text-align: center; color: var(--text-muted); border: 1px dashed var(--border-strong); border-radius: var(--r-md); font-size: var(--fs-sm); }
+.cors-empty[hidden] { display: none; }
+.cors-json { margin: 0; padding: var(--sp-3); font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.6; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md); overflow: auto; max-height: 50dvh; }
+.cors-preset { width: auto; min-height: 2rem; padding: 0 var(--sp-3); font-size: var(--fs-xs); }
+@media (max-width: 36em) {
+  .cors-rule { padding: var(--sp-3); }
+  .cors-preset { max-width: 100%; }
+}
+.cors-err-line { display: block; }

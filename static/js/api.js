@@ -172,3 +172,11 @@ const aclBase = (bucket, key) => key == null
   : `/buckets/${encodeURIComponent(bucket)}/objects/acl?key=${encodeURIComponent(key)}`;
 export const getAcl = (bucket, key) => api(aclBase(bucket, key));
 export const putAcl = (bucket, key, body) => api(aclBase(bucket, key), { method: "PUT", json: body });
+
+// CORS rules (Advanced). get -> {rules: [{id?, allowedOrigins, allowedMethods, allowedHeaders,
+// exposeHeaders, maxAgeSeconds|null}], etag, warnings: [{rule, message}]}. put sends {rules, etag}
+// (an empty list deletes the configuration); a 422 body has errors: [{rule, field, message}], a 409
+// etagMismatch carries {current}.
+export const getBucketCors = (name) => api(`/buckets/${encodeURIComponent(name)}/cors`);
+export const putBucketCors = (name, body) =>
+  api(`/buckets/${encodeURIComponent(name)}/cors`, { method: "PUT", json: body });

@@ -16,6 +16,7 @@ from . import (
     auth,
     bucket_keys,
     buckets,
+    cors,
     credentials,
     lifecycle,
     policy_editor,
@@ -148,6 +149,7 @@ def create_app(
     api.include_router(audit_viewer.router)
     api.include_router(lifecycle.router)
     api.include_router(policy_editor.router)
+    api.include_router(cors.router)
     api.include_router(share_links.router)
     api.include_router(acl.router)
     api.include_router(sharing.router)
