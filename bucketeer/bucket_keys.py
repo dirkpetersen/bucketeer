@@ -31,13 +31,15 @@ user, 3) zero quota (read back and checked, fail closed), 4) one generated acces
 client, 6) row active. A failure at any step rolls back what was done (statement, RGW
 user); if that works the row is `failed` and revoked, if it does not the row stays live
 as `failed` so a revoke can finish the cleanup. A crash can leave a live `pending` row
-the same way. Audit: `bucket_key.create|create_failed|reveal|revoke|revoke_failed`
+the same way; `cleanup_pending` (background task at startup) rolls such rows back.
+Audit: `bucket_key.create|create_failed|reveal|revoke|revoke_failed|cleanup`
 (never a secret).
 """
 
 import asyncio
 import logging
 import re
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from botocore.exceptions import ClientError
@@ -468,3 +470,102 @@ async def revoke_for_deleted_bucket(request: Request, acct: RgwAccount, full: st
         log.exception("could not revoke the keys of deleted bucket %s", full)
         failed.append("?")
     return {"revoked": revoked, "failed": failed}
+
+
+# -- startup clean-up of crashed creates ---------------------------------------------
+
+CLEANUP_ON_START = True  # tests switch it off (autouse fixture in tests/conftest.py)
+CLEANUP_GRACE = 600.0  # seconds a `pending` row must be old before it counts as crashed
+CLEANUP_DELAYS = (30.0, 120.0, 450.0)  # waits between the (bounded) tries, ~10 minutes
+
+
+class _Shim:
+    """Just enough of a Request/RgwAccount for the shared helpers outside a request."""
+
+    def __init__(self, app, uid: str = ""):
+        self.app, self.uid = app, uid
+
+
+def _pending_age(row: dict) -> float:
+    made = datetime.strptime(row["created_at"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+    return (datetime.now(UTC) - made).total_seconds()
+
+
+def _owner_uid(row: dict) -> str:
+    return row["rgw_uid"].rsplit("+", 1)[0]
+
+
+async def _cleanup_row(app, row: dict) -> str:
+    """Roll one stale pending row back. Returns 'done', 'needs_cleanup' or 'retry'."""
+    croit, db = app.state.croit, app.state.db
+    shim = _Shim(app, _owner_uid(row))
+    short = _short(row["bucket_name"])
+    try:
+        await croit.get_user(row["rgw_uid"])  # croit reachable at all?
+        try:
+            await app.state.s3.client_for(shim.uid)
+        except HTTPException as e:
+            if e.status_code >= 500:
+                return "retry"
+            await db.run(db.bucket_keys.set_state, row["id"], "failed")
+            await _audit(shim, "system", "bucket_key.cleanup", str(row["id"]),
+                         uid=row["rgw_uid"], bucket=row["bucket_name"], result="needs_cleanup",
+                         reason="owner has no usable S3 client")
+            return "needs_cleanup"
+    except CroitClientError:
+        return "retry"
+    display = f"Bucketeer key {row['label']} for {row['owner_ad_username']} ({short})"
+    clean = await _rollback(shim, shim, row, short, sid_for(row["id"]), True, "maybe", display)
+    await _audit(shim, "system", "bucket_key.cleanup", str(row["id"]), uid=row["rgw_uid"],
+                 bucket=row["bucket_name"], result="rolled_back" if clean else "needs_cleanup")
+    return "done" if clean else "needs_cleanup"
+
+
+async def cleanup_pending(app, grace: float | None = None,
+                          delays: tuple[float, ...] | None = None) -> dict[str, int]:
+    """Finish (by rolling back) the `pending` rows a crash left behind. Rows younger than
+    `grace`, and rows that are active or revoked, are never touched. Rows whose croit was
+    unreachable are retried after each of `delays`, then left until the next start."""
+    try:
+        return await _cleanup_pending(app, grace, delays)
+    except Exception:  # CancelledError is not an Exception: shutdown still works
+        log.exception("bucket key clean-up failed")
+        return {"rolled_back": 0, "needs_cleanup": 0, "left": -1}
+
+
+async def _cleanup_pending(app, grace, delays) -> dict[str, int]:
+    grace = CLEANUP_GRACE if grace is None else grace
+    delays = CLEANUP_DELAYS if delays is None else delays
+    db = app.state.db
+    result = {"rolled_back": 0, "needs_cleanup": 0, "left": 0}
+    todo = [r["id"] for r in await db.run(db.bucket_keys.list) if r["state"] == "pending"]
+    for attempt in range(len(delays) + 1):
+        retry = []
+        for key_id in todo:
+            row = await db.run(db.bucket_keys.get, key_id)
+            if (row["state"] != "pending" or row["revoked_at"] is not None
+                    or _pending_age(row) < grace):
+                continue
+            try:
+                async with _key_locks(_Shim(app))(_owner_uid(row)), \
+                        _bucket_lock(_Shim(app), row["bucket_name"]):
+                    row = await db.run(db.bucket_keys.get, key_id)
+                    if row["state"] != "pending" or row["revoked_at"] is not None:
+                        continue
+                    outcome = await _cleanup_row(app, row)
+            except Exception:
+                log.exception("clean-up of pending bucket key %s failed", key_id)
+                outcome = "retry"
+            if outcome == "retry":
+                retry.append(key_id)
+            else:
+                result["rolled_back" if outcome == "done" else "needs_cleanup"] += 1
+        todo = retry
+        if not todo or attempt == len(delays):
+            break
+        await asyncio.sleep(delays[attempt])
+    result["left"] = len(todo)
+    if todo:
+        log.warning("bucket key clean-up gave up on %d pending row(s) until next start",
+                    len(todo))
+    return result

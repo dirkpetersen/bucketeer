@@ -560,3 +560,137 @@ def test_suspend_cascade_counts_a_missing_user_of_a_failed_row_as_done(env):
     env.bob.post("/api/admin/users/alice/unsuspend", headers=H)
     env.db.bucket_keys.create("alice+gone", "alice", "alice-data", "read", "gone", "active")
     assert env.bob.post("/api/admin/users/alice/suspend", headers=H).status_code == 502
+
+
+# -- startup clean-up of pending rows ----------------------------------------------------
+
+OURS = "Bucketeer key backup for alice (alice-data)"
+
+
+def stale_pending(env, label="backup", age=3600.0, user_name=OURS, statement=True):
+    """A pending row as a crash leaves it: user, statement and row, `age` seconds old."""
+    from datetime import UTC, datetime, timedelta
+    uid = f"alice+{label}"
+    row = env.db.bucket_keys.create(uid, "alice", "alice-data", "read", label, "pending")
+    if user_name is not None:
+        env.croit_state.create_user(uid, user_name)
+    if statement:
+        st = s3docs.bucket_key_statement("alice-data", uid, "", "read", row["id"])
+        env.moto().put_bucket_policy(Bucket="alice-data", Policy=json.dumps(
+            {"Version": "2012-10-17", "Statement": [FOREIGN, st]}))
+    old = (datetime.now(UTC) - timedelta(seconds=age)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    with env.db.tx() as c:
+        c.execute("UPDATE bucket_keys SET created_at = ? WHERE id = ?", (old, row["id"]))
+    return row
+
+
+def run_cleanup(env, **kw):
+    import asyncio
+
+    from bucketeer.bucket_keys import cleanup_pending
+    kw.setdefault("delays", (0.01, 0.01))
+    return asyncio.run(cleanup_pending(env.app, **kw))
+
+
+def test_cleanup_rolls_back_an_old_pending_row(env):
+    row = stale_pending(env)
+    assert any(s.startswith("bucketeer-key-") for s in sids(env))
+    assert run_cleanup(env)["rolled_back"] == 1
+    assert "alice+backup" not in env.croit_state.users
+    assert sids(env) == ["legacy-allow"]
+    got = env.db.bucket_keys.get(row["id"])
+    assert got["state"] == "failed" and got["revoked_at"]
+    (a,) = env.audit("bucket_key.cleanup")
+    assert a["actor"] == "system" and a["target"] == str(row["id"])
+    assert "secret" not in json.dumps(a).lower()
+    assert run_cleanup(env)["rolled_back"] == 0  # idempotent
+
+
+def test_cleanup_leaves_young_active_and_revoked_rows(env):
+    young = stale_pending(env, "young", age=5)
+    active = env.db.bucket_keys.create("alice+act", "alice", "alice-data", "read", "act",
+                                       "active")
+    revoked = env.db.bucket_keys.create("alice+rev", "alice", "alice-data", "read", "rev",
+                                        "pending")
+    env.db.bucket_keys.revoke(revoked["id"])
+    assert run_cleanup(env) == {"rolled_back": 0, "needs_cleanup": 0, "left": 0}
+    assert "alice+young" in env.croit_state.users
+    assert env.db.bucket_keys.get(young["id"])["state"] == "pending"
+    assert env.db.bucket_keys.get(active["id"])["state"] == "active"
+    assert not env.audit("bucket_key.cleanup")
+
+
+def test_cleanup_never_deletes_a_user_that_is_not_ours(env):
+    row = stale_pending(env, user_name="A human", statement=False)
+    assert run_cleanup(env)["rolled_back"] == 1
+    assert "alice+backup" in env.croit_state.users
+    assert env.db.bucket_keys.get(row["id"])["revoked_at"]
+
+
+def test_cleanup_retries_when_croit_is_down_then_gives_up(env):
+    row = stale_pending(env)
+    env.transport.fail = lambda r: httpx.Response(503, json={"message": "down"})
+    assert run_cleanup(env) == {"rolled_back": 0, "needs_cleanup": 0, "left": 1}
+    assert env.db.bucket_keys.get(row["id"])["state"] == "pending"
+    assert "alice+backup" in env.croit_state.users
+    # croit comes back during the retries
+    calls = {"n": 0}
+
+    def flaky(r):
+        calls["n"] += 1
+        return httpx.Response(503, json={"message": "down"}) if calls["n"] < 4 else None
+
+    env.transport.fail = flaky
+    assert run_cleanup(env, delays=(0.01, 0.01, 0.01, 0.01))["rolled_back"] == 1
+    assert env.db.bucket_keys.get(row["id"])["revoked_at"]
+
+
+def test_cleanup_without_owner_s3_client_marks_row_needs_cleanup(env):
+    row = stale_pending(env)
+    for k in list(env.croit_state.users["alice"].keys):
+        env.croit_state.users["alice"].keys.remove(k)
+    assert run_cleanup(env)["needs_cleanup"] == 1
+    got = env.db.bucket_keys.get(row["id"])
+    assert got["state"] == "failed" and got["revoked_at"] is None
+    assert "alice+backup" in env.croit_state.users  # untouched: a revoke finishes it
+    assert any(s.startswith("bucketeer-key-") for s in sids(env))
+    (a,) = env.audit("bucket_key.cleanup")
+    assert "needs_cleanup" in json.dumps(a)
+
+
+def test_startup_cleanup_runs_in_background_and_health_is_instant(env, monkeypatch):
+    import asyncio
+
+    from bucketeer import bucket_keys
+    monkeypatch.setattr(bucket_keys, "CLEANUP_ON_START", True)
+    started, release = [], asyncio.Event()
+
+    async def slow(app, *a, **kw):
+        started.append(1)
+        await release.wait()
+
+    monkeypatch.setattr(bucket_keys, "cleanup_pending", slow)
+    from fastapi.testclient import TestClient
+    with TestClient(env.app) as c:
+        assert c.get(env.settings.health_check_path).status_code == 200
+    assert started == [1]  # ran, never awaited by startup, cancelled on shutdown
+
+
+def test_real_startup_cleanup_through_the_lifespan(env, monkeypatch):
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from bucketeer import bucket_keys
+    row = stale_pending(env)
+    monkeypatch.setattr(bucket_keys, "CLEANUP_ON_START", True)
+    monkeypatch.setattr(bucket_keys, "CLEANUP_GRACE", 0.0)
+    with TestClient(env.app) as c:
+        assert c.get(env.settings.health_check_path).status_code == 200
+        for _ in range(200):
+            if env.db.bucket_keys.get(row["id"])["revoked_at"]:
+                break
+            time.sleep(0.05)
+    assert env.db.bucket_keys.get(row["id"])["revoked_at"]
+    assert "alice+backup" not in env.croit_state.users
+    assert env.audit("bucket_key.cleanup")

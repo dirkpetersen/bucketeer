@@ -78,3 +78,11 @@ def s3_endpoint(moto_server):
 
     httpx.post(f"{moto_server.endpoint}/moto-api/reset", timeout=10).raise_for_status()
     return moto_server.endpoint
+
+
+@pytest.fixture(autouse=True)
+def no_key_cleanup_on_start(monkeypatch):
+    """The startup clean-up of pending bucket keys is tested explicitly."""
+    from bucketeer import bucket_keys
+
+    monkeypatch.setattr(bucket_keys, "CLEANUP_ON_START", False)

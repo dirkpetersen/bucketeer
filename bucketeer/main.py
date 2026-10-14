@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Callable
@@ -64,9 +65,16 @@ def create_app(
         if owned:
             # DATA_DIR is relative to the working directory (repo root).
             _app.state.db = Database(Path(settings.data_dir) / DB_FILENAME)
+        cleanup = None
+        if bucket_keys.CLEANUP_ON_START:  # background: never blocks startup or /health
+            cleanup = asyncio.get_running_loop().create_task(
+                bucket_keys.cleanup_pending(_app))
         try:
             yield
         finally:
+            if cleanup is not None:
+                cleanup.cancel()
+                await asyncio.gather(cleanup, return_exceptions=True)
             await _app.state.rgw.aclose()
             await client.aclose()
             if owned:

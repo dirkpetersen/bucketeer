@@ -89,7 +89,7 @@ skips them too.
 - [x] Bucket keys: create a scoped RGW user (zero quota) plus a policy
   statement, and record ownership in SQLite. List, revoke, and show snippets
   for each key. Verify the zero-quota assumption on the real cluster.
-- [ ] Bucket keys cleanup: at startup, finish or roll back bucket-key rows
+- [x] Bucket keys cleanup: at startup, finish or roll back bucket-key rows
   left `pending` by a crash (the same rollback as a failed create), audited.
 - [ ] Simple lifecycle rules: expire after N days, expire noncurrent versions,
   abort incomplete multipart uploads.
