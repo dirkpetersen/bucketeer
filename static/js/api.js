@@ -112,6 +112,8 @@ export const unsuspendUser = (uid) => api(`/admin/users/${enc(uid)}/unsuspend`, 
 export const getSettings = () => api("/admin/settings");
 export const saveNaming = (rules) => api("/admin/settings/naming", { method: "PUT", json: rules });
 export const testNaming = (body) => api("/admin/settings/naming/test", { method: "POST", json: body });
+export const saveBudgetNumber = (rules) => api("/admin/settings/budget-number", { method: "PUT", json: rules });
+export const testBudgetNumber = (body) => api("/admin/settings/budget-number/test", { method: "POST", json: body });
 export const savePlacement = (body) => api("/admin/settings/placement", { method: "PUT", json: body });
 export const saveDefaultQuota = (quota) => api("/admin/settings/default-quota", { method: "PUT", json: quota });
 export const clearDefaultQuota = () => api("/admin/settings/default-quota", { method: "DELETE" });

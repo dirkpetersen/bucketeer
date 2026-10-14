@@ -2,7 +2,7 @@ import { h } from "../dom.js";
 import { icon } from "../icons.js";
 import {
   clearDefaultQuota, deleteEndpoint, deleteUidMapping, getSettings, saveDefaultQuota, saveEndpoint,
-  saveNaming, savePlacement, saveUidMapping, testNaming,
+  saveBudgetNumber, saveNaming, savePlacement, saveUidMapping, testBudgetNumber, testNaming,
 } from "../api.js";
 import { UNITS, quotaText } from "../format.js";
 import { toast } from "../components/toast.js";
@@ -154,6 +154,67 @@ function namingSection(data, apply) {
     form);
 }
 
+function budgetSection(data, apply) {
+  const saved = data.budgetNumber;
+  const pattern = textInput({ value: saved.pattern, placeholder: "e.g. [0-9]{6}|WT-[A-Z0-9]+", maxlength: String(data.limits.maxPatternLength), class: "input mono-input" });
+  const example = textInput({ value: saved.example, placeholder: "e.g. 123456", maxlength: "64", class: "input mono-input" });
+  const fPattern = field("Format (regular expression)", pattern, { hint: "The whole budget number must match it. Leave empty to accept any number made of letters, digits, spaces and + - = . _ : / @. Slow or invalid patterns are refused." });
+  const fExample = field("Example shown to users", example, { hint: "Shown as a hint in the profile and when creating a bucket. It must itself match the format." });
+  const tValue = textInput({ placeholder: "123456", "aria-label": "Budget number to try", class: "input mono-input" });
+  const result = h("div", { class: "set-test-out", "aria-live": "polite" });
+  const ft = footer();
+
+  const draft = () => ({ pattern: pattern.value, example: example.value });
+  const dirty = () => pattern.value.trim() !== saved.pattern || example.value.trim() !== saved.example;
+  const route = (msg) => (msg.toLowerCase().includes("example") ? fExample : fPattern);
+  let timer;
+  let ticket = 0;
+  async function runTest() {
+    const n = ++ticket;
+    if (!tValue.value.trim()) { result.replaceChildren(h("p", { class: "set-hint", text: "Type a budget number to see whether it passes." })); return; }
+    try {
+      const r = await testBudgetNumber({ rules: draft(), value: tValue.value });
+      if (n !== ticket) return;
+      fPattern.error(""); fExample.error("");
+      if (r.rulesError) { route(r.rulesError).error(r.rulesError); result.replaceChildren(); return; }
+      result.replaceChildren(r.ok
+        ? h("p", { class: "set-ok" }, icon("check"), "This number is allowed.")
+        : h("ul", { class: "set-problems" }, h("li", { text: r.error })));
+    } catch (err) {
+      if (n === ticket && err.status !== 401) result.replaceChildren(h("p", { class: "set-err", text: err.message }));
+    }
+  }
+  const changed = () => { ft.update(dirty()); clearTimeout(timer); timer = setTimeout(runTest, 300); };
+  for (const el of [pattern, example, tValue]) el.addEventListener("input", changed);
+
+  const form = h("form", { novalidate: true, class: "set-form" },
+    h("div", { class: "set-grid" }, fPattern.el, fExample.el),
+    h("div", { class: "set-test" },
+      h("h3", { text: "Try a number" }),
+      field("Budget number", tValue).el,
+      result),
+    ft.el);
+  wireForm(form, ft, async () => {
+    try {
+      const res = await saveBudgetNumber(draft());
+      toast.show("Budget number format saved.");
+      apply({ budgetNumber: res });
+    } catch (err) {
+      route(err.message).error(err.message);
+      ft.update(true);
+    }
+  });
+  ft.cancel.addEventListener("click", () => {
+    pattern.value = saved.pattern; example.value = saved.example; fPattern.error(""); fExample.error("");
+    ft.update(false); runTest();
+  });
+  runTest();
+
+  return card("Budget numbers", saved.pattern ? chip("Custom format", "chip-ok") : chip("Any valid number"),
+    "Users give every new bucket a budget number for chargeback (an index or a worktag). Formats are specific to each site, so describe yours here; there is no lookup against a finance system. Changing the format does not alter numbers that buckets already have, and the Buckets table flags the ones that no longer match.",
+    form);
+}
+
 function placementSection(data, apply, reload) {
   const p = data.placement;
   if (!p.available) {
@@ -216,7 +277,7 @@ function quotaSection(data, apply) {
   const q = data.defaultQuota;
   const mode0 = !q.isSet ? "unset" : q.quota.enabled ? "limit" : "none";
   const mode = h("select", { class: "input", id: nid("s") },
-    [["unset", "Not set"], ["none", "No limit (unlimited)"], ["limit", "Limit new users to…"]].map(([v, t]) => h("option", { value: v, text: t, selected: v === mode0 })));
+    [["unset", `Default (${quotaText(q.default)})`], ["none", "No limit (unlimited)"], ["limit", "Limit new users to…"]].map(([v, t]) => h("option", { value: v, text: t, selected: v === mode0 })));
   const [sizeText, sizeUnit] = splitSize(q.quota?.maxSize);
   const size = h("input", { class: "input", type: "number", id: nid("n"), min: "0", step: "any", inputMode: "decimal", value: sizeText, placeholder: "No size limit" });
   const unit = h("select", { class: "input", id: nid("u"), "aria-label": "Size unit" }, SIZE_UNITS.map(([u]) => h("option", { value: u, text: u, selected: u === sizeUnit })));
@@ -225,7 +286,7 @@ function quotaSection(data, apply) {
   const fSize = field("Size limit", h("div", { class: "qd-pair" }, size, unit), { id: size.id, hint: "Leave empty for no size limit. 0 is a real limit: no data at all." });
   const fObjs = field("Object limit", objs, { hint: "Leave empty for no object limit." });
   const limits = h("div", { class: "set-grid" }, fSize.el, fObjs.el);
-  const warn = h("p", { class: "set-warn", role: "status" }, icon("alert"), "Not set. Users that Bucketeer creates would get no quota from this setting, so they could store without limit until an admin sets one.");
+  const warn = h("p", { class: "set-hint", role: "status" }, `Built-in default: new users get ${quotaText(q.default)}. Choose "No limit" to give them no quota, or set your own limit.`);
   const ft = footer();
   const read = () => {
     if (mode.value === "none") return { enabled: false };
@@ -254,7 +315,7 @@ function quotaSection(data, apply) {
     try {
       const body = mode.value === "unset" ? null : read();
       const res = body ? await saveDefaultQuota(body) : await clearDefaultQuota();
-      toast.show(body ? "Default quota saved." : "Default quota cleared.");
+      toast.show(body ? "Default quota saved." : "Default quota reset to the built-in default.");
       apply({ defaultQuota: res });
     } catch (err) {
       fSize.error(err.message);
@@ -263,9 +324,9 @@ function quotaSection(data, apply) {
     }
   });
   ft.cancel.addEventListener("click", () => apply({ defaultQuota: q }));
-  const status = !q.isSet ? chip("Not set", "chip-warn") : chip(q.quota.enabled ? quotaText(q.quota) : "No limit", "chip-ok");
+  const status = !q.isSet ? chip(`${quotaText(q.default)} (default)`) : chip(q.quota.enabled ? quotaText(q.quota) : "No limit", "chip-ok");
   return card("Default quota", status,
-    "The per-user quota to apply when Bucketeer creates an S3 user. This only stores the value; it is applied by features that create users.", form);
+    "The per-user quota Bucketeer applies when it creates an S3 user at first login. Unless you change it, that is 1 TiB with unlimited objects. \"No limit\" is a deliberate choice and differs from the default.", form);
 }
 
 function mappingsSection(data, apply) {
@@ -387,10 +448,11 @@ export function renderSettings() {
   let data = null;
   const slots = {};
 
-  const PATCH_SECTION = { naming: "naming", placement: "placement", defaultQuota: "quota", uidMappings: "mappings", notificationEndpoints: "endpoints" };
+  const PATCH_SECTION = { naming: "naming", budgetNumber: "budget", placement: "placement", defaultQuota: "quota", uidMappings: "mappings", notificationEndpoints: "endpoints" };
   function paint(only = null) {
     const make = {
       naming: () => namingSection(data, apply),
+      budget: () => budgetSection(data, apply),
       placement: () => placementSection(data, apply, load),
       quota: () => quotaSection(data, apply),
       mappings: () => mappingsSection(data, apply),

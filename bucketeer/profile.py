@@ -1,6 +1,7 @@
 """Profile API: the signed-in user's own preferences, keyed by AD username.
 
-- `GET /api/profile` -> `{username, displayName, email, defaultBudgetNumber|null}`
+- `GET /api/profile` -> `{username, displayName, email, defaultBudgetNumber|null,
+  budgetExample|null}` (the admin's example hint)
 - `PUT /api/profile` `{defaultBudgetNumber: string|null}` -> the same shape. Null or
   an empty string clears it. Rules: `budget.validate_budget_number` (422 with a
   message). A change is audited as `profile.update` with old and new value.
@@ -15,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from .auth import SessionUser, require_user
-from .budget import BudgetNumberError, validate_budget_number
+from .budget import BudgetNumberError, budget_example, validate_budget_number
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -25,12 +26,13 @@ class ProfileUpdate(BaseModel):
     defaultBudgetNumber: str | None = Field(default=None, max_length=4096)
 
 
-def _view(user: SessionUser, stored: str | None) -> dict:
+def _view(user: SessionUser, stored: str | None, example: str | None) -> dict:
     return {
         "username": user.username,
         "displayName": user.display_name,
         "email": user.email,
         "defaultBudgetNumber": stored,
+        "budgetExample": example,
     }
 
 
@@ -38,7 +40,7 @@ def _view(user: SessionUser, stored: str | None) -> dict:
 async def get_profile(request: Request, user: Annotated[SessionUser, Depends(require_user)]):
     db = request.app.state.db
     profile = await db.run(db.profiles.get, user.username)
-    return _view(user, profile["default_budget_number"])
+    return _view(user, profile["default_budget_number"], await db.run(budget_example, db.settings))
 
 
 @router.put("")
@@ -57,4 +59,4 @@ async def put_profile(
         await db.run(db.profiles.set_default_budget_number, user.username, value)
         await db.run(db.audit.add, user.username, "profile.update", "profile",
                      user.username, {"field": "default_budget_number", "old": old, "new": value})
-    return _view(user, value)
+    return _view(user, value, await db.run(budget_example, db.settings))

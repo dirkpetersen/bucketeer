@@ -41,12 +41,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from .auth import SessionUser, require_user
 from .croit import CroitClient, CroitClientError, CroitError, CroitUnavailable
 from .db import Database
-from .policy_settings import load_default_quota, quota_croit_args
+from .policy_settings import effective_default_quota, quota_croit_args
 
 log = logging.getLogger("bucketeer.rgw_user")
 
 CACHE_TTL = 300.0  # seconds a resolution is remembered (never "unavailable")
-DEFAULT_QUOTA = {"enabled": True, "maxSize": 2**40, "maxObjects": None}  # 1 TiB, Q4
 WARM_TIMEOUT = 30.0  # background resolve right after login
 
 _UID = re.compile(r"^[a-z0-9][a-z0-9._@-]{0,63}\Z")  # same alphabet as validate_rgw_uid
@@ -358,7 +357,7 @@ class RgwResolver:
 
     async def _apply_default_quota(self, username: str, uid: str, *, user_created: bool) -> None:
         db = self._db()
-        quota = await db.run(load_default_quota, db.settings) or DEFAULT_QUOTA
+        quota = await db.run(effective_default_quota, db.settings)
         try:
             await self.croit.set_user_quota(uid, **quota_croit_args(quota))
         except CroitClientError:

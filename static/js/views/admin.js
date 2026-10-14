@@ -52,7 +52,8 @@ function bucketColumns(act) {
         h("b", { class: "mono", text: r.name }), r.tenant && h("span", { class: "sub", text: `tenant ${r.tenant}` })) },
     { key: "owner", label: "Owner", sort: (r) => r.owner, cell: (r) => h("code", { text: r.owner }) },
     { key: "budget", label: "Budget number", sort: (r) => r.budgetNumber ?? "", cell: (r) =>
-        r.budgetNumber ? h("code", { text: r.budgetNumber }) : badge("Missing", "chip-warn") },
+        r.budgetNumber ? h("div", { class: "who" }, h("code", { text: r.budgetNumber }),
+          r.budgetMatches === false && badge("Format mismatch", "chip-warn")) : badge("Missing", "chip-warn") },
     { key: "usage", label: "Usage", num: true, sort: (r) => r.bytes, cell: (r) => h("div", { class: "usage" },
         h("b", { text: formatBytes(r.bytes) }), h("span", { class: "sub", text: `${formatCount(r.objects)} objects` })) },
     { key: "quota", label: "Quota", sort: (r) => quotaSize(r.quota), cell: (r) => h("div", { class: "usage" },

@@ -52,6 +52,8 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "POST /api/admin/users/{uid}/unsuspend": ("admin.user.unsuspend",),
     f"PUT {S}/naming": ("admin.settings.naming",),
     f"POST {S}/naming/test": (),
+    f"PUT {S}/budget-number": ("admin.settings.budget_number",),
+    f"POST {S}/budget-number/test": (),
     f"PUT {S}/placement": ("admin.settings.placement",),
     f"PUT {S}/default-quota": ("admin.settings.default_quota",),
     f"DELETE {S}/default-quota": ("admin.settings.default_quota",),
@@ -61,7 +63,10 @@ ROUTES: dict[str, tuple[str, ...]] = {
     f"DELETE {S}/notification-endpoints/{{name}}": (
         "admin.settings.notification_endpoint.delete",),
 }
-EXEMPT = {f"POST {S}/naming/test": "dry run of a naming rule; stores nothing"}
+EXEMPT = {
+    f"POST {S}/naming/test": "dry run of a naming rule; stores nothing",
+    f"POST {S}/budget-number/test": "dry run of a budget number rule; stores nothing",
+}
 
 # Audited outside a plain success path of a route.
 EVENTS = {
@@ -243,6 +248,11 @@ def run(tmp_path_factory, moto_server):
         f"{S}/notification-endpoints/hook", json=ep, headers=H))
     r.step(f"DELETE {S}/notification-endpoints/{{name}}", lambda: b.delete(
         f"{S}/notification-endpoints/hook", headers=H))
+    r.step(f"PUT {S}/budget-number", lambda: b.put(
+        f"{S}/budget-number", json={"pattern": "[0-9]{6}", "example": "123456"}, headers=H))
+    r.step(f"POST {S}/budget-number/test", lambda: b.post(
+        f"{S}/budget-number/test", headers=H,
+        json={"rules": {"pattern": "[0-9]{6}", "example": ""}, "value": "123456"}))
     r.step(f"POST {S}/naming/test", lambda: b.post(
         f"{S}/naming/test", headers=H,
         json={"rules": {"prefix": "", "pattern": ""}, "name": "x", "username": "alice"}))

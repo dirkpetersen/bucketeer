@@ -25,6 +25,7 @@ function budgetCard() {
     class: "input mono-input", type: "text", id: "pf-budget", autocomplete: "off", spellcheck: "false",
     placeholder: "e.g. 123456 or WT-ABC", maxlength: "200", disabled: true,
   });
+  const hint = h("p", { class: "set-hint", id: "pf-budget-hint" });
   const error = h("p", { class: "set-err", id: "pf-budget-err", role: "alert", hidden: true });
   const cancel = h("button", { class: "btn", type: "button", text: "Reset", disabled: true });
   const clear = h("button", { class: "btn", type: "button", text: "Clear", disabled: true });
@@ -32,7 +33,7 @@ function budgetCard() {
   const form = h("form", { class: "set-form", novalidate: true },
     h("div", { class: "field" },
       h("label", { for: "pf-budget", text: "Default budget number" }), input,
-      h("p", { class: "set-hint", text: "Your index or worktag. Letters (A-Z), digits, spaces and + - = . _ : / @ are allowed, up to 64 characters." }),
+      hint,
       error),
     h("div", { class: "set-actions" }, clear, cancel, save));
 
@@ -52,6 +53,9 @@ function budgetCard() {
   function apply(profile) {
     serverErr = "";
     saved = profile.defaultBudgetNumber;
+    hint.textContent = "Your index or worktag. Letters (A-Z), digits, spaces and + - = . _ : / @ are allowed, up to 64 characters."
+      + (profile.budgetExample ? ` Example: ${profile.budgetExample}` : "");
+    if (profile.budgetExample) input.placeholder = `e.g. ${profile.budgetExample}`;
     input.value = saved ?? "";
     refresh();
   }

@@ -17,8 +17,17 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from .admin import Admin, Croit, Db, Rgw, _audit, croit_http_error
 from .auth import require_admin
+from .budget import (
+    BUDGET_KEY,
+    BudgetFormatError,
+    BudgetNumberError,
+    _check,
+    load_budget_rules,
+    normalize_budget_rules,
+)
 from .croit import CroitClientError
 from .policy_settings import (
+    DEFAULT_QUOTA,
     ENDPOINTS_KEY,
     MAX_PATTERN_LEN,
     NAMING_KEY,
@@ -37,6 +46,7 @@ from .policy_settings import (
     normalize_placement,
     normalize_quota,
     placement_names,
+    quota_or_default,
     suggest_prefix,
     validate_ad_username,
     validate_bucket_name,
@@ -102,6 +112,13 @@ async def _known_uids(croit) -> set[str] | None:
         return None  # a warning, never an error
 
 
+def _quota_view(stored: dict | None) -> dict[str, Any]:
+    """`quota` is the admin's stored value (null = not set); `effective` is what
+    new users get (the stored value, else the 1 TiB built-in `default`)."""
+    return {"isSet": stored is not None, "quota": stored,
+            "effective": quota_or_default(stored), "default": dict(DEFAULT_QUOTA)}
+
+
 # -- reads ---------------------------------------------------------------------------
 
 
@@ -121,7 +138,8 @@ async def get_settings(_a: Admin, croit: Croit, db: Db):
     return {
         "naming": await db.run(load_naming, s),
         "placement": _placement_view(stored_placement, rows, croit_default, perr),
-        "defaultQuota": {"isSet": quota is not None, "quota": quota},
+        "defaultQuota": _quota_view(quota),
+        "budgetNumber": await db.run(load_budget_rules, s),
         "uidMappings": [
             _mapping_view(m, None if known is None else m["rgw_uid"] in known) for m in mappings
         ],
@@ -164,6 +182,42 @@ async def test_naming(body: Body_, _a: Admin):
     }
 
 
+# -- budget numbers ------------------------------------------------------------------
+
+
+@router.put("/budget-number")
+async def set_budget_number(body: Body_, admin: Admin, db: Db):
+    try:
+        new = await asyncio.to_thread(normalize_budget_rules, body)
+    except SettingsError as e:
+        raise _bad(e) from e
+    before = await db.run(load_budget_rules, db.settings)
+    await db.run(db.settings.set, BUDGET_KEY, new, admin.username)
+    await _audit(db, admin, "admin.settings.budget_number", "setting", BUDGET_KEY,
+                 {"before": before, "after": new})
+    return new
+
+
+@router.post("/budget-number/test")
+async def test_budget_number(body: Body_, _a: Admin):
+    """Try a number against *draft* rules without saving them."""
+    value, rules = body.get("value"), body.get("rules") or {}
+    if not isinstance(value, str) or len(value) > 255:
+        raise HTTPException(422, "Give a budget number to test with.")
+    try:
+        rules = await asyncio.to_thread(normalize_budget_rules, rules)
+    except SettingsError as e:
+        return {"rulesError": str(e), "error": None, "ok": False}
+    try:
+        await asyncio.to_thread(_check, value, {"pattern": rules["pattern"]})
+    except BudgetFormatError:
+        return {"rulesError": None, "ok": False,
+                "error": "This number does not match the pattern."}
+    except BudgetNumberError as e:
+        return {"rulesError": None, "ok": False, "error": str(e)}
+    return {"rulesError": None, "error": None, "ok": True}
+
+
 # -- placement -----------------------------------------------------------------------
 
 
@@ -194,18 +248,18 @@ async def set_default_quota(body: Body_, admin: Admin, db: Db):
     await db.run(db.settings.set, QUOTA_KEY, new, admin.username)
     await _audit(db, admin, "admin.settings.default_quota", "setting", QUOTA_KEY,
                  {"before": before, "after": new})
-    return {"isSet": True, "quota": new}
+    return _quota_view(new)
 
 
 @router.delete("/default-quota")
 async def unset_default_quota(admin: Admin, db: Db):
     before = await db.run(load_default_quota, db.settings)
     if before is None:
-        return {"isSet": False, "quota": None}
+        return _quota_view(None)
     await db.run(db.settings.delete, QUOTA_KEY)
     await _audit(db, admin, "admin.settings.default_quota", "setting", QUOTA_KEY,
                  {"before": before, "after": None})
-    return {"isSet": False, "quota": None}
+    return _quota_view(None)
 
 
 # -- uid mappings --------------------------------------------------------------------

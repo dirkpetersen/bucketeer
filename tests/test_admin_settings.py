@@ -65,7 +65,10 @@ def test_defaults(env):
     assert r.status_code == 200
     d = r.json()
     assert d["naming"] == {"prefix": "", "pattern": ""}
-    assert d["defaultQuota"] == {"isSet": False, "quota": None}
+    one_tib = {"enabled": True, "maxSize": 2**40, "maxObjects": None}
+    assert d["defaultQuota"] == {"isSet": False, "quota": None, "effective": one_tib,
+                                 "default": one_tib}
+    assert d["budgetNumber"] == {"pattern": "", "example": ""}
     assert d["uidMappings"] == [] and d["notificationEndpoints"] == []
     p = d["placement"]
     assert p["default"] is None and p["allowed"] == [] and p["error"] is None
@@ -175,16 +178,18 @@ def test_placement_croit_error_is_502(env):
 
 def test_default_quota_set_unset_and_zero(env):
     r = put(env, "/default-quota", {"enabled": True, "maxSize": 5 * 2**30, "maxObjects": None})
-    assert r.json() == {"isSet": True,
-                        "quota": {"enabled": True, "maxSize": 5 * 2**30, "maxObjects": None}}
+    stored = {"enabled": True, "maxSize": 5 * 2**30, "maxObjects": None}
+    assert r.json()["isSet"] is True and r.json()["quota"] == stored
+    assert r.json()["effective"] == stored
     assert env.admin.get(S).json()["defaultQuota"]["isSet"] is True
     r = put(env, "/default-quota", {"enabled": True, "maxSize": 0})  # 0 is a real limit
     assert r.status_code == 200 and r.json()["quota"]["maxSize"] == 0
     r = put(env, "/default-quota", {"enabled": False})  # explicitly unlimited != not set
     assert r.json()["isSet"] is True and r.json()["quota"]["enabled"] is False
     r = env.admin.delete(f"{S}/default-quota", headers=H)
-    assert r.json() == {"isSet": False, "quota": None}
-    assert env.admin.get(S).json()["defaultQuota"] == {"isSet": False, "quota": None}
+    assert r.json()["isSet"] is False and r.json()["quota"] is None
+    assert r.json()["effective"]["maxSize"] == 2**40  # unset = the 1 TiB default
+    assert env.admin.get(S).json()["defaultQuota"]["isSet"] is False
     assert len(env.audit("admin.settings.default_quota")) == 4
     # unsetting something not set is a no-op without an audit entry
     env.admin.delete(f"{S}/default-quota", headers=H)

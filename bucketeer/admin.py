@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
 
 from .auth import SessionUser, require_admin
+from .budget import budget_matches, load_budget_rules
 from .croit import CroitClient, CroitClientError, CroitError, CroitUnavailable, get_croit
 from .db import Database, get_db
 from .rgw_user import RgwResolver, ad_names_for_uid, get_resolver
@@ -145,7 +146,7 @@ def _user_view(u: dict, bucket_count: int, key: dict | None) -> dict[str, Any]:
     }
 
 
-def _bucket_view(b: dict, meta: dict | None) -> dict[str, Any]:
+def _bucket_view(b: dict, meta: dict | None, matches: bool | None = None) -> dict[str, Any]:
     objects, size = _usage(b)
     return {
         "name": b.get("bucket") or "",
@@ -154,7 +155,9 @@ def _bucket_view(b: dict, meta: dict | None) -> dict[str, Any]:
         "objects": objects,
         "bytes": size,
         "quota": _quota(b.get("bucket_quota"), zero_unlimited=True),
-        "budgetNumber": (meta or {}).get("budget_number"),  # null = missing (format: Q2, open)
+        "budgetNumber": (meta or {}).get("budget_number"),  # null = missing
+        # does it match the current admin pattern? null = no number or no pattern
+        "budgetMatches": matches,
     }
 
 
@@ -204,7 +207,24 @@ async def list_buckets(_a: Admin, croit: Croit, db: Db):
     except CroitClientError as e:
         raise croit_http_error(e) from e
     meta = {m["name"]: m for m in await db.run(db.buckets.list)}
-    out = [_bucket_view(b, meta.get(b.get("bucket"))) for b in buckets]
+
+    pattern = (await db.run(load_budget_rules, db.settings))["pattern"]
+
+    def build():
+        rows, seen, timeouts = [], {}, 0
+        for b in buckets:
+            m = meta.get(b.get("bucket"))
+            value = (m or {}).get("budget_number")
+            if value not in seen:
+                try:
+                    seen[value] = None if timeouts >= 3 else budget_matches(value, pattern)
+                except TimeoutError:
+                    timeouts += 1  # after 3, the rest is unjudged (null)
+                    seen[value] = None
+            rows.append(_bucket_view(b, m, seen[value]))
+        return rows
+
+    out = await asyncio.to_thread(build)
     out.sort(key=lambda b: b["name"].lower())
     return {"buckets": out}
 

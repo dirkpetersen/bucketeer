@@ -109,7 +109,7 @@ skips them too.
   quotas, suspend and unsuspend.
 - [x] Admin settings: bucket naming rules, placement defaults, default quota,
   uid mappings, notification endpoint allowlist.
-- [ ] Admin setting: budget number pattern plus example hint (Q2), validated
+- [x] Admin setting: budget number pattern plus example hint (Q2), validated
   with the same safe-regex machinery as the naming rules. Default quota
   setting defaults to 1 TiB instead of "Not set" (Q4).
 - [ ] Chargeback CSV export on the admin page: bucket, owner, budget number,

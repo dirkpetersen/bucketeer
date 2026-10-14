@@ -39,7 +39,7 @@ def test_get_defaults(env):
     body = r.json()
     assert body["username"] == "alice"
     assert body["defaultBudgetNumber"] is None
-    assert set(body) == {"username", "displayName", "email", "defaultBudgetNumber"}
+    assert set(body) == {"username", "displayName", "email", "defaultBudgetNumber", "budgetExample"}
     assert r.headers["cache-control"] == "no-store"
 
 

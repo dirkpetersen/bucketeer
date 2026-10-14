@@ -9,7 +9,9 @@ Stored in the `settings` table (JSON values, caller-supplied defaults):
 
 * `naming`                 {prefix: str, pattern: str}
 * `placement`              {default: str|None, allowed: [str]}
-* `default_quota`          absent = not set, else {enabled, maxSize, maxObjects}
+* `default_quota`          absent = the built-in default (1 TiB, `DEFAULT_QUOTA`), else
+                           {enabled, maxSize, maxObjects}; `enabled: false` = unlimited
+* `budget_number`          {pattern, example} (see `budget.py`)
 * `notification_endpoints` [{name, type, url, topic, verifyTls}]
 
 UID mappings live in the `uid_mappings` table. Endpoints carry no credentials
@@ -52,6 +54,7 @@ QUOTA_KEY = "default_quota"
 ENDPOINTS_KEY = "notification_endpoints"
 
 DEFAULT_NAMING: dict[str, str] = {"prefix": "", "pattern": ""}
+DEFAULT_QUOTA: dict[str, Any] = {"enabled": True, "maxSize": 2**40, "maxObjects": None}  # Q4
 DEFAULT_PLACEMENT: dict[str, Any] = {"default": None, "allowed": []}
 
 
@@ -180,7 +183,8 @@ def peak():
 pattern = sys.stdin.read()
 before = peak()
 probes = ["a" * 63, "a" * 62 + "!", "a-" * 31 + "a", "a." * 31 + "a",
-          "0" * 62 + "-", "ab" * 31 + "_"]
+          "0" * 62 + "-", "ab" * 31 + "_",
+          "A" * 63, "A1 " * 21, "0" * 63 + "/", "Z" * 64]  # budget-shaped (64 max)
 try:
     rx = regex.compile(pattern, cache_pattern=False)
     if peak() - before > int(sys.argv[3]):
@@ -404,8 +408,20 @@ def normalize_quota(raw: Any) -> dict[str, Any]:
 
 
 def load_default_quota(settings_repo) -> dict[str, Any] | None:
-    """None = not set (Q4 decides what first login does then)."""
+    """The admin's stored value; None = not set."""
     return settings_repo.get(QUOTA_KEY, None)
+
+
+def quota_or_default(stored: dict[str, Any] | None) -> dict[str, Any]:
+    """`stored` (the admin's value) or a copy of the built-in `DEFAULT_QUOTA`."""
+    return stored or dict(DEFAULT_QUOTA)
+
+
+def effective_default_quota(settings_repo) -> dict[str, Any]:
+    """The quota new users get: the admin's value, else `DEFAULT_QUOTA` (1 TiB,
+    objects unlimited). The one source of truth; an explicit unlimited is stored
+    (`enabled: false`) and is not the same as unset."""
+    return quota_or_default(load_default_quota(settings_repo))
 
 
 def quota_croit_args(quota: dict[str, Any]) -> dict[str, Any]:

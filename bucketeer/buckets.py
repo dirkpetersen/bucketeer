@@ -57,7 +57,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import s3docs
 from .admin import croit_http_error
 from .auth import SessionUser, require_user
-from .budget import BudgetNumberError, validate_budget_number
+from .budget import BudgetNumberError, budget_example, validate_budget_number
 from .croit import (
     CroitClient,
     CroitClientError,
@@ -302,15 +302,14 @@ async def options(request: Request, acct: Account, user: User):
         hint += " Must also match the format set by your administrators."
     place = await _placement_view(request)
     profile = await db.run(db.profiles.get, acct.username)
-    budget_rules = await db.run(db.settings.get, "budget_number", None)
-    example = budget_rules.get("example") if isinstance(budget_rules, dict) else None
+    example = await db.run(budget_example, db.settings)
     return {
         "naming": {"prefix": prefix, "hasPattern": pattern, "hint": hint},
         "placements": place["choices"] if place["userChoice"] else [],
         "defaultPlacement": place["default"],
         "defaultBudgetNumber": profile["default_budget_number"],
         "budgetRequired": not user.is_admin,
-        "budgetExample": example if isinstance(example, str) and example else None,
+        "budgetExample": example,
     }
 
 
