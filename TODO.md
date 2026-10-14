@@ -90,7 +90,7 @@ skips them too.
   without an S3 account gets one created on the spot.
 - [ ] (blocked: Q11) Group shares: share a bucket with an AD group, expanded to
   its members' uids at share time.
-- [ ] Versioning on by default (Q7): new buckets default to versioning on, and a
+- [x] Versioning on by default (Q7): new buckets default to versioning on, and a
   new versioned bucket gets the managed "expire noncurrent versions after 30
   days" lifecycle rule. Update the create dialog default and tests.
 - [x] Bucket keys: create a scoped RGW user (zero quota) plus a policy

@@ -154,7 +154,7 @@ def test_tenant_user_sees_short_names(tmp_path, s3_endpoint):
         assert "acme:carol-new" in e.croit_state.buckets
         assert e.db.buckets.get("acme:carol-new")["owner_uid"] == "acme$carol"
         assert e.tags("carol-new") == {"bucketeer-budget": "WT-123"}
-        assert e.used == [CAROL_KEY]
+        assert set(e.used) == {CAROL_KEY}
         assert carol.delete("/api/buckets/carol-new", headers=H).status_code == 200
         assert "acme:carol-new" not in e.croit_state.buckets
         assert e.db.buckets.get("acme:carol-new") is None
@@ -200,7 +200,7 @@ def test_create_success_row_tag_and_own_key(env):
     assert env.croit_state.buckets["alice-new"].owner == "alice"
     assert env.tags("alice-new") == {"bucketeer-budget": "WT-123"}
     assert env.moto().get_bucket_versioning(Bucket="alice-new")["Status"] == "Enabled"
-    assert env.used == [ALICE_KEY]  # the tag was written with alice's own key only
+    assert set(env.used) == {ALICE_KEY}  # tag and rule written with alice's own key only
     row = env.db.buckets.get("alice-new")
     assert row["owner_uid"] == "alice" and row["budget_number"] == "WT-123"
     assert row["created_by"] == "alice" and row["tag_synced"] == 1
@@ -209,8 +209,68 @@ def test_create_success_row_tag_and_own_key(env):
     assert entry["details"]["budget"] == "WT-123" and entry["details"]["tagSynced"] is True
 
 
+def lifecycle_rules(env, bucket="alice-new"):
+    try:
+        return env.moto().get_bucket_lifecycle_configuration(Bucket=bucket)["Rules"]
+    except ClientError:
+        return []
+
+
+def test_create_defaults_to_versioning_and_noncurrent_rule(env):
+    r = create(env.alice)
+    assert r.status_code == 201 and r.json()["versioning"] == "enabled"
+    assert "warning" not in r.json()
+    assert env.moto().get_bucket_versioning(Bucket="alice-new")["Status"] == "Enabled"
+    (rule,) = lifecycle_rules(env)
+    assert rule["ID"] == "bucketeer-expire-noncurrent"
+    assert rule["NoncurrentVersionExpiration"]["NoncurrentDays"] == 30
+    d = env.audit("bucket.create")[0]["details"]
+    assert d["versioning"] is True and d["noncurrentDays"] == 30
+    assert d["noncurrentRuleApplied"] is True
+
+
+def test_create_custom_noncurrent_days(env):
+    assert create(env.alice, noncurrentDays=7).status_code == 201
+    assert lifecycle_rules(env)[0]["NoncurrentVersionExpiration"]["NoncurrentDays"] == 7
+
+
+def test_create_noncurrent_null_means_no_rule(env):
+    r = create(env.alice, noncurrentDays=None)
+    assert r.json()["versioning"] == "enabled" and lifecycle_rules(env) == []
+
+
+@pytest.mark.parametrize("days", [0, -1, 36501, "30", 1.5])
+def test_create_noncurrent_out_of_range(env, days):
+    assert create(env.alice, noncurrentDays=days).status_code == 422
+    assert "alice-new" not in env.moto_buckets()
+
+
+def test_create_versioning_false_has_no_rule(env):
+    r = create(env.alice, versioning=False)
+    assert r.json()["versioning"] == "off" and lifecycle_rules(env) == []
+    d = env.audit("bucket.create")[0]["details"]
+    assert d["noncurrentDays"] is None
+
+
+def test_create_lifecycle_failure_keeps_bucket_with_warning(env):
+    real = env.real_factory
+
+    def factory(*a):
+        client = MagicMock(wraps=real(*a))
+        client.put_bucket_lifecycle_configuration.side_effect = ClientError(
+            {"Error": {"Code": "InternalError", "Message": "boom"}}, "PutBucketLifecycle")
+        return client
+
+    env.app.state.s3.factory = factory
+    r = create(env.alice)
+    assert r.status_code == 201 and "Lifecycle" in r.json()["warning"]
+    assert "alice-new" in env.moto_buckets() and env.db.buckets.get("alice-new")
+    d = env.audit("bucket.create")[0]["details"]
+    assert d["noncurrentRuleApplied"] is False
+
+
 def test_create_without_versioning_leaves_it_off(env):
-    assert create(env.alice).json()["versioning"] == "off"
+    assert create(env.alice, versioning=False).json()["versioning"] == "off"
     assert env.croit_state.buckets["alice-new"].versioning == "OFF"
 
 
@@ -221,6 +281,27 @@ def test_create_with_object_lock(env):
     lock = env.moto().get_object_lock_configuration(Bucket="alice-new")
     assert lock["ObjectLockConfiguration"]["ObjectLockEnabled"] == "Enabled"
     assert env.audit("bucket.create")[0]["details"]["objectLock"] is True
+    (rule,) = lifecycle_rules(env)
+    assert rule["ID"] == "bucketeer-expire-noncurrent"
+    assert rule["NoncurrentVersionExpiration"]["NoncurrentDays"] == 30
+
+
+def test_create_tag_and_lifecycle_failures_both_warned(env):
+    real = env.real_factory
+
+    def factory(*a):
+        client = MagicMock(wraps=real(*a))
+        for name, op in (("put_bucket_lifecycle_configuration", "PutBucketLifecycle"),
+                         ("put_bucket_tagging", "PutBucketTagging")):
+            getattr(client, name).side_effect = ClientError(
+                {"Error": {"Code": "InternalError", "Message": "boom"}}, op)
+        return client
+
+    env.app.state.s3.factory = factory
+    r = create(env.alice)
+    assert r.status_code == 201
+    warning = r.json()["warning"]
+    assert "bucket tag" in warning and "Lifecycle" in warning
 
 
 @pytest.mark.parametrize("name", ["ab", "Alice-New", "alice_new", "-alice", "alice..new",
@@ -251,7 +332,7 @@ def test_budget_required_for_users_optional_for_admins(env):
     assert r.status_code == 201 and r.json()["budgetNumber"] is None
     assert env.db.buckets.get("bob-new")["budget_number"] is None
     assert env.tags("bob-new") == {}
-    assert env.used == []  # nothing to tag, no S3 call
+    assert set(env.used) == {"BOBACCESSKEY0000002"}  # only the lifecycle rule, own key
 
 
 @pytest.mark.parametrize("budget", ["bad#value", "<script>", "ünï", "x" * 65, "a\nb"])
@@ -505,6 +586,7 @@ def test_create_adopts_own_unrecorded_bucket(env):
     assert env.tags("alice-late") == {"bucketeer-budget": "WT-77"}
     assert env.mutations() == []  # croit was not asked to create anything
     assert env.audit("bucket.create")[0]["details"]["adopted"] is True
+    assert lifecycle_rules(env, "alice-late") == []  # adopted buckets: lifecycle untouched
 
 
 def test_create_does_not_adopt_a_bucket_recorded_for_someone_else(env):

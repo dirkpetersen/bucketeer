@@ -52,6 +52,9 @@
 .cb .qd-check { align-items: flex-start; }
 .cb .qd-check input { margin-top: 0.15rem; }
 .cb-opt { font-weight: 450; color: var(--text-muted); }
+.cb-nc[hidden] { display: none; }
+.cb-nc label { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); }
+.cb-nc input { width: 6rem; }
 .cb-adv { display: grid; gap: var(--sp-3); border: 1px dashed var(--border-strong); border-radius: var(--r-md); padding: var(--sp-4); margin: 0; min-width: 0; }
 .cb-adv[hidden] { display: none; }
 .cb-adv legend { padding: 0 var(--sp-2); }

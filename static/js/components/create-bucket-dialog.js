@@ -44,7 +44,14 @@ export async function createBucketDialog() {
     "aria-describedby": `${id}-bh ${id}-be`, required: opts.budgetRequired,
   });
   const budgetErr = h("p", { class: "set-err", id: `${id}-be`, role: "alert", hidden: true });
-  const versioning = h("input", { type: "checkbox", id: `${id}-v` });
+  const versioning = h("input", { type: "checkbox", id: `${id}-v`, checked: true });
+  const ncDays = h("input", {
+    class: "input mono-input", type: "number", id: `${id}-nd`, value: "30", min: "1", max: "36500",
+    inputmode: "numeric", "aria-label": "Days before old versions are deleted",
+  });
+  const ncRow = h("div", { class: "field cb-nc" },
+    h("label", { for: ncDays.id }, "Delete old versions after ", ncDays, " days"),
+    h("p", { class: "set-hint", text: "Old versions count toward your quota. This removes replaced or deleted versions after the chosen time; you can change it later under Lifecycle." }));
   const lock = h("input", { type: "checkbox", id: `${id}-l` });
   const placement = opts.placements.length > 1
     ? h("select", { class: "input", id: `${id}-p`, "aria-label": "Placement" },
@@ -81,6 +88,7 @@ export async function createBucketDialog() {
       h("p", { class: "set-hint", id: `${id}-bh`, text: opts.budgetExample ? `Your index or worktag, for chargeback. Example: ${opts.budgetExample}` : "Your index or worktag, for chargeback." }),
       budgetErr),
     check(versioning, "Keep every version of each object", "Protects against accidental overwrites and deletes. Old versions count toward your quota."),
+    ncRow,
     advancedBlock,
     error,
     h("div", { class: "cd-actions" }, cancel, submit));
@@ -109,8 +117,10 @@ export async function createBucketDialog() {
     if (warn) warn.hidden = !locked;
     if (locked) versioning.checked = true;
     versioning.disabled = locked;
+    ncRow.hidden = !versioning.checked;
   };
   lock.addEventListener("change", syncLock);
+  versioning.addEventListener("change", syncLock);
 
   let busy = false;
   let result = null;
@@ -120,6 +130,13 @@ export async function createBucketDialog() {
     const nm = validateName();
     const bm = validateBudget();
     if (nm || bm) { show(nameErr, nm); show(budgetErr, bm); (nm ? name : budget).focus(); return; }
+    const withRule = versioning.checked || (isAdvanced() && lock.checked);
+    const days = Number(ncDays.value);
+    if (withRule && (!Number.isInteger(days) || days < 1 || days > 36500)) {
+      showError("Enter a whole number of days from 1 to 36500.");
+      ncDays.focus();
+      return;
+    }
     showError("");
     busy = true;
     submit.disabled = true;
@@ -130,6 +147,7 @@ export async function createBucketDialog() {
         budgetNumber: budget.value.trim() || null,
         versioning: versioning.checked || (isAdvanced() && lock.checked),
         objectLock: isAdvanced() && lock.checked,
+        noncurrentDays: withRule ? days : null,
         placement: isAdvanced() && placement && placement.value !== opts.defaultPlacement ? placement.value : null,
       });
       dlg.close();

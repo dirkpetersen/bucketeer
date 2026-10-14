@@ -14,9 +14,12 @@ or capitals never matches anything, so a user cannot address another tenant's bu
 - `GET /api/buckets/options` -> `{naming: {prefix, hasPattern, hint}, placements: [...]
   (empty unless the user may choose), defaultPlacement, defaultBudgetNumber,
   budgetRequired, budgetExample}`.
-- `POST /api/buckets {name, budgetNumber, versioning, objectLock, placement}` -> 201
+- `POST /api/buckets {name, budgetNumber, versioning (default true, Q7), objectLock,
+  noncurrentDays (default 30, null = no rule), placement}` -> 201
   `{name, budgetNumber, versioning, objectLock, tagSynced, warning?}`. Name: the admin
-  naming rules (`policy_settings.validate_bucket_name`); budget number: required unless
+  naming rules (`policy_settings.validate_bucket_name`); a versioned new bucket gets the
+  `bucketeer-expire-noncurrent` lifecycle rule (user's key; failure keeps the bucket and
+  adds a `warning`; adopted buckets are not touched); budget number: required unless
   the session user is an admin (`budget.validate_budget_number`); placement: only from
   the admin-allowed list. The bucket is created through croit, the SQLite row written,
   and the `bucketeer-budget` tag set with the USER's own S3 key (`s3client`). If the tag
@@ -52,7 +55,7 @@ from typing import Annotated, Any
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from . import s3docs
 from .admin import croit_http_error
@@ -92,8 +95,9 @@ class CreateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(max_length=256)
     budgetNumber: str | None = Field(default=None, max_length=4096)
-    versioning: bool = False
+    versioning: bool = True  # Q7: on unless the user unticks it
     objectLock: bool = False
+    noncurrentDays: StrictInt | None = 30  # null: no cleanup rule
     placement: str | None = Field(default=None, max_length=256)
 
 
@@ -180,6 +184,22 @@ async def _audit_unsure(request: Request, actor: str, action: str, target: str, 
                      error=type(exc).__name__, **details)
     except Exception:
         log.exception("could not audit %s for %s", action, target)
+
+
+def _write_noncurrent_rule(s3, bucket: str, days: int) -> None:
+    rule = s3docs.expire_noncurrent_rule(days)
+    s3docs.update_bucket_lifecycle(s3, bucket, lambda cfg: s3docs.upsert_rules(cfg, [rule]))
+
+
+async def _try_noncurrent_rule(request: Request, uid: str, short: str, days: int) -> bool:
+    try:
+        await request.app.state.s3.call(uid, _write_noncurrent_rule, short, days)
+        return True
+    except HTTPException as e:
+        log.warning("noncurrent rule not written for %s: %s", short, e.detail)
+    except Exception as e:  # the bucket stays; the user can set the rule under Lifecycle
+        log.warning("noncurrent rule not written for %s: %s", short, type(e).__name__)
+    return False
 
 
 async def _try_tag(request: Request, uid: str, short: str, value: str) -> bool:
@@ -342,6 +362,12 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
         raise HTTPException(422, "That placement is not available to you.")
     placement = placement or place["default"]
 
+    if body.noncurrentDays is not None:
+        try:
+            s3docs.expire_noncurrent_rule(body.noncurrentDays)
+        except s3docs.S3DocError as e:
+            raise HTTPException(422, str(e)) from None
+
     full = _full(acct.uid, name)
     taken = ("A bucket with this name already exists. "
              "Bucket names are unique across the whole storage system.")
@@ -411,15 +437,22 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
                 except Exception:
                     log.exception("could not mark the tag of %s as synced", full)
                     tag_ok = False
+        versioned = body.versioning or body.objectLock
+        # Adopted buckets keep whatever lifecycle they have: we did not create them, so
+        # we neither enable versioning nor add a rule.
+        rule_days = body.noncurrentDays if (versioned and not adopted) else None
+        rule_ok = None
+        if rule_days is not None:
+            rule_ok = await _try_noncurrent_rule(request, acct.uid, name, rule_days)
         try:
             await _audit(request, user.username, "bucket.create", full, uid=acct.uid,
-                         budget=budget, versioning=body.versioning or body.objectLock,
+                         budget=budget, versioning=versioned,
+                         noncurrentDays=rule_days, noncurrentRuleApplied=rule_ok,
                          objectLock=body.objectLock, tagSynced=tag_ok,
                          placement=None if adopted else placement,
                          recorded=recorded, adopted=adopted)
         except Exception:
             log.exception("could not audit the creation of %s", full)
-    versioned = body.versioning or body.objectLock
     out: dict[str, Any] = {
         "name": name, "budgetNumber": budget,
         "versioning": "enabled" if versioned else "off",
@@ -438,8 +471,11 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
     elif not tag_ok:
         warnings.append("The bucket was created, but its budget number could not be saved "
                         "as a bucket tag yet. It will be retried automatically.")
+    if rule_ok is False:
+        warnings.append("Versioning is on but the old-version cleanup rule could not be set. "
+                        "Set it under Lifecycle.")
     if warnings:
-        out["warning"] = warnings[0]
+        out["warning"] = " ".join(warnings)
     return out
 
 

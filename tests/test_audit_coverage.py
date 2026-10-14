@@ -181,7 +181,8 @@ def run(tmp_path_factory, moto_server):
 
     # buckets
     r.step("POST /api/buckets", lambda: a.post(
-        "/api/buckets", json={"name": "alice-cov", "budgetNumber": "WT-1"}, headers=H))
+        "/api/buckets", headers=H,
+        json={"name": "alice-cov", "budgetNumber": "WT-1", "versioning": False}))
     r.step("PUT /api/buckets/{name}/versioning", lambda: a.put(
         "/api/buckets/alice-cov/versioning", json={"enabled": True}, headers=H))
     r.step("PUT /api/buckets/{name}/lifecycle", lambda: a.put(
@@ -192,7 +193,8 @@ def run(tmp_path_factory, moto_server):
         json={"key": "data/file-0001.bin", "expiresIn": 3600}))
     # a bucket whose tag write fails, then reconcile
     env.break_tagging()
-    a.post("/api/buckets", json={"name": "alice-tag", "budgetNumber": "WT-2"}, headers=H)
+    a.post("/api/buckets", headers=H,
+           json={"name": "alice-tag", "budgetNumber": "WT-2", "versioning": False})
     env.fix_tagging()
     r.step("POST /api/buckets/reconcile", lambda: a.post("/api/buckets/reconcile", headers=H))
 
