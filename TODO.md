@@ -112,7 +112,7 @@ skips them too.
 - [x] Admin setting: budget number pattern plus example hint (Q2), validated
   with the same safe-regex machinery as the naming rules. Default quota
   setting defaults to 1 TiB instead of "Not set" (Q4).
-- [ ] Chargeback CSV export on the admin page: bucket, owner, budget number,
+- [x] Chargeback CSV export on the admin page: bucket, owner, budget number,
   usage (Q2).
 - [ ] Admin: list all bucket keys (owner, bucket, access, status) and revoke
   any of them, audited as the admin.

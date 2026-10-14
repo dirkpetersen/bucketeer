@@ -6,11 +6,15 @@ from the session. Responses never contain S3 keys or secrets.
 """
 
 import asyncio
+import csv
+import io
 import logging
 import re
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
 
 from .auth import SessionUser, require_admin
@@ -200,10 +204,14 @@ async def list_users(_a: Admin, croit: Croit, db: Db):
     return {"users": out}
 
 
-@router.get("/buckets")
-async def list_buckets(_a: Admin, croit: Croit, db: Db):
+async def _judged_buckets(croit: CroitClient, db: Database, *, with_users: bool = False):
+    """(bucket views, metadata rows by name, croit users by uid or {}); each view
+    carries `budgetMatches` against the current admin pattern."""
     try:
-        buckets = await croit.list_buckets()
+        if with_users:
+            buckets, users = await asyncio.gather(croit.list_buckets(), croit.list_users())
+        else:
+            buckets, users = await croit.list_buckets(), []
     except CroitClientError as e:
         raise croit_http_error(e) from e
     meta = {m["name"]: m for m in await db.run(db.buckets.list)}
@@ -226,7 +234,70 @@ async def list_buckets(_a: Admin, croit: Croit, db: Db):
 
     out = await asyncio.to_thread(build)
     out.sort(key=lambda b: b["name"].lower())
+    return out, meta, {str(u["uid"]): u for u in users}, pattern
+
+
+@router.get("/buckets")
+async def list_buckets(_a: Admin, croit: Croit, db: Db):
+    out, _meta, _users, _pattern = await _judged_buckets(croit, db)
     return {"buckets": out}
+
+
+# -- chargeback export (Q2) ----------------------------------------------------------
+
+CHARGEBACK_COLUMNS = [
+    "bucket", "tenant", "owner_uid", "owner_name", "budget_number", "budget_status",
+    "objects", "bytes", "size_gib", "quota_bytes", "created_at",
+]
+_FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_safe(value: Any) -> str:
+    """One CSV cell as text, neutralizing spreadsheet formulas: a cell starting
+    with = + - @ tab or CR gets a leading apostrophe."""
+    text = "" if value is None else str(value)
+    return "'" + text if text.startswith(_FORMULA_START) else text
+
+
+def budget_status(number: str | None, matches: bool | None, pattern: str = "") -> str:
+    """missing (no number) | ok | mismatch | unknown (pattern check timed out or
+    was cut off). With no pattern set, any number is ok."""
+    if not number:
+        return "missing"
+    if not pattern:
+        return "ok"
+    return "unknown" if matches is None else "ok" if matches else "mismatch"
+
+
+@router.get("/export/chargeback.csv")
+async def export_chargeback(admin: Admin, croit: Croit, db: Db):
+    """One row per bucket for finance: owner, budget number and usage. UTF-8
+    with a BOM, so Excel opens it with the right encoding."""
+    views, meta, users, pattern = await _judged_buckets(croit, db, with_users=True)
+    buf = io.StringIO(newline="")
+    w = csv.writer(buf, lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL)
+    w.writerow(CHARGEBACK_COLUMNS)
+    for v in views:
+        q = v["quota"]
+        quota = q["maxSize"] if q["enabled"] else None
+        created = (meta.get(v["name"]) or {}).get("created_at")
+        number = v["budgetNumber"]
+        w.writerow([csv_safe(c) for c in (
+            v["name"], v["tenant"], v["owner"], (users.get(v["owner"]) or {}).get("name") or "",
+            number, budget_status(number, v["budgetMatches"], pattern), v["objects"], v["bytes"],
+            f"{v['bytes'] / 1024**3:.3f}", quota, created,
+        )])
+    await _audit(db, admin, "admin.export.chargeback", "report", "chargeback",
+                 {"rows": len(views)})
+    day = datetime.now(UTC).strftime("%Y-%m-%d")
+    return Response(
+        "\ufeff" + buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="bucketeer-chargeback-{day}.csv"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 # -- quotas ----------------------------------------------------------------------

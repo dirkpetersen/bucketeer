@@ -141,8 +141,10 @@ export function renderAdmin() {
   const dirBtn = h("button", { class: "btn btn-icon sort-dir", type: "button" });
   const onlyBtn = h("button", { class: "btn btn-filter", type: "button", "aria-pressed": "false" });
   const refreshBtn = h("button", { class: "btn btn-icon", type: "button", "aria-label": "Refresh", title: "Refresh" }, icon("refresh"));
+  const exportEl = h("a", { class: "btn", href: "/api/admin/export/chargeback.csv", download: "", title: "One row per bucket: bucket, tenant, owner, budget number and status, objects, bytes, GiB, quota, created. Opens in Excel." }, "Export CSV");
+  const exportNote = h("p", { class: "export-note", text: "Export CSV lists every bucket (not just the filtered ones): bucket, tenant, owner, budget number and status, objects, bytes, GiB, quota and creation date, for chargeback. UTF-8, opens in Excel." });
   const filtersEl = h("div", { class: "admin-filters" },
-    h("div", { class: "search" }, icon("search", "icon search-ic"), search), sortSel, dirBtn, onlyBtn);
+    h("div", { class: "search" }, icon("search", "icon search-ic"), search), sortSel, dirBtn, onlyBtn, exportEl);
   const countEl = h("span", { class: "count", "aria-live": "polite" });
   const tableHost = h("div", { class: "table-host" });
   const settings = renderSettings();
@@ -253,6 +255,7 @@ export function renderAdmin() {
     const tab = state.tab;
     const isSettings = tab === "settings";
     filtersEl.hidden = isSettings;
+    exportNote.hidden = tab !== "buckets";
     for (const t of tabs) t.setAttribute("aria-selected", String(t.id === `tab-${tab}`)), t.tabIndex = t.id === `tab-${tab}` ? 0 : -1;
     paintStats();
     if (isSettings) {
@@ -263,6 +266,7 @@ export function renderAdmin() {
       return;
     }
     const d = state.data[tab];
+    exportEl.hidden = tab !== "buckets";
     onlyBtn.textContent = tab === "users" ? "Suspended only" : "Missing budget number";
     onlyBtn.setAttribute("aria-pressed", String(state.only[tab]));
     onlyBtn.classList.toggle("on", state.only[tab]);
@@ -312,5 +316,6 @@ export function renderAdmin() {
     h("section", { class: "card admin-card", "aria-label": "Administration" },
       h("div", { class: "admin-bar" }, tablist, h("div", { class: "admin-tools" }, countEl, refreshBtn)),
       filtersEl,
+      exportNote,
       h("div", { id: "admin-panel", role: "tabpanel", "aria-live": "polite" }, tableHost)));
 }

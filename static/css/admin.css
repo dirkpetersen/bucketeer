@@ -134,3 +134,6 @@
 .qd-pair { display: grid; grid-template-columns: minmax(0, 1fr) 6rem; gap: var(--sp-2); }
 .qd .input:disabled { opacity: 0.5; cursor: not-allowed; background: var(--surface-2); }
 .qd-error { padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); background: var(--danger-bg); color: var(--danger); font-size: var(--fs-sm); }
+
+.export-note { margin: 0; padding: 0 var(--sp-4) var(--sp-3); color: var(--text-muted, inherit); font-size: .85rem; }
+.export-note[hidden] { display: none; }
