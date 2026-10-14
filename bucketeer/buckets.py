@@ -561,6 +561,8 @@ async def delete_bucket(name: str, request: Request, acct: Account, user: User,
     # The bucket's scoped keys have nothing left to reach: delete their RGW users.
     from .bucket_keys import revoke_for_deleted_bucket
     keys = await revoke_for_deleted_bucket(request, acct, full)
+    from .sharing import revoke_for_deleted_bucket as revoke_shares
+    await revoke_shares(request, user.username, full)
     out: dict[str, Any] = {"name": short}
     if keys["revoked"]:
         out["keysRevoked"] = keys["revoked"]

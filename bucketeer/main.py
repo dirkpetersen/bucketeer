@@ -21,6 +21,7 @@ from . import (
     rgw_user,
     s3client,
     share_links,
+    sharing,
 )
 from .config import Settings
 from .croit import CroitClient
@@ -145,6 +146,7 @@ def create_app(
     api.include_router(audit_viewer.router)
     api.include_router(lifecycle.router)
     api.include_router(share_links.router)
+    api.include_router(sharing.router)
     api.include_router(admin.router)
     api.include_router(admin_settings.router)
     app.include_router(api)

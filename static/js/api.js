@@ -144,3 +144,13 @@ export const createBucketKey = (bucket, label, access) =>
   api(`/buckets/${encodeURIComponent(bucket)}/keys`, { method: "POST", json: { label, access } });
 export const revealBucketKey = (id) => api(`/bucket-keys/${Number(id)}/reveal`, { method: "POST" });
 export const revokeBucketKey = (id) => api(`/bucket-keys/${Number(id)}`, { method: "DELETE" });
+
+// Sharing a bucket with people. lookup -> {username, displayName, isYou} (exact match, rate
+// limited); shares -> {shares: [{id, recipient, displayName, uid, access, createdAt, status}], checked}.
+const shareBase = (bucket) => `/buckets/${encodeURIComponent(bucket)}/shares`;
+export const lookupShareRecipient = (bucket, q) => api(`/buckets/${encodeURIComponent(bucket)}/share-lookup?q=${encodeURIComponent(q)}`);
+export const listBucketShares = (bucket) => api(shareBase(bucket));
+export const createBucketShare = (bucket, login, access) => api(shareBase(bucket), { method: "POST", json: { login, access } });
+export const updateBucketShare = (bucket, id, access) => api(`${shareBase(bucket)}/${encodeURIComponent(id)}`, { method: "PUT", json: { access } });
+export const revokeBucketShare = (bucket, id) => api(`${shareBase(bucket)}/${encodeURIComponent(id)}`, { method: "DELETE" });
+export const sharedWithMe = () => api("/shared-with-me");

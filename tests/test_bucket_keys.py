@@ -677,20 +677,27 @@ def test_startup_cleanup_runs_in_background_and_health_is_instant(env, monkeypat
 
 
 def test_real_startup_cleanup_through_the_lifespan(env, monkeypatch):
-    import time
+    import threading
 
     from fastapi.testclient import TestClient
 
     from bucketeer import bucket_keys
     row = stale_pending(env)
+    done = threading.Event()
+    real = bucket_keys.cleanup_pending
+
+    async def signalled(*a, **kw):
+        try:
+            return await real(*a, **kw)
+        finally:
+            done.set()  # the task finished: rows and audit are written
+
+    monkeypatch.setattr(bucket_keys, "cleanup_pending", signalled)
     monkeypatch.setattr(bucket_keys, "CLEANUP_ON_START", True)
     monkeypatch.setattr(bucket_keys, "CLEANUP_GRACE", 0.0)
     with TestClient(env.app) as c:
         assert c.get(env.settings.health_check_path).status_code == 200
-        for _ in range(200):
-            if env.db.bucket_keys.get(row["id"])["revoked_at"]:
-                break
-            time.sleep(0.05)
+        assert done.wait(60), "the startup clean-up never finished"
     assert env.db.bucket_keys.get(row["id"])["revoked_at"]
     assert "alice+backup" not in env.croit_state.users
     assert env.audit("bucket_key.cleanup")

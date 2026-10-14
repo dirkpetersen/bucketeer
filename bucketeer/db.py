@@ -119,6 +119,26 @@ MIGRATIONS: list[str] = [
     """
     CREATE INDEX audit_log_action ON audit_log (action);
     """,
+    # v7: shares of a bucket with an AD user (bucket policy statement is the source of
+    # truth for access; this table gives names for listing and the recipient's view).
+    """
+    CREATE TABLE shares (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        bucket_name    TEXT NOT NULL,           -- croit name (tenant:bucket)
+        owner_uid      TEXT NOT NULL,
+        owner_name     TEXT NOT NULL DEFAULT '',
+        recipient_ad   TEXT NOT NULL,
+        recipient_uid  TEXT NOT NULL,
+        recipient_name TEXT NOT NULL DEFAULT '',
+        access         TEXT NOT NULL CHECK (access IN ('read', 'readwrite')),
+        created_at     TEXT NOT NULL,
+        created_by     TEXT NOT NULL,
+        revoked_at     TEXT
+    );
+    CREATE UNIQUE INDEX shares_live ON shares (bucket_name, recipient_uid COLLATE NOCASE)
+        WHERE revoked_at IS NULL;
+    CREATE INDEX shares_recipient ON shares (recipient_uid COLLATE NOCASE);
+    """,
 ]
 
 _MISSING: Any = object()
@@ -193,6 +213,7 @@ class Database:
         self.profiles = UserProfiles(self)
         self.buckets = Buckets(self)
         self.bucket_keys = BucketKeys(self)
+        self.shares = Shares(self)
         self.audit = AuditLog(self)
 
     # -- plumbing -----------------------------------------------------------
@@ -397,6 +418,64 @@ class Buckets(_Repo):
     def delete(self, name: str) -> bool:
         with self.db.tx() as c:
             return c.execute("DELETE FROM buckets WHERE name = ?", (name,)).rowcount > 0
+
+
+class Shares(_Repo):
+    """Bucket shares with AD users. Live rows have `revoked_at IS NULL`; at most one
+    live row per (bucket, recipient uid)."""
+
+    def create(self, bucket_name: str, owner_uid: str, owner_name: str, recipient_ad: str,
+               recipient_uid: str, recipient_name: str, access: str,
+               created_by: str) -> dict[str, Any]:
+        with self.db.tx() as c:
+            cur = c.execute(
+                "INSERT INTO shares (bucket_name, owner_uid, owner_name, recipient_ad, "
+                "recipient_uid, recipient_name, access, created_at, created_by) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (bucket_name, owner_uid, owner_name, recipient_ad, recipient_uid,
+                 recipient_name, access, now(), created_by),
+            )
+            return self.get(cur.lastrowid)  # type: ignore[return-value]
+
+    def get(self, share_id: int) -> dict[str, Any] | None:
+        return self.db.query_one("SELECT * FROM shares WHERE id = ?", (share_id,))
+
+    def live_for(self, bucket_name: str, recipient_uid: str) -> dict[str, Any] | None:
+        return self.db.query_one(
+            "SELECT * FROM shares WHERE bucket_name = ? AND recipient_uid = ? COLLATE NOCASE "
+            "AND revoked_at IS NULL", (bucket_name, recipient_uid))
+
+    def list_live(self, bucket_name: str | None = None,
+                  recipient_uid: str | None = None) -> list[dict[str, Any]]:
+        where, params = ["revoked_at IS NULL"], []
+        if bucket_name is not None:
+            where.append("bucket_name = ?")
+            params.append(bucket_name)
+        if recipient_uid is not None:
+            where.append("recipient_uid = ? COLLATE NOCASE")
+            params.append(recipient_uid)
+        return self.db.query(
+            f"SELECT * FROM shares WHERE {' AND '.join(where)} ORDER BY id", tuple(params))
+
+    def set_access(self, share_id: int, access: str) -> bool:
+        with self.db.tx() as c:
+            return c.execute("UPDATE shares SET access = ? WHERE id = ? AND revoked_at IS NULL",
+                             (access, share_id)).rowcount > 0
+
+    def revoke(self, share_id: int) -> bool:
+        with self.db.tx() as c:
+            return c.execute("UPDATE shares SET revoked_at = ? WHERE id = ? "
+                             "AND revoked_at IS NULL", (now(), share_id)).rowcount > 0
+
+    def revoke_bucket(self, bucket_name: str) -> list[dict[str, Any]]:
+        """Revoke every live share of a (deleted) bucket; returns the rows revoked."""
+        with self.db.tx() as c:
+            rows = [dict(r) for r in c.execute(
+                "SELECT * FROM shares WHERE bucket_name = ? AND revoked_at IS NULL",
+                (bucket_name,))]
+            c.execute("UPDATE shares SET revoked_at = ? WHERE bucket_name = ? "
+                      "AND revoked_at IS NULL", (now(), bucket_name))
+            return rows
 
 
 class BucketKeys(_Repo):

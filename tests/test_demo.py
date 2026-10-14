@@ -109,3 +109,20 @@ def test_bucketeer_never_imports_mock():
     bad = re.compile(r"^\s*(import\s+mock\b|from\s+mock\b)|[\"']mock[./\"']", re.M)
     hits = [str(f) for f in pkg.rglob("*.py") if bad.search(f.read_text())]
     assert hits == []
+
+
+def test_demo_directory_lookup_user_and_sharing(tmp_path):
+    import asyncio
+
+    d = demo.DemoDirectory()
+    assert asyncio.run(d.lookup_user("ERIN@demo.example")).username == "erin"
+    import pytest
+
+    from bucketeer.ldapauth import InvalidCredentials
+
+    with pytest.raises(InvalidCredentials):
+        asyncio.run(d.lookup_user("nobody"))
+    with demo_client(tmp_path) as c:
+        c.post("/api/login", json={"login": "alice", "password": demo.DEMO_PASSWORD}, headers=H)
+        r = c.get("/api/buckets/alice-data/share-lookup", params={"q": "bob"})
+        assert r.status_code == 200 and r.json()["displayName"] == "Bob Brown"

@@ -7,6 +7,7 @@ import { toast } from "../components/toast.js";
 import { renderAdmin } from "./admin.js";
 import { renderProfile } from "./profile.js";
 import { bucketsCard } from "./buckets.js";
+import { sharedWithMeCard } from "./shared-with-me.js";
 
 const THEMES = [["system", "monitor", "Theme: system"], ["light", "sun", "Theme: light"], ["dark", "moon", "Theme: dark"]];
 
@@ -82,7 +83,8 @@ export function renderDashboard({ me, appName, onLogout, page = "home" }) {
       h("span", { class: "chip adv-note" }, h("span", { class: "dot" }), "Advanced mode on")),
     h("div", { class: "grid" },
       credentialsCard(),
-      bucketsCard()));
+      bucketsCard(),
+      sharedWithMeCard()));
 
   shell.append(
     h("a", { class: "skip-link", href: "#main", text: "Skip to content" }),

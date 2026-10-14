@@ -8,6 +8,7 @@ import { createBucketDialog } from "../components/create-bucket-dialog.js";
 import { bucketKeysDialog } from "../components/bucket-keys-dialog.js";
 import { lifecycleDialog } from "../components/lifecycle-dialog.js";
 import { shareLinkDialog } from "../components/share-link-dialog.js";
+import { shareDialog } from "../components/share-dialog.js";
 
 // The Buckets card on the home page: the user's own buckets with usage, quota and
 // budget number; create and delete. `isAdvanced()` tells whether the global
@@ -62,7 +63,7 @@ function usageBlock(b) {
   return out;
 }
 
-function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, busy) {
+function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, busy) {
   const created = b.createdAt ? new Date(b.createdAt) : null;
   const meta = h("div", { class: "bk-meta" });
   if (created && !Number.isNaN(created.getTime())) {
@@ -92,13 +93,18 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, busy) {
     title: "Create a temporary download link for one file",
     on: { click: () => onShare(b) },
   }, icon("download"), h("span", { class: "bk-del-l", text: "Share link" }));
+  const peopleBtn = h("button", {
+    class: "btn btn-sm", type: "button", disabled: busy, "aria-label": `Share bucket ${b.name} with people`,
+    title: "Give colleagues read-only or read and write access",
+    on: { click: () => onPeople(b) },
+  }, icon("users"), h("span", { class: "bk-del-l", text: "Share" }));
   const vsw = versionSwitch(b, onToggle);
   budget.classList.add("bk-budget-slot");
   return h("li", { class: "bk-row", "data-busy": String(!!busy) },
     h("span", { class: "bk-ic", "aria-hidden": "true" }, icon("bucket")),
     h("div", { class: "bk-main" }, h("b", { class: "bk-name", text: b.name }), meta),
     usageBlock(b),
-    h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, vsw, shareBtn, lcBtn, keysBtn, del)));
+    h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, vsw, peopleBtn, shareBtn, lcBtn, keysBtn, del)));
 }
 
 export function bucketsCard() {
@@ -125,7 +131,7 @@ export function bucketsCard() {
         h("div", { class: "empty-acts" }, h("button", { class: "btn btn-primary", type: "button", on: { click: create } }, icon("plus"), "Create your first bucket"))));
       return;
     }
-    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
+    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
   }
 
   function failed(err) {
@@ -210,6 +216,11 @@ export function bucketsCard() {
 
   async function manageLifecycle(b) {
     const res = await lifecycleDialog({ bucket: b.name });
+    if (res.error && res.error.status !== 401) toast.error(res.error.message);
+  }
+
+  async function managePeople(b) {
+    const res = await shareDialog({ bucket: b.name });
     if (res.error && res.error.status !== 401) toast.error(res.error.message);
   }
 

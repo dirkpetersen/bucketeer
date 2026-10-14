@@ -221,6 +221,12 @@ class AdAuthenticator:
         """resolve() then verify(). Raises InvalidCredentials or LdapUnavailable."""
         return await self.verify(await self.resolve(login, password), password)
 
+    async def lookup_user(self, login: str) -> AuthUser:
+        """Find a person who could log in (same filter, exactly one match, required
+        group, nested) WITHOUT a password bind: for sharing with a colleague.
+        Raises InvalidCredentials (`.reason` for logs only) or LdapUnavailable."""
+        return await asyncio.to_thread(self._lookup, login)
+
     async def resolve(self, login: str, password: str) -> Resolved:
         """Service bind, search, exactly-one check, group checks. No user bind.
         `password` is only pre-validated here."""
@@ -251,46 +257,68 @@ class AdAuthenticator:
         except (LDAPSASLPrepError, LDAPPasswordIsMandatoryError):
             raise InvalidCredentials("password_not_encodable") from None
 
-        flt = s.ldap_user_filter.replace("{login}", escape_filter_chars(login))
-        uattr, dattr, eattr = (
-            s.ldap_username_attribute,
-            s.ldap_display_name_attribute,
-            s.ldap_email_attribute,
-        )
         svc, url = self._service_session()
         try:
-            try:
-                entries = svc.search(s.ldap_base_dn, flt, [uattr, dattr, eattr], size_limit=2)
-            except SizeLimitExceeded:
-                raise InvalidCredentials("ambiguous_match") from None
-            if not entries:
-                raise InvalidCredentials("no_such_user")
-            if len(entries) > 1:
-                raise InvalidCredentials("ambiguous_match")
-            entry = entries[0]
-            username = entry.attrs.get(uattr, "").strip()
-            if not username:
-                log.error("LDAP entry %s has no %s attribute", entry.dn, uattr)
-                raise InvalidCredentials("no_username_attribute")
-
-            if s.ldap_required_group_dn and not self._is_member(
-                svc, entry.dn, s.ldap_required_group_dn
-            ):
-                raise InvalidCredentials("not_in_required_group")
-
+            entry, username = self._find_entry(svc, login)
             # Only handed out after verify() succeeds.
             is_admin = bool(s.ldap_admin_group_dn) and self._is_member(
                 svc, entry.dn, s.ldap_admin_group_dn
             )
             user = AuthUser(
                 username=username,
-                display_name=entry.attrs.get(dattr, "").strip(),
-                email=entry.attrs.get(eattr, "").strip(),
+                display_name=entry.attrs.get(s.ldap_display_name_attribute, "").strip(),
+                email=entry.attrs.get(s.ldap_email_attribute, "").strip(),
                 is_admin=is_admin,
             )
             return Resolved(entry.dn, url, user)
         finally:
             svc.close()
+
+    def _find_entry(self, svc: LdapSession, login: str) -> tuple[LdapEntry, str]:
+        """Escaped search, exactly one match, username attribute, required-group check
+        (nested). Shared by login (`_resolve`) and recipient lookup (`_lookup`)."""
+        s = self.s
+        flt = s.ldap_user_filter.replace("{login}", escape_filter_chars(login))
+        uattr, dattr, eattr = (
+            s.ldap_username_attribute,
+            s.ldap_display_name_attribute,
+            s.ldap_email_attribute,
+        )
+        try:
+            entries = svc.search(s.ldap_base_dn, flt, [uattr, dattr, eattr], size_limit=2)
+        except SizeLimitExceeded:
+            raise InvalidCredentials("ambiguous_match") from None
+        if not entries:
+            raise InvalidCredentials("no_such_user")
+        if len(entries) > 1:
+            raise InvalidCredentials("ambiguous_match")
+        entry = entries[0]
+        username = entry.attrs.get(uattr, "").strip()
+        if not username:
+            log.error("LDAP entry %s has no %s attribute", entry.dn, uattr)
+            raise InvalidCredentials("no_username_attribute")
+        if s.ldap_required_group_dn and not self._is_member(
+            svc, entry.dn, s.ldap_required_group_dn
+        ):
+            raise InvalidCredentials("not_in_required_group")
+        return entry, username
+
+    def _lookup(self, login: str) -> AuthUser:
+        login = login.strip()
+        if not login:
+            raise InvalidCredentials("empty_login")
+        svc, _ = self._service_session()
+        try:
+            entry, username = self._find_entry(svc, login)
+        finally:
+            svc.close()
+        s = self.s
+        return AuthUser(
+            username=username,
+            display_name=entry.attrs.get(s.ldap_display_name_attribute, "").strip(),
+            email=entry.attrs.get(s.ldap_email_attribute, "").strip(),
+            is_admin=False,  # not looked at: lookups only identify people
+        )
 
     def _service_session(self) -> tuple[LdapSession, str]:
         """First domain controller that accepts the service bind."""

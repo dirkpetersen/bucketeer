@@ -42,6 +42,9 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "PUT /api/buckets/{name}/versioning": ("bucket.versioning",),
     "PUT /api/buckets/{name}/lifecycle": ("bucket.lifecycle",),
     "POST /api/buckets/{name}/share-link": ("bucket.share_link",),
+    "POST /api/buckets/{name}/shares": ("bucket.share",),
+    "PUT /api/buckets/{name}/shares/{share_id}": ("bucket.share_update",),
+    "DELETE /api/buckets/{name}/shares/{share_id}": ("bucket.unshare",),
     "DELETE /api/buckets/{name}": ("bucket.delete",),
     "POST /api/buckets/{name}/keys": ("bucket_key.create",),
     "POST /api/bucket-keys/{key_id}/reveal": ("bucket_key.reveal",),
@@ -75,6 +78,7 @@ EVENTS = {
     "bucket.delete_failed": "croit down or task failed while deleting a bucket",
     "bucket.versioning_failed": "croit down while changing versioning",
     "bucket_key.cleanup": "startup clean-up of stale pending bucket keys (actor system)",
+    "bucket.unshare": "deleting a bucket marks its shares revoked (reason bucket_deleted)",
     "rgw.user.create": "first S3 use of a new AD user creates the RGW user",
 }
 
@@ -200,6 +204,16 @@ def run(tmp_path_factory, moto_server):
         f"/api/bucket-keys/{kid}/reveal", headers=H))
     r.step("DELETE /api/bucket-keys/{key_id}", lambda: a.delete(f"/api/bucket-keys/{kid}",
                                                                   headers=H))
+    # sharing: share, change access, revoke; a second share is left for the bucket delete
+    sh = r.step("POST /api/buckets/{name}/shares", lambda: a.post(
+        "/api/buckets/alice-cov/shares", json={"login": "bob", "access": "read"}, headers=H))
+    sid = sh.json()["id"]
+    r.step("PUT /api/buckets/{name}/shares/{share_id}", lambda: a.put(
+        f"/api/buckets/alice-cov/shares/{sid}", json={"access": "readwrite"}, headers=H))
+    r.step("DELETE /api/buckets/{name}/shares/{share_id}", lambda: a.delete(
+        f"/api/buckets/alice-cov/shares/{sid}", headers=H))
+    ok(a.post("/api/buckets/alice-cov/shares", json={"login": "bob", "access": "read"},
+              headers=H))
     # failures with an unknown outcome (croit 5xx) are audited too
     def fail(method, needle):
         env.transport.fail = lambda q: (httpx.Response(500, json={"message": "boom"})

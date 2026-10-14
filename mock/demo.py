@@ -85,6 +85,10 @@ class DemoDirectory:
         user = self._find(login)
         return Resolved(dn=f"CN={user.username},OU=Demo", url=PLACEHOLDER_LDAP_URL, user=user)
 
+    async def lookup_user(self, login: str) -> AuthUser:
+        """Recipient lookup for sharing (no password), like `AdAuthenticator.lookup_user`."""
+        return self._find(login)
+
     async def verify(self, resolved: Resolved, password: str) -> AuthUser:
         if not secrets.compare_digest(password.encode(), self.password.encode()):
             raise InvalidCredentials("bad_password")

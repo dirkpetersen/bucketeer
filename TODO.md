@@ -84,7 +84,7 @@ skips them too.
 - [x] Versioning toggle (enable/suspend).
 - [x] Shared-document helpers for bucket policy and lifecycle: read-modify-write
   that only touches `bucketeer-*` Sids/IDs. Unit-test heavily.
-- [ ] Sharing: share a bucket with an AD user (read-only or read-write); list
+- [x] Sharing: share a bucket with an AD user (read-only or read-write); list
   and revoke shares. Recipients are people who could log in (Q8): members of
   `LDAP_REQUIRED_GROUP_DN` when set, anyone in AD when not; a recipient
   without an S3 account gets one created on the spot.
@@ -131,6 +131,9 @@ skips them too.
 ## Phase 4: Advanced (behind the global Advanced toggle)
 
 - [x] Advanced toggle, remembered per user.
+- [ ] Bucket row polish: each row now has seven controls and the actions wrap;
+  group the less common ones (Keys, Lifecycle, Share link, Share) into a
+  "More" menu that is keyboard-accessible and works on phones.
 - [ ] Raw bucket policy editor, with a warning before editing `bucketeer-*`
   statements.
 - [ ] Bucket and object ACLs.
@@ -168,6 +171,9 @@ available, and fix the client and the mock if reality differs:
   an empty list?
 - [ ] (needs cluster) Key `user` field for tenant users in `GET /s3/users/{uid}/keys`:
   `tenant$uid` (assumed) or bare uid? If bare, tenant users see "no access keys".
+- [ ] (needs cluster) Sharing: RGW honours a `bucketeer-share-*` statement for the
+  recipient's own keys (read vs readwrite), and the cross-tenant address
+  `tenant:bucket` works with the AWS CLI.
 - [ ] (needs cluster) User quota: `maxObjects` null means unlimited and
   `maxSize` is in bytes (1 TiB default).
 - [ ] (needs cluster) RGW uids are case-sensitive (`Alice` and `alice` are
