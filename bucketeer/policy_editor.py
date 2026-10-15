@@ -26,6 +26,12 @@ OWN S3 key, CSRF on PUT/DELETE under the parent `/api` router).
   managedChanges: [sid, ...]}`, nothing written. Sharing then shows `out_of_sync`
   (repairable); a bucket key whose statement is gone simply has no access. No Bucketeer
   rows are changed automatically.
+- Public and self-lockout statements (Q12): a new or altered statement that is an `Allow`
+  for everyone or a `Deny` that would lock the owner out is 422 `{detail, errors: [{statement
+  (index), sid, kind: "public"|"lockout", message}]}`, nothing written, no audit entry. One
+  already stored (whole statement identical after canonical JSON) may be kept or removed.
+  Judged inside the lock against the stored policy; definitions in `policy_guard.py`. GET
+  and every write answer also carry `flags: [{index, sid, kind}]` for the stored/new policy.
 - Audit `bucket.policy` / `bucket.policy_delete`: statement counts, changed Sids and the
   before/after documents (policies hold no secrets; each omitted above 8 KB).
 """
@@ -41,10 +47,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, StrictBool
 
-from . import s3docs
+from . import policy_guard, s3docs
 from .auth import SessionUser, require_user
 from .buckets import _audit, _full, _own_buckets, _own_name
-from .rgw_user import RgwAccount, require_active_rgw_user
+from .rgw_user import RgwAccount, require_active_rgw_user, split_uid
 
 log = logging.getLogger("bucketeer.policy_editor")
 
@@ -79,6 +85,11 @@ class EtagMismatch(Exception):
         self.current = current
 
 
+class Refused(Exception):
+    def __init__(self, errors: list[dict]):
+        self.errors = errors
+
+
 class ConfirmNeeded(Exception):
     def __init__(self, sids: list[str]):
         self.sids = sids
@@ -94,8 +105,16 @@ def managed_sids(policy: dict | None) -> list[str]:
     return [s["Sid"] for s in stmts if s3docs.is_managed(s.get("Sid"))]
 
 
-def view(policy: dict | None) -> dict[str, Any]:
-    return {"policy": policy, "managedSids": managed_sids(policy), "etag": etag_of(policy)}
+def view(policy: dict | None, bucket: str | None = None, uid: str | None = None) -> dict[str, Any]:
+    out = {"policy": policy, "managedSids": managed_sids(policy), "etag": etag_of(policy)}
+    if bucket is not None and uid is not None:
+        tenant, bare = split_uid(uid)
+        out["flags"] = policy_guard.flags(policy, bucket, tenant, bare)
+        # Only for the browser's early warning (it mirrors policy_guard); not authoritative.
+        out["owner"] = {"arn": policy_guard.owner_arn(tenant, bare),
+                        "tenant": tenant,
+                        "bucketArns": policy_guard.bucket_arns(bucket, tenant)}
+    return out
 
 
 def too_deep(doc: Any, limit: int = MAX_DEPTH) -> bool:
@@ -193,7 +212,7 @@ def _read(s3, bucket: str) -> dict | None:
         return None
 
 
-def _apply(s3, bucket: str, new: dict | None, etag: str, confirm: bool) -> dict:
+def _apply(s3, bucket: str, uid: str, new: dict | None, etag: str, confirm: bool) -> dict:
     """Etag check, managed-change check and write, all under the bucket lock."""
     seen: dict[str, Any] = {}
 
@@ -201,6 +220,11 @@ def _apply(s3, bucket: str, new: dict | None, etag: str, confirm: bool) -> dict:
         if etag_of(current) != etag:
             raise EtagMismatch(current)
         seen["before"] = copy.deepcopy(current)
+        if new is not None:
+            tenant, bare = split_uid(uid)
+            errors = policy_guard.refusals(current, new, bucket, tenant, bare)
+            if errors:
+                raise Refused(errors)
         seen["managed"] = managed_changes(current, new)
         if seen["managed"] and not confirm:
             raise ConfirmNeeded(seen["managed"])
@@ -236,11 +260,16 @@ def _s3_error(exc: Exception) -> HTTPException:
     return HTTPException(502, "Could not reach the S3 service for this bucket. Try again.")
 
 
-def _conflict(exc: EtagMismatch) -> JSONResponse:
+def _refused(exc: Refused) -> JSONResponse:
+    return JSONResponse(status_code=422, content={
+        "detail": exc.errors[0]["message"], "errors": exc.errors})
+
+
+def _conflict(exc: EtagMismatch, bucket: str, uid: str) -> JSONResponse:
     return JSONResponse(status_code=409, content={
         "detail": "The policy changed since you opened it (a share or key may have been "
                   "added). Reload to see the current policy.",
-        "etagMismatch": True, "current": view(exc.current)})
+        "etagMismatch": True, "current": view(exc.current, bucket, uid)})
 
 
 def _confirm_needed(exc: ConfirmNeeded, deleting: bool) -> JSONResponse:
@@ -260,9 +289,11 @@ def _doc_detail(doc: dict | None) -> dict | None:
 async def _run(request: Request, acct: RgwAccount, user: SessionUser, short: str, full: str,
                new: dict | None, etag: str, confirm: bool, action: str):
     try:
-        res = await request.app.state.s3.call(acct.uid, _apply, short, new, etag, confirm)
+        res = await request.app.state.s3.call(acct.uid, _apply, short, acct.uid, new, etag, confirm)
     except EtagMismatch as exc:
-        return _conflict(exc)
+        return _conflict(exc, short, acct.uid)
+    except Refused as exc:
+        return _refused(exc)
     except ConfirmNeeded as exc:
         return _confirm_needed(exc, new is None)
     except HTTPException:
@@ -277,7 +308,7 @@ async def _run(request: Request, acct: RgwAccount, user: SessionUser, short: str
                      statements_before=count(before), statements_after=count(after),
                      changed_sids=changed_sids(before, after), managed_changes=res["managed"],
                      before=_doc_detail(before), after=_doc_detail(after))
-    return {**view(after), "changed": changed, "managedChanges": res["managed"]}
+    return {**view(after, short, acct.uid), "changed": changed, "managedChanges": res["managed"]}
 
 
 @router.get("/{name}/policy")
@@ -289,7 +320,7 @@ async def get_policy(name: str, request: Request, acct: Account):
         raise
     except Exception as exc:
         raise _s3_error(exc) from None
-    return JSONResponse(view(policy), headers={"Cache-Control": "no-store"})
+    return JSONResponse(view(policy, short, acct.uid), headers={"Cache-Control": "no-store"})
 
 
 @router.put("/{name}/policy")

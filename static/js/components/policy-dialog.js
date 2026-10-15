@@ -71,6 +71,76 @@ function where(text, err) {
   return { line: lines.length, col: lines[lines.length - 1].length + 1 };
 }
 
+// ---- Public / self-lockout screening (Q12) ----
+// MIRRORS bucketeer/policy_guard.py so the editor can warn while typing. The SERVER IS
+// AUTHORITATIVE: it re-checks every save (422) against the policy read inside the bucket lock.
+// Conditions never change a verdict. Keep both files in step.
+const POLICY_ACTIONS = ["s3:putbucketpolicy", "s3:getbucketpolicy", "s3:deletebucketpolicy"];
+const PUBLIC_ARNS = ["arn:aws:iam::*:root", "arn:aws:iam::*:user/*"];
+const REASONS = {
+  public: "allows everyone, not just named users (a Condition does not change that). Bucketeer does not support public buckets.",
+  lockout: "would lock you out of this bucket or its policy (a Condition does not change that).",
+};
+const escapeRe = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function glob(pattern, text, fold = false) {
+  const rx = [...pattern].map((c) => (c === "*" ? ".*" : c === "?" ? "." : escapeRe(c))).join("");
+  return new RegExp(`^(?:${rx})$`, fold ? "is" : "s").test(text);
+}
+const strs = (v) => (typeof v === "string" ? [v.trim()] : Array.isArray(v) ? v.filter((x) => typeof x === "string").map((x) => x.trim()) : []);
+// [type, value] pairs; a plain string or list is an AWS principal.
+function principals(p) {
+  if (p && typeof p === "object" && !Array.isArray(p)) return Object.entries(p).flatMap(([k, v]) => strs(v).map((x) => [k, x]));
+  return strs(p).map((x) => ["AWS", x]);
+}
+// RGW reads arn:aws:iam::<t>:root and any plain string without ":" or "/" (even "") as tenant <t>.
+function tenantOf(v) {
+  if (v === "*") return null;
+  const m = /^arn:aws:iam::([^:/]*):root$/.exec(v);
+  if (m) return m[1];
+  return !v.includes(":") && !v.includes("/") ? v : null;
+}
+const isPublicValue = (v) => v === "*" || PUBLIC_ARNS.includes(v);
+function classify(st, owner) {
+  if (!st || typeof st !== "object" || Array.isArray(st)) return null;
+  if (st.Effect === "Allow") {
+    if ("NotPrincipal" in st || principals(st.Principal).some(([k, v]) => isPublicValue(v) || (k === "AWS" && tenantOf(v) !== null))) return "public";
+    return null;
+  }
+  if (st.Effect !== "Deny" || !owner) return null;
+  const names = ([k, v]) => isPublicValue(v) || glob(v, owner.arn) || (k === "AWS" && tenantOf(v) === owner.tenant);
+  const who = "NotPrincipal" in st ? !principals(st.NotPrincipal).some(names) : principals(st.Principal).some(names);
+  let acts;
+  if ("NotAction" in st) {
+    const pats = strs(st.NotAction).map((a) => a.toLowerCase());
+    acts = !POLICY_ACTIONS.every((a) => pats.some((p) => glob(p, a, true)));
+  } else {
+    const pats = strs(st.Action).map((a) => a.toLowerCase());
+    acts = pats.some((p) => POLICY_ACTIONS.some((a) => glob(p, a, true)));
+  }
+  let res;
+  if ("NotResource" in st) res = !strs(st.NotResource).some((p) => owner.bucketArns.some((a) => glob(p, a)));
+  else res = strs(st.Resource).some((p) => owner.bucketArns.some((a) => glob(p, a)));
+  return who && acts && res ? "lockout" : null;
+}
+function canon(v) {
+  if (Array.isArray(v)) return `[${v.map(canon).join(",")}]`;
+  if (v && typeof v === "object") return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(",")}}`;
+  return JSON.stringify(v);
+}
+const statementsOf = (doc) => {
+  const s = doc?.Statement;
+  return Array.isArray(s) ? s : s && typeof s === "object" ? [s] : [];
+};
+// -> [{index, sid, kind, stored}] for every public/lockout statement of `doc`; `stored` = identical to one in `policy`.
+function screen(doc, policy, owner) {
+  const have = new Set(statementsOf(policy).map(canon));
+  return statementsOf(doc).flatMap((st, index) => {
+    const kind = classify(st, owner);
+    return kind ? [{ index, sid: typeof st.Sid === "string" ? st.Sid : null, kind, stored: have.has(canon(st)) }] : [];
+  });
+}
+const label = (f) => `Statement ${f.index + 1}${f.sid ? ` (${f.sid})` : ""}`;
+
 function kindOf(sid) {
   if (sid.startsWith("bucketeer-share-")) return "Sharing";
   if (sid.startsWith("bucketeer-key-")) return "Bucket key";
@@ -92,6 +162,26 @@ export async function policyDialog({ bucket }) {
   const error = h("p", { class: "qd-error", role: "alert", hidden: true });
   const showError = (m) => { error.textContent = m; error.hidden = !m; };
   const status = h("p", { class: "pol-status", role: "status" });
+
+  const guardNew = h("ul", { class: "pol-guard-list" });
+  const guardOld = h("ul", { class: "pol-guard-list" });
+  const guard = h("section", { class: "pol-guard", hidden: true, "aria-live": "polite" },
+    h("div", { class: "pol-banner-h" }, icon("alert", "icon"), h("b", { text: "This policy cannot be saved" })),
+    guardNew,
+    h("p", { text: "Bucketeer does not allow adding or changing statements that make a bucket public or lock you out. Remove or fix them to save. You can still do this with the AWS CLI and your own keys, but public buckets are not supported here." }));
+  const keep = h("section", { class: "pol-banner", hidden: true },
+    h("div", { class: "pol-banner-h" }, icon("alert", "icon"), h("b", { text: "Risky statements already on this bucket" })),
+    guardOld,
+    h("p", { text: "These can be kept exactly as they are or removed, but not changed." }));
+  function paintGuard(doc) {
+    const found = doc ? screen(doc, state.policy, state.owner) : [];
+    const line = (f) => h("li", {}, `${label(f)} ${REASONS[f.kind]}`);
+    guardNew.replaceChildren(...found.filter((f) => !f.stored).map(line));
+    guardOld.replaceChildren(...found.filter((f) => f.stored).map(line));
+    guard.hidden = !guardNew.children.length;
+    keep.hidden = !guardOld.children.length;
+    return guardNew.children.length > 0;
+  }
 
   const managedList = h("ul", { class: "pol-managed" });
   const managed = h("section", { class: "pol-banner", hidden: true, "aria-labelledby": `${id}-mh` },
@@ -170,8 +260,10 @@ export async function policyDialog({ bucket }) {
 
   const dirty = () => area.value !== loadedText;
   function update() {
-    const ok = parse(false) !== undefined;
-    save.disabled = busy || !dirty() || !ok;
+    const parsed = parse(false);
+    const ok = parsed !== undefined;
+    const blocked = paintGuard(parsed);
+    save.disabled = busy || !dirty() || !ok || blocked;
     revert.disabled = busy || !dirty();
     del.disabled = busy || state.policy === null;
     format.disabled = busy;
@@ -208,7 +300,7 @@ export async function policyDialog({ bucket }) {
 
   function adopt(view, { keepMine = false } = {}) {
     if (keepMine) { mine.value = area.value; conflict.hidden = false; conflict.scrollIntoView({ block: "nearest" }); }
-    state = { policy: view.policy, managedSids: view.managedSids, etag: view.etag };
+    state = { policy: view.policy, managedSids: view.managedSids, etag: view.etag, owner: view.owner };
     loadedText = pretty(view.policy);
     area.value = loadedText;
     syntax.hidden = true;
@@ -289,11 +381,11 @@ export async function policyDialog({ bucket }) {
   del.addEventListener("click", onDelete);
 
   const form = h("form", { class: "pol-form", novalidate: true },
-    managed,
+    managed, keep,
     h("div", { class: "pol-bar" },
       h("label", { class: "pol-lbl", for: `${id}-text`, text: "Policy (JSON)" }),
       h("div", { class: "pol-tools" }, format, revert)),
-    editor, syntax, jump, conflict, error, status,
+    editor, syntax, jump, guard, conflict, error, status,
     h("div", { class: "cd-actions pol-actions" }, del, h("span", { class: "pol-spacer" }), cancel, save));
   form.addEventListener("submit", (e) => { e.preventDefault(); onSave(); });
 

@@ -232,7 +232,8 @@ def run(tmp_path_factory, moto_server):
     # raw policy editor: write a foreign statement, then delete the policy
     et = a.get("/api/buckets/alice-tag/policy").json()["etag"]
     doc = {"Version": "2012-10-17", "Statement": [{
-        "Sid": "team-read", "Effect": "Allow", "Principal": "*", "Action": "s3:GetObject",
+        "Sid": "team-read", "Effect": "Allow", "Principal": {"AWS": "arn:aws:iam:::user/bob"},
+        "Action": "s3:GetObject",
         "Resource": "arn:aws:s3:::alice-tag/*"}]}
     put_p = r.step("PUT /api/buckets/{name}/policy", lambda: a.put(
         "/api/buckets/alice-tag/policy", json={"policy": doc, "etag": et}, headers=H))

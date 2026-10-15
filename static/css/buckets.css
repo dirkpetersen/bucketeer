@@ -196,6 +196,10 @@
 .pol-form > * { min-width: 0; }
 .pol-banner { display: grid; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border: 1px solid var(--accent); border-radius: var(--r-md); background: var(--accent-soft); font-size: var(--fs-sm); }
 .pol-banner p { margin: 0; color: var(--text-muted); font-size: var(--fs-xs); }
+.pol-guard { display: grid; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border: 1px solid var(--danger); border-radius: var(--r-md); background: var(--danger-bg); font-size: var(--fs-sm); }
+.pol-guard p { margin: 0; color: var(--text-muted); font-size: var(--fs-xs); }
+.pol-guard .pol-banner-h svg { color: var(--danger); }
+.pol-guard-list { margin: 0; padding-left: var(--sp-4); display: grid; gap: var(--sp-1); }
 .pol-banner-h { display: flex; align-items: center; gap: var(--sp-2); }
 .pol-banner-h svg { flex: none; width: 1rem; height: 1rem; color: var(--accent-text); }
 .pol-managed { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--sp-2); }

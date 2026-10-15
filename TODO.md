@@ -106,7 +106,7 @@ skips them too.
 - [x] Presigned share links, 7 days at most. Choose the object with a key field
   plus prefix autocomplete from a read-only listing (Q1); no tree browser.
 - [x] Audit log entries for every bucket, key and share change.
-- [ ] Raw policy editor: refuse public and self-lockout statements (Q12). A new
+- [x] Raw policy editor: refuse public and self-lockout statements (Q12). A new
   or changed `Allow` for principal `*`, or a `Deny` that would lock the owner
   out of the bucket or its policy, is 422 with a clear message; such a
   statement already stored may only be kept as stored or removed. Show the
