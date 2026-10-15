@@ -141,7 +141,7 @@ skips them too.
 - [x] Bucket tagging.
 - [x] Object lock: default retention, plus legal hold and retention for a given
   object key.
-- [ ] Full lifecycle editor: prefix and tag filters, object-size filters, and
+- [x] Full lifecycle editor: prefix and tag filters, object-size filters, and
   expiration rules (current, noncurrent with versions-to-keep, delete-marker
   cleanup, multipart abort), alongside the existing simple rules.
 - [ ] (blocked: Q13) Lifecycle transitions to another storage class.
@@ -180,6 +180,9 @@ available, and fix the client and the mock if reality differs:
 - [ ] (needs cluster) Object lock: RGW accepts removing GOVERNANCE retention (an
   empty `Retention` with `BypassGovernanceRetention`) and honours the bypass
   only for the bucket owner.
+- [ ] (needs cluster) Lifecycle: RGW supports object-size filters
+  (`ObjectSizeGreaterThan`/`LessThan`) and `NewerNoncurrentVersions`, and refuses
+  tag filters combined with delete-marker cleanup or multipart abort.
 - [ ] (needs cluster) User quota: `maxObjects` null means unlimited and
   `maxSize` is in bytes (1 TiB default).
 - [ ] (needs cluster) RGW uids are case-sensitive (`Alice` and `alice` are

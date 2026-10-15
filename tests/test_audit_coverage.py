@@ -42,6 +42,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "POST /api/buckets/reconcile": ("bucket.tag_sync",),
     "PUT /api/buckets/{name}/versioning": ("bucket.versioning",),
     "PUT /api/buckets/{name}/lifecycle": ("bucket.lifecycle",),
+    "PUT /api/buckets/{name}/lifecycle/rules": ("bucket.lifecycle_rules",),
     "PUT /api/buckets/{name}/cors": ("bucket.cors",),
     "PUT /api/buckets/{name}/tags": ("bucket.tags",),
     "PUT /api/buckets/{name}/budget": ("bucket.budget",),
@@ -237,6 +238,12 @@ def run(tmp_path_factory, moto_server):
     r.step("DELETE /api/buckets/{name}/policy", lambda: a.request(
         "DELETE", "/api/buckets/alice-tag/policy", json={"etag": put_p.json()["etag"]},
         headers=H))
+    # full lifecycle editor
+    et = a.get("/api/buckets/alice-tag/lifecycle/rules").json()["etag"]
+    r.step("PUT /api/buckets/{name}/lifecycle/rules", lambda: a.put(
+        "/api/buckets/alice-tag/lifecycle/rules", headers=H, json={"etag": et, "rules": [{
+            "id": "tmp", "status": "Enabled", "filter": {"prefix": "tmp/"},
+            "expiration": {"days": 7}}]}))
     # CORS editor
     et = a.get("/api/buckets/alice-tag/cors").json()["etag"]
     r.step("PUT /api/buckets/{name}/cors", lambda: a.put(

@@ -12,6 +12,7 @@ import { budgetDialog } from "../components/budget-dialog.js";
 import { corsDialog } from "../components/cors-dialog.js";
 import { policyDialog } from "../components/policy-dialog.js";
 import { lifecycleDialog } from "../components/lifecycle-dialog.js";
+import { lifecycleRulesDialog } from "../components/lifecycle-rules-dialog.js";
 import { shareLinkDialog } from "../components/share-link-dialog.js";
 import { menuButton } from "../components/menu-button.js";
 import { shareDialog } from "../components/share-dialog.js";
@@ -71,7 +72,7 @@ function usageBlock(b) {
   return out;
 }
 
-function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPolicy, onAcl, onCors, onTags, onLock, onBudget, busy) {
+function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPolicy, onAcl, onCors, onTags, onLock, onBudget, onRules, busy) {
   const created = b.createdAt ? new Date(b.createdAt) : null;
   const meta = h("div", { class: "bk-meta" });
   if (created && !Number.isNaN(created.getTime())) {
@@ -101,6 +102,7 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPo
         ...(b.objectLock === true ? [
           { label: "Object lock…", icon: "lock", hint: "Default retention, or retention and legal hold of one file", onSelect: () => onLock(b) },
         ] : []),
+        { label: "Lifecycle rules (advanced)…", icon: "sliders", hint: "Filters by prefix, tag and size; keep newest versions; delete markers", onSelect: () => onRules(b) },
         { label: "Tags…", icon: "tag", hint: "Label the bucket with key and value pairs", onSelect: () => onTags(b) },
         { label: "CORS rules…", icon: "sliders", hint: "Let websites use this bucket from visitors' browsers", onSelect: () => onCors(b) },
         { label: "Bucket permissions (ACL)…", icon: "users", hint: "Legacy permissions of the bucket itself", onSelect: () => onAcl(b, false) },
@@ -142,7 +144,7 @@ export function bucketsCard() {
         h("div", { class: "empty-acts" }, h("button", { class: "btn btn-primary", type: "button", on: { click: create } }, icon("plus"), "Create your first bucket"))));
       return;
     }
-    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, managePolicy, manageAcl, manageCors, manageTags, manageLock, manageBudget, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
+    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, managePolicy, manageAcl, manageCors, manageTags, manageLock, manageBudget, manageRules, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
   }
 
   function failed(err) {
@@ -252,6 +254,11 @@ export function bucketsCard() {
 
   async function manageLock(b) {
     const res = await objectLockDialog({ bucket: b.name });
+    if (res.error && res.error.status !== 401) toast.error(res.error.message);
+  }
+
+  async function manageRules(b) {
+    const res = await lifecycleRulesDialog({ bucket: b.name });
     if (res.error && res.error.status !== 401) toast.error(res.error.message);
   }
 

@@ -19,6 +19,7 @@ from . import (
     cors,
     credentials,
     lifecycle,
+    lifecycle_rules,
     object_lock,
     policy_editor,
     profile,
@@ -150,6 +151,7 @@ def create_app(
     api.include_router(bucket_keys.admin_router)
     api.include_router(audit_viewer.router)
     api.include_router(lifecycle.router)
+    api.include_router(lifecycle_rules.router)
     api.include_router(policy_editor.router)
     api.include_router(cors.router)
     api.include_router(tags.router)

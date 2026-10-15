@@ -256,9 +256,10 @@ def test_compliance_needs_confirm_then_cannot_weaken(env, lock, calls):
         assert "Compliance" in r.json()["detail"]
     assert calls == []
     # lengthening needs the confirm again but no bypass
-    ext = {"mode": "COMPLIANCE", "retainUntil": iso(40)}
+    until = iso(40)  # one clock read, so a second boundary can't flake
+    ext = {"mode": "COMPLIANCE", "retainUntil": until}
     assert rput(env, ext).status_code == 409
-    assert rput(env, {**ext, "confirm": True}).json()["retention"]["retainUntil"] == iso(40)
+    assert rput(env, {**ext, "confirm": True}).json()["retention"]["retainUntil"] == until
     assert all("BypassGovernanceRetention" not in kw for n, kw in calls)
 
 
@@ -286,9 +287,11 @@ def test_retention_date_validation(env, lock):
 
 
 def test_naive_date_is_utc(env, lock):
-    naive = (now() + timedelta(days=3)).replace(tzinfo=None).isoformat()
+    when = now() + timedelta(days=3)  # one clock read, so a second boundary can't flake
+    naive = when.replace(tzinfo=None).isoformat()
     r = rput(env, {"mode": "GOVERNANCE", "retainUntil": naive})
-    assert r.status_code == 200 and r.json()["retention"]["retainUntil"] == iso(3)
+    expected = when.isoformat().replace("+00:00", "Z")
+    assert r.status_code == 200 and r.json()["retention"]["retainUntil"] == expected
 
 
 def test_legal_hold_on_off(env, lock):

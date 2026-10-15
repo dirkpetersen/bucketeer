@@ -88,6 +88,13 @@ export const setBucketVersioning = (name, enabled) =>
 export const getBucketLifecycle = (name) => api(`/buckets/${encodeURIComponent(name)}/lifecycle`);
 export const setBucketLifecycle = (name, rules) =>
   api(`/buckets/${encodeURIComponent(name)}/lifecycle`, { method: "PUT", json: rules });
+// Full lifecycle editor (Advanced). get -> {rules: [{id, status, filter: {prefix?, tags?, sizeGreaterThan?,
+// sizeLessThan?}, expiration, noncurrentExpiration, abortMultipartDays, transitions (read only), managed}],
+// etag, warnings, versioning}. put sends {rules, etag, confirmManaged?}; 422 carries errors
+// [{rule, field, message}], 409 {etagMismatch, current} or {requiresConfirmation, managedChanges}.
+export const getLifecycleRules = (name) => api(`/buckets/${encodeURIComponent(name)}/lifecycle/rules`);
+export const putLifecycleRules = (name, body) =>
+  api(`/buckets/${encodeURIComponent(name)}/lifecycle/rules`, { method: "PUT", json: body });
 // Share links. objects (read-only autocomplete, one page, NOT a browser) -> {prefix, entries:
 // [{key, size, lastModified}], prefixes: [{prefix}], truncated}. shareLink -> {url, expiresAt};
 // expiresIn is 60..604800 seconds. The url is a secret-bearing link: keep it in memory only.
