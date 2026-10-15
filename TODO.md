@@ -191,6 +191,53 @@ skips them too.
 - [x] Multipart upload cleanup (list and abort).
 - [ ] (blocked: Q15) Subusers (read/write/readwrite/full) and their keys.
 
+## Phase 5: RGW Admin Ops instead of the croit API (owner decision)
+
+Design in CLAUDE.md, "Two API planes". Items build on each other in this
+order, except that A3 to A6 can run in parallel once A2 is done.
+
+- [ ] A1. Admin Ops mock: `/admin/...` routes for every Admin Ops call the
+  client will make, with SigV4 checked against a configured admin key and
+  caps enforced. State is shared with the mock croit and the moto bridge, so
+  users, keys and buckets line up whichever backend created them. Responses
+  follow the Ceph Admin Ops docs for Reef (JSON shapes, error codes), and
+  `mock/demo.py` can start either backend. Tests.
+- [ ] A2. `bucketeer/rgw_admin.py` `RgwAdminClient` with the same public
+  methods and exceptions as `CroitClient`, and the settings `ADMIN_BACKEND`
+  (default `croit`), `RGW_ADMIN_URL`, `RGW_ADMIN_ACCESS_KEY` and
+  `RGW_ADMIN_SECRET_KEY` (required with `rgw`) in `.env.default`. Tenant uids,
+  safe path and query encoding, no secrets in logs. Calls that have no Admin
+  Ops counterpart (tasks, `.s3cfg`, placements) raise a clear error until
+  A3 to A5 replace their callers. `create_app` builds the chosen client. A
+  contract test suite runs the same client tests against both backends.
+- [ ] A3. Bucket create and versioning on the S3 data plane with the user's
+  own key when `ADMIN_BACKEND=rgw`: CreateBucket with the placement as
+  `LocationConstraint`, object lock at create, PutBucketVersioning (object-lock
+  guard kept). Idempotent adoption, budget tag and noncurrent rule unchanged.
+  Bucket-create tests run on both backends.
+- [ ] A4. Delete a non-empty bucket as a background job with the rgw backend:
+  same typed-name confirmation, job state in SQLite (migration), progress
+  shown in the UI, resumable after a restart, audited (`bucket.delete` when
+  done, `bucket.delete_failed`). Bucket keys and shares are revoked as today.
+- [ ] A5. Placement and endpoint without croit: with `rgw`, admins enter the
+  allowed placements on the Settings tab (validated only for format, with a
+  hint to check them against `radosgw-admin zonegroup placement list`), and
+  `S3_ENDPOINT_URL` is required (Settings refuses to start without it).
+- [ ] A6. Admin lists and jobs on the rgw backend: the user list with details
+  (metadata list plus per-user reads with bounded concurrency and a short
+  cache), bucket stats in one call, and chargeback, offboarding, the resolver
+  and bucket keys all working on `rgw`. Run the existing admin, offboarding,
+  chargeback and bucket-key tests on both backends.
+- [ ] A7. Switch the default to `ADMIN_BACKEND=rgw`. Update README,
+  CLAUDE.md, `.env.default` and the croit-gate docs (now optional), and add an
+  operator guide for creating the Admin Ops service user with its caps on a
+  croit cluster.
+- [ ] (needs cluster) Admin Ops on the real Reef cluster: caps, tenant uids,
+  key add and remove, quotas, suspend, bucket stats, purge, placement in
+  `LocationConstraint`, and whether croit's UI shows the changes at once.
+- [ ] (needs cluster) Remove the croit backend after that check (owner
+  decides).
+
 ## Verify against a real croit cluster
 
 Things the spec leaves unclear. Check each one once a real cluster is
@@ -255,13 +302,6 @@ The loop never picks these; they need a new decision from the owner first.
   confirmation and an admin list of public buckets (Q12).
 - Lifecycle transitions to another storage class (Q13). Until then admins
   handle tiering.
-- RGW Admin Ops API instead of croit for the S3 admin plane (users, keys,
-  quotas, buckets, usage), using an RGW user with only
-  `users=read,write; buckets=read,write; usage=read` caps. croit support
-  (2026-10) said this works on Reef, they will support it, and croit never
-  overwrites S3 entities it didn't create. This would make the admin
-  credential RGW-only by design; it reverses the "croit API for the admin
-  plane" decision, so it needs the owner's go-ahead.
 - RGW accounts (after a Tentacle upgrade): croit's UI doesn't support them
   but won't interfere. Moving a user into an account
   (`radosgw-admin user modify --uid=... --account-id=...`) is irreversible.
