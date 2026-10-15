@@ -215,7 +215,7 @@ order, except that A3 to A6 can run in parallel once A2 is done.
   `LocationConstraint`, object lock at create, PutBucketVersioning (object-lock
   guard kept). Idempotent adoption, budget tag and noncurrent rule unchanged.
   Bucket-create tests run on both backends.
-- [ ] A4. Delete a non-empty bucket as a background job with the rgw backend:
+- [x] A4. Delete a non-empty bucket as a background job with the rgw backend:
   same typed-name confirmation, job state in SQLite (migration), progress
   shown in the UI, resumable after a restart, audited (`bucket.delete` when
   done, `bucket.delete_failed`). Bucket keys and shares are revoked as today.
