@@ -337,6 +337,42 @@ def test_key_cascade_failure_is_noted_as_uncertain(env, lenient):
     assert suspended(env, "alice") and run["outcome"] == "failed"
 
 
+def partial_alice(env):
+    """alice offboarded, but her bucket key could not be confirmed suspended."""
+    import httpx
+
+    env.k_off = env.db.bucket_keys.create("acme$carol", "alice", "alice-data", "read")
+    set_mode(env, "enforce")
+    leave(env, "alice")
+    env.transport.fail = lambda req: (
+        httpx.Response(502, json={"code": 502, "message": "x"})
+        if req.method == "PATCH" and "carol" in req.url.path else None)
+    assert results(go(env))["alice"]["action"] == "partial"
+    env.transport.fail = None
+    assert suspended(env, "alice") and not suspended(env, "acme$carol")
+
+
+def test_restored_outside_bucketeer_is_not_judged_from_a_cached_list(env, lenient):
+    partial_alice(env)
+    assert env.admin.get("/api/admin/users").status_code == 200  # fills any list cache
+    leave_back(env)
+    env.mock.state.croit.update_user("alice", {"suspended": False})  # an admin, outside us
+    run = go(env)
+    assert "alice" not in results(run) or results(run)["alice"]["action"] != "keys_completed"
+    assert not suspended(env, "alice") and not suspended(env, "acme$carol")
+    assert env.db.bucket_keys.get(env.k_off["id"])["suspended_at"] is None
+
+
+def test_complete_keys_skips_an_account_that_is_no_longer_suspended(env, lenient):
+    partial_alice(env)
+    env.mock.state.croit.update_user("alice", {"suspended": False})
+    res, counts = {"uid": "alice"}, {"keysSuspended": 0, "failed": 0}
+    asyncio.run(env.svc._complete_keys(res, {"names": ["alice"]}, counts, "bob", 1))
+    assert res["action"] == "skipped" and "no longer suspended" in res["note"]
+    assert counts["keysSuspended"] == 0 and not suspended(env, "acme$carol")
+    assert env.db.bucket_keys.get(env.k_off["id"])["suspended_at"] is None
+
+
 # -- coming back -----------------------------------------------------------------------
 
 

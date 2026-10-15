@@ -307,9 +307,14 @@ class CroitClient:
 
     # -- S3 users --
 
-    async def list_users(self, uids: list[str] | None = None) -> list[dict]:
-        """All users, or only `uids`. Note the spec marks `uid` as required."""
+    async def list_users(self, uids: list[str] | None = None, *,
+                         fresh: bool = False) -> list[dict]:
+        """All users, or only `uids`. The spec marks `uid` as required. `fresh` is
+        accepted for parity with `RgwAdminClient` (which caches) and ignored here."""
         return await self._request("GET", "/s3/users", params={"uid": uids} if uids else None)
+
+    def invalidate_lists(self) -> None:
+        """No-op (parity with `RgwAdminClient.invalidate_lists`; nothing is cached here)."""
 
     async def list_user_names(self) -> list[str]:
         """Every RGW uid (`tenant$uid` with a tenant), a cheap list of strings."""

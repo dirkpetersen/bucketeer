@@ -26,6 +26,8 @@ from mock.croit_mock import create_app as create_mock
 from .backends import (
     admin_backend,  # noqa: F401  (fixture: both admin backends)
     admin_client,
+    croit_view,
+    on_rgw,
 )
 from .conftest import REQUIRED
 from .test_admin import Transport
@@ -263,7 +265,8 @@ def test_already_exists_from_croit_counts_as_success(env):
 
         async def gated(request):
             nonlocal arrived
-            if request.method == "POST" and request.url.path.endswith("/s3/users"):
+            view = croit_view(request) if on_rgw() else request  # rgw: PUT /admin/user
+            if view.method == "POST" and view.url.path.endswith("/s3/users"):
                 arrived += 1
                 if arrived >= 2:
                     both_at_create.set()

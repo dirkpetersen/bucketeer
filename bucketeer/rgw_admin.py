@@ -37,8 +37,10 @@ Mapping (croit method -> Admin Ops call; the returned dicts have croit's keys):
   supplied, not croit's `acl` and `cors`.
 
 Caching (A6): `list_users()` without a filter (the per-user fan-out) is reused for
-`USERS_TTL` seconds per client; concurrent callers, for users and for `list_buckets()`, share
-one in-flight fetch. Every non-GET request (user create/modify/delete, quotas, key put/delete,
+`USERS_TTL` seconds per client (`list_users(fresh=True)` skips the cache: offboarding, which
+acts on `suspended`, uses it; changes made outside Bucketeer don't clear the cache). Concurrent
+callers, for users and for `list_buckets()`, share one in-flight fetch. Every non-GET
+request (user create/modify/delete, quotas, key put/delete,
 so also the resolver's creates and the admin actions) drops both caches before and after it is
 sent, and detaches a running fetch so its older result is never stored. A failed fetch is never
 cached. `get_user`, `list_keys`, `list_user_buckets` and `list_user_names` are never cached.
@@ -422,11 +424,19 @@ class RgwAdminClient:
             self._service_uid = uid
         return self._service_uid
 
-    async def list_users(self, uids: list[str] | None = None) -> list[dict]:
+    def invalidate_lists(self) -> None:
+        """Drop the cached user and bucket lists. Mutations through Admin Ops do this on their
+        own; call it after a change made another way (a bucket created over S3, Phase 5 A3)."""
+        self._changed()
+
+    async def list_users(self, uids: list[str] | None = None, *,
+                         fresh: bool = False) -> list[dict]:
         """All users except the Admin Ops service user, or only `uids` (as croit does, an
         unknown uid in the filter is a 404). Reads run concurrently (bounded); the first
         failure cancels the rest, so nothing keeps hitting RGW after the caller has an error."""
         if not uids:
+            if fresh:  # never the cache (the caller acts on `suspended`): a new fan-out
+                return await self._fetch_all_users()
             return await self._users.get(self._fetch_all_users)
         return await self._read_users(list(uids), strict=True)
 
@@ -641,7 +651,12 @@ class RgwAdminClient:
 
             async def one(uid: str) -> list[dict]:
                 async with sem:
-                    return await self.list_user_buckets(uid)
+                    try:
+                        return await self.list_user_buckets(uid)
+                    except CroitError as e:
+                        if e.status == 404 and getattr(e, "rgw_code", None) == "NoSuchUser":
+                            return []  # deleted since the uid list was read
+                        raise
 
             tasks = [asyncio.ensure_future(one(u)) for u in tenant_uids]
             try:

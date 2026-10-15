@@ -272,6 +272,34 @@ async def test_a_tenant_query_failure_fails_the_bucket_list_and_is_not_cached(ad
     await client.aclose()
 
 
+async def test_a_tenant_user_deleted_mid_listing_is_skipped(admin_ops):
+    transport = Probe(httpx.ASGITransport(app=admin_ops.app), drop_tenant=True)
+    client = RgwAdminClient(rgw_settings(admin_ops), transport=transport)
+    real = client.list_user_buckets
+
+    async def gone(uid):
+        if uid == "acme$carol":
+            admin_ops.state.users.pop("acme$carol")  # deleted after the uid list was read
+        return await real(uid)
+
+    client.list_user_buckets = gone
+    names = {b["bucket"] for b in await client.list_buckets()}
+    assert "alice-data" in names  # the list still works
+    await client.aclose()
+
+
+async def test_fresh_skips_the_cache_and_invalidate_lists_drops_it(probe):
+    await probe.list_users()
+    reads = probe.probe.user_reads
+    await probe.list_users(fresh=True)
+    assert probe.probe.user_reads == 2 * reads
+    await probe.list_users()  # the cache was still there
+    assert probe.probe.user_reads == 2 * reads
+    probe.invalidate_lists()
+    await probe.list_users()
+    assert probe.probe.user_reads == 3 * reads
+
+
 async def test_bucket_list_is_not_cached_but_in_flight_calls_share(admin_ops):
     transport = Probe(httpx.ASGITransport(app=admin_ops.app))
     client = RgwAdminClient(rgw_settings(admin_ops), transport=transport)

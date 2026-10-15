@@ -305,8 +305,12 @@ def test_mapping_warns_when_rgw_user_missing(env):
 
 
 def test_mapping_warns_when_croit_down(env):
-    croit_only("rgw fails closed when the service user cannot be looked up")
     env.transport.fail = lambda req: CroitUnavailable("down")
+    if on_rgw():  # cold start: the service-user lookup fails, so it fails closed (503)
+        assert put(env, "/uid-mappings/erin", {"rgwUid": "x2"}).status_code == 503
+        env.transport.fail = None
+        assert env.admin.get("/api/admin/users").status_code == 200  # warms the lookup
+        env.transport.fail = lambda req: CroitUnavailable("down")
     r = put(env, "/uid-mappings/dave", {"rgwUid": "x1"})
     assert r.status_code == 200 and r.json()["exists"] is None and r.json()["warning"]
 

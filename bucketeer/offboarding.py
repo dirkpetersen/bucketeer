@@ -191,7 +191,7 @@ class OffboardingService:
         number of known links whose RGW user is gone, and result entries for people skipped
         because only a differently-cased uid exists in croit (never guessed)."""
         db = self.db
-        users = {str(u["uid"]): u for u in await self.croit.list_users()}
+        users = {str(u["uid"]): u for u in await self.croit.list_users(fresh=True)}
         lowered = {u.lower() for u in users}
 
         def sync_and_load() -> list[dict]:
@@ -360,6 +360,10 @@ class OffboardingService:
             rows = await db.run(db.known_accounts.for_uid, uid)
             if not any(r["offboarding_suspended_at"] for r in rows):  # settled meanwhile
                 res.update(action="skipped", note="no longer suspended by the job")
+                return
+            current = await self.croit.get_user(uid)  # never act on a stale list
+            if current is None or not current.get("suspended"):
+                res.update(action="skipped", note="no longer suspended in RGW", keys=[])
                 return
             keys = [k for k in await self._live_keys(uid, p["names"]) if not k["suspended_at"]]
             done, failed = await apply_key_suspension(
