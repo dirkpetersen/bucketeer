@@ -76,7 +76,7 @@ getDemo()
         "div",
         { class: "demo-banner", role: "note" },
         h("strong", {}, "Demo mode"),
-        " fake directory, mock croit, temporary data",
+        " fake directory, mock cluster, temporary data",
       ),
     );
   })

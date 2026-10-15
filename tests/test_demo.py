@@ -22,7 +22,7 @@ def demo_client(tmp_path):
     mock = create_mock(seed=True, task_seconds=0, prefix="/api", admin_token=TOKEN)
     demo.seed_demo(mock.state.croit)
     settings = demo.demo_settings(
-        port=8000, croit_url="http://croit.test/api", croit_token=TOKEN,
+        port=8000, backend="croit", croit_url="http://croit.test/api", croit_token=TOKEN,
         s3_url="http://127.0.0.1:1", data_dir=str(tmp_path),
     )
     croit = CroitClient(settings, poll_interval=0.01, transport=Transport(mock))
@@ -46,10 +46,19 @@ def test_demo_settings_ignore_real_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("CROIT_URL", "https://real-croit.example/api")
     demo.scrub_environment()
     assert "CROIT_URL" not in os.environ
-    s = demo.demo_settings(port=1, croit_url="http://127.0.0.1:2/api", croit_token="t",
-                           s3_url="http://127.0.0.1:3", data_dir=str(tmp_path))
+    s = demo.demo_settings(port=1, backend="croit", croit_url="http://127.0.0.1:2/api",
+                           croit_token="t", s3_url="http://127.0.0.1:3", data_dir=str(tmp_path))
     assert s.host == "127.0.0.1" and s.session_cookie_secure is False
     assert s.croit_url == "http://127.0.0.1:2/api"
+
+
+def test_demo_defaults_to_the_rgw_backend(tmp_path):
+    s = demo.demo_settings(port=1, s3_url="http://127.0.0.1:3", data_dir=str(tmp_path),
+                           rgw_admin_url="http://127.0.0.1:4", rgw_admin_access_key="K",
+                           rgw_admin_secret_key="S")
+    assert s.admin_backend == "rgw" and s.croit_url == ""
+    assert demo.parse_args([]).backend == "rgw"
+    assert demo.parse_args(["--backend", "croit"]).backend == "croit"
 
 
 def test_production_app_is_never_demo(settings, monkeypatch):
@@ -79,7 +88,8 @@ def test_sigterm_cleans_up(tmp_path):
     script = Path(demo.__file__)
     p = subprocess.Popen(
         [sys.executable, str(script), "--port", str(free()), "--croit-port", str(free()),
-         "--moto-port", str(free())],
+         "--moto-port", str(free()),
+         "--admin-ops-port", str(free())],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=tmp_path,
     )
     data_dir = None

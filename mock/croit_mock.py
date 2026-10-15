@@ -562,6 +562,16 @@ class CroitState:
         return bucket
 
     @locked
+    def mirror_s3_delete(self, name: str, owner: str):
+        """A user's DeleteBucket reached the S3 backend: forget the bucket (no hook fired),
+        as RGW's own listings would."""
+        user = self.get_user(owner)
+        full = f"{user.tenant}:{name}" if user.tenant else name
+        bucket = self.buckets.get(full)
+        if bucket is not None and bucket.owner == owner:
+            del self.buckets[full]
+
+    @locked
     def mirror_s3_versioning(self, name: str, owner: str, status: str):
         """A user's PutBucketVersioning (`Enabled|Suspended`) reached the S3 backend."""
         user = self.get_user(owner)

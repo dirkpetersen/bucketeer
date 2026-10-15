@@ -112,6 +112,17 @@ def test_mock_rgw_rejects_a_wrong_api_name_and_unknown_placements(env):
     assert env.croit_state.buckets["alice-loc"].placement == "nvme-placement"
 
 
+def test_the_mirror_forgets_a_bucket_the_owner_deletes_over_s3(env):
+    """No test-side shim: the bridge's middleware removes the bucket from the shared state
+    (what the demo relies on), and only for its owner's key."""
+    s3 = boto3.client("s3", endpoint_url=env.bridge.endpoint, region_name="us-east-1",
+                      aws_access_key_id=ALICE_KEY, aws_secret_access_key="x")
+    s3.create_bucket(Bucket="alice-gone")
+    assert "alice-gone" in env.croit_state.buckets
+    s3.delete_bucket(Bucket="alice-gone")
+    assert "alice-gone" not in env.croit_state.buckets
+
+
 def test_unversioned_create_makes_no_versioning_call(env):
     assert create(env.alice, versioning=False).status_code == 201
     assert env.calls("put_bucket_versioning") == []

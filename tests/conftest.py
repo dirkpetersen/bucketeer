@@ -1,6 +1,10 @@
 import pytest
 
+# The default ADMIN_BACKEND is rgw (Phase 5 A7), but most tests run against the croit mock,
+# so the backend is stated here instead of being left to the default. Tests that need rgw
+# override it (`admin_backend="rgw"` plus RGW_ENV, see tests/test_admin_backends.py).
 REQUIRED = {
+    "admin_backend": "croit",
     "session_secret": "test-secret",
     "ldap_url": "ldaps://dc.example.org:636",
     "ldap_base_dn": "DC=example,DC=org",

@@ -52,6 +52,8 @@ Run `tools/croit-cert --help` for all options.
 
 ## croit-gate
 
+**Optional, and only for `ADMIN_BACKEND=croit`.** Since the default admin backend is `rgw` (RGW Admin Ops, see `docs/admin-ops-setup.md`), Bucketeer no longer talks to croit at all and needs neither this gateway nor a croit token; the gateway goes away together with the croit backend.
+
 An allowlisting gateway in front of the croit API. The croit admin token can do
 far more than Bucketeer needs (TLS certificates, servers, API tokens, ...). The
 gateway holds that real token and forwards only the calls Bucketeer's

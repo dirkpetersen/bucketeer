@@ -1,12 +1,13 @@
 """Keeps a moto S3 server in line with the mock croit API (dev/test tooling only).
 
-Buckets that users create over S3 (`CreateBucket`, `PutBucketVersioning` with their own keys,
-Phase 5 A3) are mirrored the other way: `start_moto` wraps moto in a WSGI middleware that,
-after moto accepted a path-style `PUT /<bucket>` or `PUT /<bucket>?versioning`, tells the
-bridge registered for that endpoint (`seed_objects` registers it) which access key did it.
+Buckets that users create or delete over S3 (`CreateBucket`, `PutBucketVersioning`,
+`DeleteBucket` with their own keys, Phase 5 A3 and A4) are mirrored the other way:
+`start_moto` wraps moto in a WSGI middleware that, after moto accepted a path-style
+`PUT /<bucket>`, `PUT /<bucket>?versioning` or `DELETE /<bucket>`, tells the bridge
+registered for that endpoint (`seed_objects` registers it) which access key did it.
 The bridge maps the key to its owner in the mock croit state (`mirror_s3_bucket` /
-`mirror_s3_versioning`, no hook fired), so the croit mock and the RGW Admin Ops mock list the
-bucket with the right owner, versioning, object lock and placement. A
+`mirror_s3_versioning` / `mirror_s3_delete`, no hook fired), so the croit mock and the RGW
+Admin Ops mock list the bucket with the right owner, versioning, object lock and placement. A
 `LocationConstraint` of the form `<region>:<placement>` is recorded as the placement and
 removed from the request moto sees (moto knows no placements). Like RGW, the part before
 the colon must be empty or equal the zonegroup api name (`ZONEGROUP_API_NAME`, `default`),
@@ -70,9 +71,12 @@ class S3Mirror:
         query = environ.get("QUERY_STRING", "")
         bridge = _BRIDGES.get(self.endpoint())
         kind = None
-        if (bridge is not None and method == "PUT" and path.count("/") == 1 and len(path) > 1
+        if (bridge is not None and path.count("/") == 1 and len(path) > 1
                 and BRIDGE_AGENT not in environ.get("HTTP_USER_AGENT", "")):
-            kind = "versioning" if query == "versioning" else "create" if not query else None
+            if method == "PUT":
+                kind = "versioning" if query == "versioning" else "create" if not query else None
+            elif method == "DELETE" and not query:
+                kind = "delete"
         if kind is None:
             return self.app(environ, start_response)
         length = int(environ.get("CONTENT_LENGTH") or 0)
@@ -87,7 +91,7 @@ class S3Mirror:
                     return _refuse(start_response, problem)
                 info["placement"] = m.group(1).decode().partition(":")[2] or None
                 body = _LOCATION.sub(b"", body)  # moto knows regions, not placements
-        else:
+        elif kind == "versioning":
             m = _STATUS.search(body)
             info["status"] = m.group(1).decode() if m else ""
         environ["wsgi.input"] = io.BytesIO(body)
@@ -258,6 +262,8 @@ class S3Bridge:
             state.mirror_s3_bucket(
                 short, owner, object_lock=info["object_lock"], placement=info["placement"],
                 versioning="ENABLED" if info["object_lock"] else "OFF")
+        elif kind == "delete":
+            state.mirror_s3_delete(short, owner)
         else:
             state.mirror_s3_versioning(short, owner, info.get("status", ""))
 

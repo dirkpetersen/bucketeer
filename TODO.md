@@ -228,7 +228,7 @@ order, except that A3 to A6 can run in parallel once A2 is done.
   cache), bucket stats in one call, and chargeback, offboarding, the resolver
   and bucket keys all working on `rgw`. Run the existing admin, offboarding,
   chargeback and bucket-key tests on both backends.
-- [ ] A7. Switch the default to `ADMIN_BACKEND=rgw`. Update README,
+- [x] A7. Switch the default to `ADMIN_BACKEND=rgw`. Update README,
   CLAUDE.md, `.env.default` and the croit-gate docs (now optional), and add an
   operator guide for creating the Admin Ops service user with its caps on a
   croit cluster.

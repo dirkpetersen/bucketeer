@@ -87,18 +87,19 @@ class Settings(BaseSettings):
     ldap_tls_verify: bool = True
     ldap_timeout: int = Field(5, gt=0)
 
-    # Admin backend: `croit` (croit API) or `rgw` (RGW Admin Ops). The settings of the
-    # other backend are ignored. Required-ness is checked in `_backend_settings`.
-    admin_backend: Literal["croit", "rgw"] = "croit"
+    # Admin backend: `rgw` (RGW Admin Ops, the default since Phase 5 A7) or `croit` (croit
+    # API, kept until the cluster check). The settings of the other backend are ignored.
+    # Required-ness is checked in `_backend_settings`; there is never a fallback between them.
+    admin_backend: Literal["croit", "rgw"] = "rgw"
 
-    # croit API (REQUIRED when admin_backend=croit)
+    # croit API (REQUIRED only when admin_backend=croit)
     croit_url: str = ""
     croit_api_token: SecretStr = SecretStr("")
     croit_ca_cert_file: str = ""
     croit_tls_verify: bool = True
     croit_timeout: int = Field(15, gt=0)
 
-    # RGW Admin Ops (REQUIRED when admin_backend=rgw)
+    # RGW Admin Ops (REQUIRED with the default admin_backend=rgw)
     rgw_admin_url: str = ""
     rgw_admin_access_key: str = ""
     rgw_admin_secret_key: SecretStr = SecretStr("")
@@ -212,7 +213,7 @@ def _backend_problems() -> list[str]:
     """The missing settings of the chosen admin backend, read from the environment, so one
     startup message lists them together with any other missing setting."""
     env = os.environ
-    backend = (env.get("ADMIN_BACKEND") or "croit").strip().lower()
+    backend = (env.get("ADMIN_BACKEND") or "rgw").strip().lower()
     names = {"croit": ("CROIT_URL", "CROIT_API_TOKEN"),
              "rgw": ("RGW_ADMIN_URL", "RGW_ADMIN_ACCESS_KEY", "RGW_ADMIN_SECRET_KEY",
                    "S3_ENDPOINT_URL")}.get(backend)
@@ -239,6 +240,11 @@ def load_settings() -> Settings:
             name = str(err["loc"][0]).upper()
             missing = err["type"] in ("missing", "string_too_short", "too_short")
             lines.append(f"  {name}: {'REQUIRED, not set' if missing else err['msg']}")
-        raise SystemExit(
-            "Invalid configuration (see .env.default):\n" + "\n".join(sorted(lines))
-        ) from None
+        msg = "Invalid configuration (see .env.default):\n" + "\n".join(sorted(lines))
+        if listed:
+            backend = (os.environ.get("ADMIN_BACKEND") or "rgw").strip().lower()
+            how = ("ADMIN_BACKEND is not set, so the default rgw (RGW Admin Ops) applies"
+                   if not os.environ.get("ADMIN_BACKEND") else f"ADMIN_BACKEND={backend}")
+            msg += (f"\n{how}. Set the variables above; to use the croit API instead, "
+                    "set ADMIN_BACKEND=croit explicitly (there is no automatic fallback).")
+        raise SystemExit(msg) from None

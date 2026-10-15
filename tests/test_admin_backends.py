@@ -431,7 +431,8 @@ async def test_calls_without_an_admin_ops_counterpart(rgw, call, item):
 RGW_ENV = {"admin_backend": "rgw", "rgw_admin_url": "https://rgw.example.org",
            "rgw_admin_access_key": "ADMINKEY", "rgw_admin_secret_key": "admin-secret",
            "s3_endpoint_url": "https://s3.example.org"}
-NO_CROIT = {k: v for k, v in REQUIRED.items() if not k.startswith("croit")}
+NO_CROIT = {k: v for k, v in REQUIRED.items()
+            if not k.startswith("croit") and k != "admin_backend"}
 
 
 def test_rgw_backend_needs_its_settings_and_not_croit():
@@ -461,9 +462,18 @@ def test_croit_backend_needs_croit_and_ignores_rgw():
     assert Settings(_env_file=None, **REQUIRED, rgw_admin_url="ftp://x y").admin_backend == "croit"
 
 
+def test_default_backend_is_rgw_and_never_falls_back_to_croit():
+    """Phase 5 A7: with no ADMIN_BACKEND the rgw settings are required, croit ones don't help."""
+    s = Settings(_env_file=None, **NO_CROIT, **{k: v for k, v in RGW_ENV.items()
+                                                if k != "admin_backend"})
+    assert s.admin_backend == "rgw"
+    with pytest.raises(ValueError, match="RGW_ADMIN_URL.*REQUIRED when ADMIN_BACKEND=rgw"):
+        Settings(_env_file=None, **{k: v for k, v in REQUIRED.items() if k != "admin_backend"})
+
+
 def test_unknown_backend_refused():
     with pytest.raises(ValueError):
-        Settings(_env_file=None, **REQUIRED, admin_backend="both")
+        Settings(_env_file=None, **{**REQUIRED, "admin_backend": "both"})
 
 
 @pytest.mark.parametrize("url,ok", [
