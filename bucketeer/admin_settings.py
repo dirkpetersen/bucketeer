@@ -305,6 +305,8 @@ async def put_mapping(ad_username: str, body: Body_, admin: Admin, croit: Croit,
     except sqlite3.IntegrityError as e:
         raise HTTPException(409, f"{uid} is already mapped from another user.") from e
     _invalidate_mapping(rgw, ad, uid, before and before["rgw_uid"])
+    # the offboarding job's scope follows the mapping: a re-pointed one drops the old link
+    await db.run(db.known_accounts.forget_mapping_rows, ad, uid)
     known = await _known_uids(croit)
     exists = None if known is None else uid in known
     saved = await db.run(db.uid_mappings.get, ad)
@@ -329,6 +331,8 @@ async def delete_mapping(ad_username: str, admin: Admin, db: Db, rgw: Rgw):
     if before is None:
         raise HTTPException(404, "No such mapping.")
     await db.run(db.uid_mappings.delete, ad)
+    # a deleted mapping takes its target out of the offboarding job's scope
+    await db.run(db.known_accounts.forget_mapping_rows, ad)
     _invalidate_mapping(rgw, ad, before["rgw_uid"])
     await _audit(db, admin, "admin.settings.uid_mapping.delete", "uid_mapping",
                  before["ad_username"], {"before": before["rgw_uid"], "after": None})

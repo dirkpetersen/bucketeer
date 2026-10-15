@@ -139,6 +139,33 @@ MIGRATIONS: list[str] = [
         WHERE revoked_at IS NULL;
     CREATE INDEX shares_recipient ON shares (recipient_uid COLLATE NOCASE);
     """,
+    # v8: offboarding. `known_accounts` durably links an AD name to the RGW uid of a person
+    # (the job's scope; the audit log is not the source); `offboarding_suspended_at` is set
+    # only while the JOB's suspension stands (cleared by login, any admin suspend/unsuspend).
+    # `offboarding_runs` keeps the last runs of the daily job.
+    """
+    CREATE TABLE known_accounts (
+        ad_username              TEXT PRIMARY KEY COLLATE NOCASE,
+        rgw_uid                  TEXT NOT NULL,
+        source                   TEXT NOT NULL CHECK (source IN ('created', 'linked', 'mapping')),
+        first_seen               TEXT NOT NULL,
+        last_login               TEXT,
+        offboarding_suspended_at TEXT
+    );
+    CREATE INDEX known_accounts_uid ON known_accounts (rgw_uid COLLATE NOCASE);
+    CREATE TABLE offboarding_runs (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at  TEXT NOT NULL,
+        finished_at TEXT,
+        mode        TEXT NOT NULL CHECK (mode IN ('report', 'enforce')),
+        trigger     TEXT NOT NULL CHECK (trigger IN ('schedule', 'manual')),
+        actor       TEXT NOT NULL,
+        outcome     TEXT NOT NULL CHECK (outcome IN ('running', 'ok', 'aborted', 'failed')),
+        reason      TEXT,
+        counts      TEXT NOT NULL DEFAULT '{}',   -- JSON
+        results     TEXT NOT NULL DEFAULT '[]'    -- JSON, per person
+    );
+    """,
 ]
 
 _MISSING: Any = object()
@@ -214,6 +241,8 @@ class Database:
         self.buckets = Buckets(self)
         self.bucket_keys = BucketKeys(self)
         self.shares = Shares(self)
+        self.known_accounts = KnownAccounts(self)
+        self.offboarding_runs = OffboardingRuns(self)
         self.audit = AuditLog(self)
 
     # -- plumbing -----------------------------------------------------------
@@ -595,6 +624,117 @@ class BucketKeys(_Repo):
                     (owner, by),
                 )
             return cur.rowcount
+
+
+class KnownAccounts(_Repo):
+    """AD name <-> RGW uid links of people (the offboarding job's scope)."""
+
+    def record(self, ad_username: str, uid: str, source: str, *, login: bool = False) -> None:
+        """Link (or re-link) `ad_username` to `uid`. The first source is kept while the uid
+        stays the same; a login stamps `last_login`."""
+        ts = now()
+        with self.db.tx() as c:
+            c.execute(
+                "INSERT INTO known_accounts (ad_username, rgw_uid, source, first_seen, last_login)"
+                " VALUES (?, ?, ?, ?, ?) ON CONFLICT (ad_username) DO UPDATE SET "
+                "source = CASE WHEN rgw_uid = excluded.rgw_uid THEN source "
+                "ELSE excluded.source END, "
+                "offboarding_suspended_at = CASE WHEN rgw_uid = excluded.rgw_uid "
+                "THEN offboarding_suspended_at ELSE NULL END, "
+                "rgw_uid = excluded.rgw_uid, "
+                "last_login = COALESCE(excluded.last_login, last_login)",
+                (ad_username, uid, source, ts, ts if login else None),
+            )
+
+    def get(self, ad_username: str) -> dict[str, Any] | None:
+        return self.db.query_one("SELECT * FROM known_accounts WHERE ad_username = ?",
+                                 (ad_username,))
+
+    def for_uid(self, uid: str) -> list[dict[str, Any]]:
+        return self.db.query(
+            "SELECT * FROM known_accounts WHERE rgw_uid = ? ORDER BY ad_username",
+            (uid,),
+        )
+
+    def set_offboarding(self, ad_username: str, suspended: bool) -> bool:
+        with self.db.tx() as c:
+            return c.execute(
+                "UPDATE known_accounts SET offboarding_suspended_at = ? WHERE ad_username = ?",
+                (now() if suspended else None, ad_username),
+            ).rowcount > 0
+
+    def clear_offboarding_for_uid(self, uid: str) -> list[str]:
+        """An admin took over (suspend) or ended (unsuspend) the suspension of `uid`
+        (exact uid: `Alice` is not `alice`): the job's claim goes. Returns the AD names whose
+        flag was set."""
+        with self.db.tx() as c:
+            names = [r["ad_username"] for r in c.execute(
+                "SELECT ad_username FROM known_accounts WHERE rgw_uid = ? "
+                "AND offboarding_suspended_at IS NOT NULL", (uid,))]
+            c.execute(
+                "UPDATE known_accounts SET offboarding_suspended_at = NULL "
+                "WHERE rgw_uid = ?", (uid,))
+            return names
+
+    def forget_mapping_rows(self, ad_username: str, keep_uid: str | None = None) -> int:
+        """Drop the row of `ad_username` if it came from an admin mapping and does not point
+        at `keep_uid` (the mapping was deleted or re-pointed). Exact uid comparison."""
+        with self.db.tx() as c:
+            return c.execute(
+                "DELETE FROM known_accounts WHERE ad_username = ? AND source = 'mapping' "
+                "AND (? IS NULL OR rgw_uid != ?)", (ad_username, keep_uid, keep_uid),
+            ).rowcount
+
+    def list(self) -> list[dict[str, Any]]:
+        return self.db.query("SELECT * FROM known_accounts ORDER BY ad_username")
+
+
+class OffboardingRuns(_Repo):
+    KEEP = 30
+
+    @staticmethod
+    def _row(r: dict[str, Any]) -> dict[str, Any]:
+        r["counts"] = json.loads(r["counts"] or "{}")
+        r["results"] = json.loads(r["results"] or "[]")
+        return r
+
+    def start(self, mode: str, trigger: str, actor: str) -> int:
+        with self.db.tx() as c:
+            run_id = c.execute(
+                "INSERT INTO offboarding_runs (started_at, mode, trigger, actor, outcome) "
+                "VALUES (?, ?, ?, ?, 'running')", (now(), mode, trigger, actor),
+            ).lastrowid
+            c.execute(
+                "DELETE FROM offboarding_runs WHERE id NOT IN "
+                "(SELECT id FROM offboarding_runs ORDER BY id DESC LIMIT ?)", (self.KEEP,))
+            return run_id  # type: ignore[return-value]
+
+    def finish(self, run_id: int, outcome: str, reason: str | None,
+               counts: dict[str, Any], results: list[dict[str, Any]]) -> None:
+        with self.db.tx() as c:
+            c.execute(
+                "UPDATE offboarding_runs SET finished_at = ?, outcome = ?, reason = ?, "
+                "counts = ?, results = ? WHERE id = ?",
+                (now(), outcome, reason, json.dumps(scrub(counts)),
+                 json.dumps(scrub(results)), run_id),
+            )
+
+    def fail_stale(self) -> int:
+        """Runs still 'running' after a restart died with the process."""
+        with self.db.tx() as c:
+            return c.execute(
+                "UPDATE offboarding_runs SET outcome = 'failed', finished_at = ?, "
+                "reason = 'Bucketeer restarted during the run.' WHERE outcome = 'running'",
+                (now(),),
+            ).rowcount
+
+    def list(self, limit: int = 30) -> list[dict[str, Any]]:
+        return [self._row(r) for r in self.db.query(
+            "SELECT * FROM offboarding_runs ORDER BY id DESC LIMIT ?", (limit,))]
+
+    def get(self, run_id: int) -> dict[str, Any] | None:
+        r = self.db.query_one("SELECT * FROM offboarding_runs WHERE id = ?", (run_id,))
+        return self._row(r) if r else None
 
 
 class AuditLog(_Repo):

@@ -46,6 +46,7 @@ class FakeLdap:
         self.users: dict[str, dict] = {}
         self.parents: dict[str, set[str]] = {TEAM_GROUP: {USERS_GROUP}}  # group -> parent groups
         self.down: set[str] = set()
+        self.fail_search = None  # set to True: username-attribute searches raise
         self.events: list[tuple] = []  # ("bind", url, dn) / ("search", base, flt, scope)
         self.add("alice", groups={TEAM_GROUP}, display="Alice A", mail="alice@example.org")
         self.add("bob", groups={USERS_GROUP, ADMINS_GROUP}, display="Bob B", mail="bob@example.org")
@@ -109,17 +110,20 @@ class _FakeSession:
             assert scope == "base" and base in f.users
             ok = f.member_of(base, _unescape(chain.group(1)))
             return [LdapEntry(base, {"distinguishedName": base})] if ok else []
-        values = [
-            _unescape(m.group(2)).lower()
+        asserts = [
+            (m.group(1), _unescape(m.group(2)).lower())
             for m in re.finditer(
                 r"\((sAMAccountName|mail|userPrincipalName)=((?:[^()\\]|\\[0-9a-fA-F]{2})*)\)", flt
             )
         ]
         found = [
-            LdapEntry(dn, {a: u.get(a, "") for a in attributes})
+            LdapEntry(dn, {a: u.get(a, "512" if a == "userAccountControl" else "")
+                           for a in attributes})
             for dn, u in f.users.items()
-            if any(u[k].lower() in values for k in ("sAMAccountName", "mail", "userPrincipalName"))
+            if any(u[k].lower() == v for k, v in asserts)
         ]
+        if f.fail_search is not None and any(k == "sAMAccountName" for k, _ in asserts):
+            raise LdapUnavailable("search failed")
         if size_limit and len(found) > size_limit:
             raise SizeLimitExceeded
         return found

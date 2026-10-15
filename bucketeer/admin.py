@@ -13,7 +13,7 @@ import re
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
 
@@ -31,6 +31,15 @@ Admin = Annotated[SessionUser, Depends(require_admin)]
 Croit = Annotated[CroitClient, Depends(get_croit)]
 Db = Annotated[Database, Depends(get_db)]
 Rgw = Annotated[RgwResolver, Depends(get_resolver)]
+
+
+def get_suspend_lock(request: Request) -> asyncio.Lock:
+    """The one lock for suspend/unsuspend of RGW users: admin actions, the offboarding
+    job and its login unsuspend all hold it (`OffboardingService.lock`)."""
+    return request.app.state.offboarding.lock
+
+
+SuspendLock = Annotated[asyncio.Lock, Depends(get_suspend_lock)]
 
 MAX_QUOTA = 2**62  # sane upper bound, below int64
 _UID = re.compile(r"^[^\x00-\x1f\x7f/\\?#%]{1,128}$")  # tenant$uid allowed
@@ -349,7 +358,42 @@ async def set_bucket_quota(bucket: str, body: QuotaBody, admin: Admin, croit: Cr
 # -- suspend / unsuspend -----------------------------------------------------------
 
 
+async def apply_key_suspension(
+    croit: CroitClient, db: Database, keys: list[dict], suspend: bool, by: str,
+    owner_uid: str,
+) -> tuple[list[str], list[str]]:
+    """(Un)suspend bucket keys in croit and the table; `by` ('owner', 'direct' or
+    'offboarding') is recorded on suspend. Shared by the admin routes and the offboarding
+    job. Returns (done uids, failed uids); never raises for a croit failure."""
+    done, failed = [], []
+    for k in keys:
+        try:
+            if k["rgw_uid"].lower() != owner_uid.lower():
+                try:
+                    await croit.update_user(k["rgw_uid"], suspended=suspend)
+                except CroitError as e:
+                    # A pending/failed row whose user is already gone has nothing to suspend.
+                    if not (e.status == 404 and k.get("state") in ("pending", "failed")):
+                        raise
+            await db.run(db.bucket_keys.set_suspended, k["id"], suspend, by)
+            done.append(k["rgw_uid"])
+        except CroitClientError as e:
+            log.warning("bucket key %s (un)suspend failed: %s", k["rgw_uid"], e)
+            failed.append(k["rgw_uid"])
+    return done, failed
+
+
 async def _set_suspended(
+    uid: str, suspend: bool, admin: SessionUser, croit: CroitClient, db: Database,
+    rgw: RgwResolver, lock: asyncio.Lock,
+):
+    # Serialized with the offboarding job and the login unsuspend, so none of them can undo
+    # another's decision between its read and its write.
+    async with lock:
+        return await _set_suspended_locked(uid, suspend, admin, croit, db, rgw)
+
+
+async def _set_suspended_locked(
     uid: str, suspend: bool, admin: SessionUser, croit: CroitClient, db: Database,
     rgw: RgwResolver,
 ):
@@ -367,6 +411,9 @@ async def _set_suspended(
     except CroitClientError as e:
         raise croit_http_error(e) from e
     rgw.invalidate(uid=uid)
+    # An admin decision ends the offboarding job's claim on this account: a suspend
+    # takes it over (never undone by a login), an unsuspend settles it.
+    took_over = await db.run(db.known_accounts.clear_offboarding_for_uid, uid)
 
     # Bucket keys follow their owner (CLAUDE.md "Offboarding"), but only the ones
     # the owner cascade suspended ('owner'); a key suspended on its own ('direct')
@@ -388,28 +435,24 @@ async def _set_suspended(
         keys = [k for k in keys if suspend or k["suspended_at"]]
     elif suspend:
         keys, by = [k for k in live if not k["suspended_at"]], "owner"
-    elif was:
-        keys, by = [k for k in live if k["suspended_by"] == "owner"], "owner"
+    elif was or took_over:
+        # keys the offboarding job suspended wake with an admin unsuspend as well (also
+        # when croit already says the user is awake: the keys must not stay stuck)
+        keys = [k for k in live if k["suspended_by"] in ("owner", "offboarding")]
+        by = "owner"
     else:
         keys, by = [], "owner"  # owner was not suspended: no cascade
-    done, failed = [], []
-    for k in keys:
-        try:
-            if k["rgw_uid"].lower() != uid.lower():
-                try:
-                    await croit.update_user(k["rgw_uid"], suspended=suspend)
-                except CroitError as e:
-                    # A pending/failed row whose user is already gone has nothing to suspend.
-                    if not (e.status == 404 and k.get("state") in ("pending", "failed")):
-                        raise
-            await db.run(db.bucket_keys.set_suspended, k["id"], suspend, by)
-            done.append(k["rgw_uid"])
-        except CroitClientError as e:
-            log.warning("bucket key %s (un)suspend failed: %s", k["rgw_uid"], e)
-            failed.append(k["rgw_uid"])
+    done, failed = await apply_key_suspension(croit, db, keys, suspend, by, uid)
+    if took_over and suspend:
+        # keys the job suspended now belong to the admin's suspension ('owner' wakes with it)
+        for k in live:
+            if k["suspended_by"] == "offboarding":
+                await db.run(db.bucket_keys.set_suspended, k["id"], True, "owner")
     details: dict[str, Any] = {
         "before": {"suspended": was}, "after": {"suspended": suspend}, "keys": done,
     }
+    if took_over:
+        details["offboarding_cleared"] = took_over
     if failed:
         details["keys_failed"] = failed
     action = "admin.user.suspend" if suspend else "admin.user.unsuspend"
@@ -424,12 +467,14 @@ async def _set_suspended(
 
 
 @router.post("/users/{uid}/suspend")
-async def suspend_user(uid: str, admin: Admin, croit: Croit, db: Db, rgw: Rgw):
-    return await _set_suspended(uid, True, admin, croit, db, rgw)
+async def suspend_user(uid: str, admin: Admin, croit: Croit, db: Db, rgw: Rgw,
+                       lock: SuspendLock):
+    return await _set_suspended(uid, True, admin, croit, db, rgw, lock)
 
 
 @router.post("/users/{uid}/unsuspend")
-async def unsuspend_user(uid: str, admin: Admin, croit: Croit, db: Db, rgw: Rgw):
-    return await _set_suspended(uid, False, admin, croit, db, rgw)
+async def unsuspend_user(uid: str, admin: Admin, croit: Croit, db: Db, rgw: Rgw,
+                         lock: SuspendLock):
+    return await _set_suspended(uid, False, admin, croit, db, rgw, lock)
 
 

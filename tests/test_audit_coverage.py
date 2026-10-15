@@ -67,6 +67,8 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "PUT /api/admin/buckets/{bucket}/quota": ("admin.bucket.quota",),
     "POST /api/admin/users/{uid}/suspend": ("admin.user.suspend",),
     "POST /api/admin/users/{uid}/unsuspend": ("admin.user.unsuspend",),
+    "POST /api/admin/offboarding/run": ("offboarding.run",),
+    "PUT /api/admin/offboarding/settings": ("admin.settings.offboarding",),
     f"PUT {S}/naming": ("admin.settings.naming",),
     f"POST {S}/naming/test": (),
     f"PUT {S}/budget-number": ("admin.settings.budget_number",),
@@ -92,13 +94,18 @@ EVENTS = {
     "bucket.versioning_failed": "croit down while changing versioning",
     "bucket_key.cleanup": "startup clean-up of stale pending bucket keys (actor system)",
     "bucket.unshare": "deleting a bucket marks its shares revoked (reason bucket_deleted)",
+    "offboarding.run_failed": "a run whose croit suspension failed",
+    "offboarding.unsuspend_failed": "the login unsuspend could not reach croit (actor system)",
+    "offboarding.aborted": "a run aborted by a threshold or an AD error (actor = trigger)",
+    "offboarding.suspend": "enforce mode suspends a person who left AD",
+    "offboarding.unsuspend": "login undoes the job's suspension (actor system)",
     "rgw.user.create": "first S3 use of a new AD user creates the RGW user",
 }
 
 ACTION_RE = re.compile(r"^(?:[a-z][a-z_]*)(?:\.[a-z][a-z_]*)+$")
 ACTION_EXCEPTIONS = {"logout"}  # pre-dates the scheme; kept so old log rows still match
 TARGET_TYPES = {"user", "rgw_user", "bucket", "bucket_key", "access_key", "profile", "setting",
-                "uid_mapping", "notification_endpoint", "report"}
+                "uid_mapping", "notification_endpoint", "report", "offboarding_run"}
 ACTORS = {"alice", "bob", "dave", "system", "mallory"}
 
 SECRET_PATTERNS = [
@@ -332,6 +339,34 @@ def run(tmp_path_factory, moto_server):
         "/api/admin/users/alice/suspend", headers=H))
     r.step("POST /api/admin/users/{uid}/unsuspend", lambda: b.post(
         "/api/admin/users/alice/unsuspend", headers=H))
+
+    # offboarding: a clean report run, then dave leaves AD: aborted by the 10% limit, then
+    # (limit lifted) enforced; his next login undoes it
+    from bucketeer import offboarding
+    r.step("POST /api/admin/offboarding/run", lambda: b.post(
+        "/api/admin/offboarding/run", headers=H))
+    r.step("PUT /api/admin/offboarding/settings", lambda: b.put(
+        "/api/admin/offboarding/settings", json={"mode": "enforce", "time": "04:30"}, headers=H))
+    dave = env.fake.users["CN=dave,OU=Users,DC=example,DC=org"]
+    dave["userAccountControl"] = "514"
+    r.step("event", lambda: b.post("/api/admin/offboarding/run", headers=H))  # aborted
+    offboarding.MAX_PERCENT = 100
+    try:
+        fail("PATCH", "/s3/users")  # croit down for the suspension: the run fails
+        r.step("event", lambda: b.post("/api/admin/offboarding/run", headers=H))
+        env.transport.fail = None
+        r.step("event", lambda: b.post("/api/admin/offboarding/run", headers=H))  # suspends
+    finally:
+        offboarding.MAX_PERCENT = 10
+    dave["userAccountControl"] = "512"
+
+    async def dave_returns():
+        acct = await env.app.state.rgw.resolve("dave")
+        await env.app.state.offboarding.on_login("dave", acct)
+    fail("PATCH", "/s3/users")  # ... and the login unsuspend fails once
+    r.step("event", lambda: asyncio.run(dave_returns()))
+    env.transport.fail = None
+    r.step("event", lambda: asyncio.run(dave_returns()))
 
     # admin settings (naming last: it changes what bucket names are valid)
     r.step(f"PUT {S}/placement", lambda: b.put(

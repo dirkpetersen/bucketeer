@@ -32,7 +32,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -133,6 +133,16 @@ def uid_claimed(db: Database, uid: str) -> bool:
     )
 
 
+def is_key_uid(db: Database, uid: str) -> bool:
+    """Is `uid` a bucket key's RGW user (revoked rows too)? Such users are never people.
+    Sync (DB only)."""
+    return any(same_uid(k["rgw_uid"], uid) for k in db.bucket_keys.list(include_revoked=True))
+
+
+def link_source(acct: "RgwAccount") -> str:
+    return "created" if acct.created else "mapping" if acct.source == "mapping" else "linked"
+
+
 def ad_names_for_uid(db: Database, uid: str, tenant: str) -> list[str]:
     """AD usernames whose resolution leads to `uid`: those mapped to it, else
     the default name (the uid's bare part) when the uid is not claimed by a
@@ -163,6 +173,9 @@ class RgwResolver:
         self._locks: dict[str, asyncio.Lock] = {}
         self._quiet: dict[tuple[str, str], float] = {}
         self._tasks: set[asyncio.Task] = set()
+        # async (username, account) hook after a successful login (offboarding: undo the
+        # job's suspension). Set by create_app; best effort, runs in the warm-up task.
+        self.on_login: Callable[[str, RgwAccount], Awaitable[None]] | None = None
 
     # -- cache -------------------------------------------------------------
 
@@ -190,15 +203,38 @@ class RgwResolver:
 
         async def run() -> None:
             try:
-                await asyncio.wait_for(
-                    self.resolve(user.username, user.display_name), WARM_TIMEOUT
-                )
+                async def go() -> None:
+                    acct = await self.resolve(user.username, user.display_name)
+                    await self.record_login(user.username, acct)
+                    if self.on_login is not None:
+                        await self.on_login(user.username, acct)
+
+                await asyncio.wait_for(go(), WARM_TIMEOUT)
             except Exception as e:  # noqa: BLE001 - best effort
                 log.warning("post-login RGW resolution for %s failed: %r", user.username, e)
 
         task = asyncio.get_running_loop().create_task(run())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    # -- known accounts (the offboarding job's scope) ----------------------------
+
+    async def record_link(self, username: str, acct: "RgwAccount", *, login: bool = False) -> None:
+        """Durably link the AD name to its uid (a person's account; never a bucket-key
+        user). Best effort: a DB trouble must not break a resolution."""
+        if not acct.resolved or not acct.uid:
+            return
+        db = self._db()
+        try:
+            if await db.run(is_key_uid, db, acct.uid):
+                return
+            await db.run(db.known_accounts.record, username, acct.uid, link_source(acct),
+                         login=login)
+        except Exception:  # noqa: BLE001
+            log.exception("recording the account link for %s failed", username)
+
+    async def record_login(self, username: str, acct: "RgwAccount") -> None:
+        await self.record_link(username, acct, login=True)
 
     # -- resolution --------------------------------------------------------
 
@@ -216,6 +252,7 @@ class RgwResolver:
                 return RgwAccount(username, None, UNAVAILABLE, display_name)
             if acct.status != UNAVAILABLE and acct.reason not in UNCACHED_REASONS:
                 self._cache[key] = (self.clock() + self.ttl, acct)
+            await self.record_link(username, acct)
             return acct
 
     def _cached(self, key: str) -> RgwAccount | None:

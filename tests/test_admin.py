@@ -46,9 +46,10 @@ class Env:
         settings = make_settings(tmp_path)
         croit = CroitClient(settings, poll_interval=0.01, transport=self.transport)
         self.db = Database(":memory:")
+        self.fake = FakeLdap()
         self.app = create_app(
             settings, croit=croit, db=self.db,
-            authenticator=AdAuthenticator(settings, FakeLdap()),
+            authenticator=AdAuthenticator(settings, self.fake),
         )
         self.anon = TestClient(self.app, base_url="https://testserver")
         self.admin = self.session("bob")  # bob is in the admin group

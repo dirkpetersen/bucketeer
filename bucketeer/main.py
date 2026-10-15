@@ -22,6 +22,7 @@ from . import (
     lifecycle_rules,
     notifications,
     object_lock,
+    offboarding,
     policy_editor,
     profile,
     rgw_user,
@@ -80,9 +81,17 @@ def create_app(
         if bucket_keys.CLEANUP_ON_START:  # background: never blocks startup or /health
             cleanup = asyncio.get_running_loop().create_task(
                 bucket_keys.cleanup_pending(_app))
+        schedule = None
+        if offboarding.SCHEDULE_ON_START:  # background: never blocks startup or /health
+            schedule = asyncio.get_running_loop().create_task(
+                _app.state.offboarding.schedule_loop())
         try:
             yield
         finally:
+            if schedule is not None:
+                schedule.cancel()
+                await asyncio.gather(schedule, return_exceptions=True)
+            await _app.state.offboarding.aclose()
             if cleanup is not None:
                 cleanup.cancel()
                 await asyncio.gather(cleanup, return_exceptions=True)
@@ -102,6 +111,9 @@ def create_app(
     app.state.sessions = auth.SessionManager(settings, clock)
     app.state.throttle = auth.LoginThrottle(clock)
     app.state.rgw = rgw_user.RgwResolver(client, lambda: app.state.db, settings.s3_tenant)
+
+    app.state.offboarding = offboarding.OffboardingService(app)
+    app.state.rgw.on_login = app.state.offboarding.on_login
 
     app.state.endpoints = credentials.EndpointResolver(client, settings, clock)
     app.state.s3 = s3client.S3Clients(client, settings, app.state.endpoints)
@@ -163,6 +175,7 @@ def create_app(
     api.include_router(sharing.router)
     api.include_router(admin.router)
     api.include_router(admin_settings.router)
+    api.include_router(offboarding.router)
     app.include_router(api)
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

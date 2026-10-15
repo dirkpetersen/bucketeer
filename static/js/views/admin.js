@@ -7,6 +7,7 @@ import { confirmDialog } from "../components/confirm-dialog.js";
 import { quotaDialog } from "../components/quota-dialog.js";
 import { renderSettings } from "./admin-settings.js";
 import { renderAudit } from "./admin-audit.js";
+import { renderOffboarding } from "./admin-offboarding.js";
 
 // Administration: all users and buckets, quota editing, suspend/unsuspend.
 // The server enforces the role on every call; this view is only shown to admins.
@@ -191,9 +192,12 @@ export function renderAdmin() {
   const tableHost = h("div", { class: "table-host" });
   const settings = renderSettings();
   const audit = renderAudit();
+  const offboarding = renderOffboarding();
   let auditLoaded = false;
-  const TAB_KEYS = ["users", "buckets", "keys", "audit", "settings"];
-  const tabs = [["users", "Users", "users"], ["buckets", "Buckets", "bucket"], ["keys", "Bucket keys", "key"], ["audit", "Audit", "shield"], ["settings", "Settings", "sliders"]].map(([key, label, ic]) =>
+  let offboardingLoaded = false;
+  const PANELS = { audit, settings, offboarding }; // tabs that are panels, not tables
+  const TAB_KEYS = ["users", "buckets", "keys", "audit", "offboarding", "settings"];
+  const tabs = [["users", "Users", "users"], ["buckets", "Buckets", "bucket"], ["keys", "Bucket keys", "key"], ["audit", "Audit", "shield"], ["offboarding", "Offboarding", "logout"], ["settings", "Settings", "sliders"]].map(([key, label, ic]) =>
     h("button", { class: "tab", type: "button", role: "tab", id: `tab-${key}`, "aria-controls": "admin-panel", on: { click: () => switchTab(key) } },
       icon(ic), label, h("span", { class: "tab-count", id: `tc-${key}` })));
   const tablist = h("div", { class: "tabs", role: "tablist", "aria-label": "Administration" }, tabs);
@@ -213,17 +217,18 @@ export function renderAdmin() {
     search.value = "";
     paintControls();
     if (key === "audit" && !auditLoaded) { auditLoaded = true; audit.load(); }
+    if (key === "offboarding" && !offboardingLoaded) { offboardingLoaded = true; offboarding.load(); }
     render();
   }
   search.addEventListener("input", () => { state.q = search.value.trim().toLowerCase(); render(); });
   sortSel.addEventListener("change", () => { state.sort[state.tab].key = sortSel.value; render(); });
   dirBtn.addEventListener("click", () => { state.sort[state.tab].dir *= -1; render(); });
   onlyBtn.addEventListener("click", () => { state.only[state.tab] = !state.only[state.tab]; render(); });
-  refreshBtn.addEventListener("click", () => (state.tab === "settings" ? settings.load() : state.tab === "audit" ? audit.load() : load(state.tab)));
+  refreshBtn.addEventListener("click", () => (PANELS[state.tab] ? PANELS[state.tab].load() : load(state.tab)));
 
   function paintControls() {
     const tab = state.tab;
-    if (tab === "settings" || tab === "audit") return;
+    if (PANELS[tab]) return;
     search.placeholder = tab === "users" ? "Search users, names, e-mail" : tab === "keys" ? "Search owners, buckets, labels" : "Search buckets, owners, budget numbers";
     sortSel.replaceChildren(...columns[tab].filter((c) => !c.noSort).map((c) =>
       h("option", { value: c.key, selected: c.key === state.sort[tab].key, text: `Sort: ${c.label}` })));
@@ -301,7 +306,7 @@ export function renderAdmin() {
 
   function render() {
     const tab = state.tab;
-    const isSettings = tab === "settings" || tab === "audit";
+    const isSettings = !!PANELS[tab];
     filtersEl.hidden = isSettings;
     exportNote.hidden = tab !== "buckets";
     for (const t of tabs) t.setAttribute("aria-selected", String(t.id === `tab-${tab}`)), t.tabIndex = t.id === `tab-${tab}` ? 0 : -1;
@@ -310,7 +315,7 @@ export function renderAdmin() {
       countEl.textContent = "";
       refreshBtn.disabled = false;
       refreshBtn.classList.remove("spin");
-      const panel = tab === "audit" ? audit.el : settings.el;
+      const panel = PANELS[tab].el;
       if (tableHost.firstElementChild !== panel) tableHost.replaceChildren(panel);
       return;
     }

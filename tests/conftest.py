@@ -86,3 +86,11 @@ def no_key_cleanup_on_start(monkeypatch):
     from bucketeer import bucket_keys
 
     monkeypatch.setattr(bucket_keys, "CLEANUP_ON_START", False)
+
+
+@pytest.fixture(autouse=True)
+def no_offboarding_schedule(monkeypatch):
+    """The daily offboarding scheduler is tested explicitly."""
+    from bucketeer import offboarding
+
+    monkeypatch.setattr(offboarding, "SCHEDULE_ON_START", False)

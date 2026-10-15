@@ -62,6 +62,8 @@ class DemoDirectory:
 
     def __init__(self, password: str = DEMO_PASSWORD):
         self.password = password
+        self.disabled: set[str] = set()  # sAMAccountNames (lowercase) of disabled accounts
+        self.left_group: set[str] = set()  # ... that left the required group
         self.users = {
             sam: AuthUser(sam, display, f"{sam}@{DOMAIN}", is_admin)
             for sam, (display, is_admin) in DEMO_USERS.items()
@@ -88,6 +90,22 @@ class DemoDirectory:
     async def lookup_user(self, login: str) -> AuthUser:
         """Recipient lookup for sharing (no password), like `AdAuthenticator.lookup_user`."""
         return self._find(login)
+
+    async def account_statuses(self, usernames) -> dict[str, str]:
+        """Offboarding job lookup, like `AdAuthenticator.account_statuses`: `ok`,
+        `disabled`, `not_in_group` or `not_found`. Edit `disabled` / `left_group` to demo."""
+        out = {}
+        for name in usernames:
+            key = name.strip().lower()
+            if key not in self.users:
+                out[name] = "not_found"
+            elif key in self.disabled:
+                out[name] = "disabled"
+            elif key in self.left_group:
+                out[name] = "not_in_group"
+            else:
+                out[name] = "ok"
+        return out
 
     async def verify(self, resolved: Resolved, password: str) -> AuthUser:
         if not secrets.compare_digest(password.encode(), self.password.encode()):
@@ -156,6 +174,9 @@ def parse_args(argv=None):
     p.add_argument("--keep-data", action="store_true", help="keep the temporary DATA_DIR on exit")
     p.add_argument("--password", default=DEMO_PASSWORD, 
                    help=f"demo password (default {DEMO_PASSWORD})")
+    p.add_argument("--disabled", default="", metavar="USERS",
+                   help="comma-separated demo users that start as disabled in the fake AD, "
+                        "to try the offboarding job (e.g. --disabled bob)")
     return p.parse_args(argv)
 
 
@@ -204,7 +225,9 @@ def main(argv=None) -> int:
         croit_url = f"http://127.0.0.1:{args.croit_port}/api"
         settings = demo_settings(port=args.port, croit_url=croit_url, croit_token=ADMIN_TOKEN,
                                  s3_url=bridge.endpoint, data_dir=data_dir)
-        app = build_demo_app(settings, directory=DemoDirectory(args.password))
+        directory = DemoDirectory(args.password)
+        directory.disabled |= {n.strip().lower() for n in args.disabled.split(",") if n.strip()}
+        app = build_demo_app(settings, directory=directory)
 
         print(f"""
 Bucketeer DEMO  (fake directory, mock croit, moto S3; nothing here is real)

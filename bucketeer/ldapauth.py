@@ -227,6 +227,17 @@ class AdAuthenticator:
         Raises InvalidCredentials (`.reason` for logs only) or LdapUnavailable."""
         return await asyncio.to_thread(self._lookup, login)
 
+    async def account_statuses(self, usernames: Sequence[str]) -> dict[str, str]:
+        """For the offboarding job: the state of each account, found by the username
+        attribute (exact, escaped; NOT the login filter): `ok`, `disabled`
+        (userAccountControl bit 2), `not_in_group` (nested required group, when set) or
+        `not_found`. One service bind, no user password. ANY LDAP trouble (including an
+        ambiguous or attribute-less entry) raises `LdapUnavailable` for the whole call."""
+        return await asyncio.to_thread(self._account_statuses, list(usernames))
+
+    async def account_status(self, username: str) -> str:
+        return (await self.account_statuses([username]))[username]
+
     async def resolve(self, login: str, password: str) -> Resolved:
         """Service bind, search, exactly-one check, group checks. No user bind.
         `password` is only pre-validated here."""
@@ -319,6 +330,43 @@ class AdAuthenticator:
             email=entry.attrs.get(s.ldap_email_attribute, "").strip(),
             is_admin=False,  # not looked at: lookups only identify people
         )
+
+    def _account_statuses(self, usernames: list[str]) -> dict[str, str]:
+        s = self.s
+        uattr = s.ldap_username_attribute
+        out: dict[str, str] = {}
+        svc, _ = self._service_session()
+        try:
+            for name in usernames:
+                flt = f"({uattr}={escape_filter_chars(name)})"
+                try:
+                    entries = svc.search(s.ldap_base_dn, flt, [uattr, "userAccountControl"],
+                                         size_limit=2)
+                except SizeLimitExceeded:
+                    raise LdapUnavailable("ambiguous account") from None
+                if len(entries) > 1:
+                    raise LdapUnavailable("ambiguous account")
+                if not entries:
+                    out[name] = "not_found"
+                    continue
+                entry = entries[0]
+                if entry.attrs.get(uattr, "").strip().lower() != name.strip().lower():
+                    raise LdapUnavailable("unexpected directory entry")
+                try:
+                    uac = int(entry.attrs.get("userAccountControl", "").strip())
+                except ValueError:
+                    raise LdapUnavailable("account has no userAccountControl") from None
+                if uac & 2:
+                    out[name] = "disabled"
+                elif s.ldap_required_group_dn and not self._is_member(
+                    svc, entry.dn, s.ldap_required_group_dn
+                ):
+                    out[name] = "not_in_group"
+                else:
+                    out[name] = "ok"
+        finally:
+            svc.close()
+        return out
 
     def _service_session(self) -> tuple[LdapSession, str]:
         """First domain controller that accepts the service bind."""

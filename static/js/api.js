@@ -123,6 +123,9 @@ export const setUserQuota = (uid, quota) =>
   api(`/admin/users/${enc(uid)}/quota`, { method: "PUT", json: quota });
 export const setBucketQuota = (bucket, quota) =>
   api(`/admin/buckets/${enc(bucket)}/quota`, { method: "PUT", json: quota });
+export const getOffboarding = () => api("/admin/offboarding");
+export const runOffboarding = () => api("/admin/offboarding/run", { method: "POST" });
+export const saveOffboardingSettings = (body) => api("/admin/offboarding/settings", { method: "PUT", json: body });
 export const suspendUser = (uid) => api(`/admin/users/${enc(uid)}/suspend`, { method: "POST" });
 export const unsuspendUser = (uid) => api(`/admin/users/${enc(uid)}/unsuspend`, { method: "POST" });
 
