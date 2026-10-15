@@ -425,7 +425,6 @@ def test_revoke_keeps_the_row_when_the_policy_cannot_be_changed(env):
 
 
 def test_bucket_delete_revokes_its_keys(env):
-    croit_only("deletes a bucket through croit (Phase 5 A4)")
     k = mk(env.alice, bucket="alice-empty").json()
     keep = mk(env.alice, bucket="alice-data", label="keep").json()
     r = env.alice.delete("/api/buckets/alice-empty", headers=H)
@@ -438,7 +437,6 @@ def test_bucket_delete_revokes_its_keys(env):
 
 
 def test_bucket_delete_with_a_stuck_key_user_still_deletes_and_warns(env):
-    croit_only("deletes a bucket through croit (Phase 5 A4)")
     mk(env.alice, bucket="alice-empty")
     fail_when(env, "DELETE", "/s3/users/alice%2Bbackup")
     r = env.alice.delete("/api/buckets/alice-empty", headers=H)

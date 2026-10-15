@@ -19,6 +19,7 @@ from mock.s3_bridge import S3Bridge
 
 from .backends import admin_client
 from .conftest import REQUIRED
+from .s3_forget import forgetting
 from .test_admin import Transport
 from .test_auth import SECRET_PW, TEAM_GROUP, USERS_GROUP, FakeLdap, make_settings
 
@@ -54,6 +55,7 @@ class Env:
             self.used.append(access)
             return real(endpoint, access, secret, settings)
 
+        spy = forgetting(spy, self.croit_state)  # S3 DeleteBucket also ends the admin listing
         self.app.state.s3.factory = spy
         self.real_factory = spy
         self.alice = self.session("alice")

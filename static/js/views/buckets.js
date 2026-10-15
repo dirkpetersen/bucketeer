@@ -1,6 +1,6 @@
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
-import { deleteBucket, listBuckets, reconcileBuckets, setBucketVersioning } from "../api.js";
+import { deleteBucket, listBuckets, listDeleteJobs, reconcileBuckets, retryDeleteJob, setBucketVersioning } from "../api.js";
 import { formatBytes, formatCount } from "../format.js";
 import { toast } from "../components/toast.js";
 import { confirmDialog, nameSpan } from "../components/confirm-dialog.js";
@@ -74,7 +74,32 @@ function usageBlock(b) {
   return out;
 }
 
-function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPolicy, onAcl, onCors, onTags, onLock, onBudget, onRules, onNotify, onUploads, busy) {
+// The delete job of a bucket: progress while it runs, the reason and Retry when it stopped.
+function jobBlock(job, onRetry) {
+  if (job.state === "queued" || job.state === "running") {
+    const done = job.deletedObjects || 0;
+    const total = job.objectsHint || 0;
+    const text = job.state === "queued" ? "Waiting to start deleting…"
+      : `Deleting… ${formatCount(done)} ${done === 1 ? "object" : "objects"} removed${total > done ? ` of about ${formatCount(total)}` : ""}`;
+    const out = h("div", { class: "bk-job", role: "status" },
+      h("span", { class: "spinner", "aria-hidden": "true" }), h("span", { class: "bk-job-t", text }));
+    if (total > 0) {
+      const fill = h("span", { class: "meter-fill" });
+      fill.style.width = `${Math.min(100, (done / total) * 100)}%`;
+      out.append(h("span", { class: "meter bk-job-meter", "data-level": "ok", role: "img", "aria-label": `${Math.min(100, Math.round((done / total) * 100))}% deleted` }, fill));
+    }
+    return out;
+  }
+  const blocked = job.state === "blocked";
+  return h("div", { class: "bk-job bk-job-stopped", "data-kind": job.state, role: "status" },
+    icon(blocked ? "lock" : "alert", "icon"),
+    h("div", { class: "bk-job-body" },
+      h("b", { text: blocked ? "Deletion is blocked" : "Deletion paused" }),
+      h("span", { class: "bk-job-msg", text: job.message || "The bucket could not be deleted yet." })),
+    h("button", { class: "btn btn-sm", type: "button", on: { click: () => onRetry(job) } }, icon("refresh"), "Retry"));
+}
+
+function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPolicy, onAcl, onCors, onTags, onLock, onBudget, onRules, onNotify, onUploads, busy, job, onRetry) {
   const created = b.createdAt ? new Date(b.createdAt) : null;
   const meta = h("div", { class: "bk-meta" });
   if (created && !Number.isNaN(created.getTime())) {
@@ -117,9 +142,10 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPo
   });
   const vsw = versionSwitch(b, onToggle);
   budget.classList.add("bk-budget-slot");
-  return h("li", { class: "bk-row", "data-busy": String(!!busy) },
+  const active = job && (job.state === "queued" || job.state === "running");
+  return h("li", { class: "bk-row", "data-busy": String(!!busy), "data-deleting": String(!!active) },
     h("span", { class: "bk-ic", "aria-hidden": "true" }, icon("bucket")),
-    h("div", { class: "bk-main" }, h("b", { class: "bk-name", text: b.name }), meta),
+    h("div", { class: "bk-main" }, h("b", { class: "bk-name", text: b.name }), meta, job ? jobBlock(job, onRetry) : null),
     usageBlock(b),
     h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, vsw, peopleBtn, more)));
 }
@@ -127,6 +153,8 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPo
 export function bucketsCard() {
   let buckets = [];
   const deleting = new Set();
+  const jobs = new Map(); // bucket name -> its delete job (not done)
+  let pollTimer = null;
   const body = h("div", { class: "bk-body", "aria-live": "polite" }, skeleton());
   const createBtn = h("button", { class: "btn btn-primary btn-sm", type: "button", disabled: true }, icon("plus"), "Create bucket");
   const count = h("span", { class: "chip", hidden: true });
@@ -148,7 +176,7 @@ export function bucketsCard() {
         h("div", { class: "empty-acts" }, h("button", { class: "btn btn-primary", type: "button", on: { click: create } }, icon("plus"), "Create your first bucket"))));
       return;
     }
-    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, managePolicy, manageAcl, manageCors, manageTags, manageLock, manageBudget, manageRules, manageNotify, manageUploads, deleting.has(b.name) || deleting.has(`v:${b.name}`)))));
+    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, managePolicy, manageAcl, manageCors, manageTags, manageLock, manageBudget, manageRules, manageNotify, manageUploads, deleting.has(b.name) || deleting.has(`v:${b.name}`), jobs.get(b.name), retryJob))));
   }
 
   function failed(err) {
@@ -165,10 +193,59 @@ export function bucketsCard() {
       return;
     }
     createBtn.disabled = false;
+    await refreshJobs({ repaint: false });
     paint();
     // A budget tag that could not be written at creation is retried here (a POST, never a GET).
     if (buckets.some((b) => b.tagPending)) {
       reconcileBuckets().then(() => load({ quiet: true })).catch(() => {});
+    }
+  }
+
+  // Delete jobs run on the server; poll while one is active, stop when none is or the card is gone.
+  async function refreshJobs({ repaint = true } = {}) {
+    let list;
+    try {
+      list = (await listDeleteJobs()).jobs;
+    } catch {
+      return false;
+    }
+    const prev = new Map(jobs);
+    jobs.clear();
+    for (const j of list) if (j.state !== "done") jobs.set(j.bucket, j);
+    let finished = false;
+    for (const [name, was] of prev) {
+      if (was.state !== "queued" && was.state !== "running") continue;
+      const now = jobs.get(name);
+      if (!now) finished = true; // done: the bucket is gone
+      else if (now.state === "blocked") toast.show(`${name} still has locked files, so it was not deleted.`, { timeout: 9000 });
+      else if (now.state === "failed") toast.error(`Deleting ${name} stopped: ${now.message || "try again."}`);
+    }
+    if (finished) toast.show("Bucket deleted.");
+    schedulePoll();
+    if (finished) await load({ quiet: true });
+    else if (repaint && buckets.length) paint();
+    return finished;
+  }
+
+  function schedulePoll() {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+    const active = [...jobs.values()].some((j) => j.state === "queued" || j.state === "running");
+    if (!active) return;
+    pollTimer = setTimeout(() => {
+      if (!card.isConnected) return;
+      refreshJobs();
+    }, 3000);
+  }
+
+  async function retryJob(job) {
+    try {
+      const res = await retryDeleteJob(job.id);
+      jobs.set(res.job.bucket, res.job);
+      paint();
+      schedulePoll();
+    } catch (err) {
+      if (err.status !== 401) toast.error(err.message);
     }
   }
 
@@ -202,6 +279,15 @@ export function bucketsCard() {
     paint();
     try {
       const res = await deleteBucket(b.name, confirmed || nonEmpty ? b.name : undefined);
+      if (res?.job) {
+        // A non-empty bucket on the rgw backend: emptied in the background.
+        jobs.set(res.job.bucket, res.job);
+        deleting.delete(b.name);
+        toast.show(`Deleting ${b.name} in the background.`);
+        paint();
+        schedulePoll();
+        return;
+      }
       if (res?.warning) toast.show(res.warning, { timeout: 9000 });
       else toast.show(`Bucket ${b.name} deleted.`);
     } catch (err) {

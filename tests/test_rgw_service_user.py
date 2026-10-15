@@ -1,7 +1,8 @@
 """The Admin Ops service user is an ordinary RGW user; the portal must never hand it to a
 person, map to it, share with it, suspend it or list it (rgw backend only).
 
-Plus the Admin Ops gaps (bucket create, versioning, delete) answering 501 cleanly.
+Plus the Admin Ops gaps (bucket create, versioning) answering 501 cleanly; delete works on
+rgw as a background job (`tests/test_bucket_delete_job.py`).
 """
 
 import asyncio
@@ -137,15 +138,10 @@ def test_when_the_service_user_cannot_be_identified_nobody_resolves(env):
 # -- the Admin Ops gaps answer 501 and are not "outcome unknown" ------------------------
 
 
-def test_bucket_create_versioning_and_delete_answer_501_without_failure_audits(env):
+def test_bucket_create_and_versioning_answer_501_without_failure_audits(env):
     r = create(env.alice, name="alice-new")
     assert r.status_code == 501 and "isn't available" in r.json()["detail"]
     r = env.alice.put("/api/buckets/alice-data/versioning", json={"enabled": True}, headers=H)
-    assert r.status_code == 501
-    r = env.alice.request("DELETE", "/api/buckets/alice-empty", headers=H)
-    assert r.status_code == 501
-    r = env.alice.request("DELETE", "/api/buckets/alice-data",
-                          json={"confirmName": "alice-data"}, headers=H)
     assert r.status_code == 501
     assert [a["action"] for a in env.audit("bucket.") if a["action"].endswith("_failed")] == []
     assert "alice-new" not in {b["name"] for b in env.alice.get("/api/buckets").json()["buckets"]}

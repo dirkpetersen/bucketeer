@@ -166,6 +166,31 @@ MIGRATIONS: list[str] = [
         results     TEXT NOT NULL DEFAULT '[]'    -- JSON, per person
     );
     """,
+    # v9: background jobs that empty and delete a non-empty bucket on the rgw admin backend
+    # (progress is kept so a restart resumes; only one queued/running job per bucket).
+    """
+    CREATE TABLE bucket_delete_jobs (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        bucket            TEXT NOT NULL,            -- croit name (tenant:bucket)
+        owner_uid         TEXT NOT NULL,
+        owner_ad          TEXT NOT NULL,
+        state             TEXT NOT NULL CHECK (state IN
+                              ('queued', 'running', 'done', 'blocked', 'failed')),
+        deleted_objects   INTEGER NOT NULL DEFAULT 0,
+        deleted_bytes     INTEGER NOT NULL DEFAULT 0,
+        remaining_objects INTEGER NOT NULL DEFAULT 0,
+        objects_hint      INTEGER,                  -- sizes at request time (progress display)
+        bytes_hint        INTEGER,
+        last_error        TEXT,                     -- user-facing text, never a secret
+        attempts          INTEGER NOT NULL DEFAULT 0,
+        created_at        TEXT NOT NULL,
+        updated_at        TEXT NOT NULL,
+        finished_at       TEXT
+    );
+    CREATE UNIQUE INDEX bucket_delete_jobs_active ON bucket_delete_jobs (bucket)
+        WHERE state IN ('queued', 'running');
+    CREATE INDEX bucket_delete_jobs_owner ON bucket_delete_jobs (owner_uid);
+    """,
 ]
 
 _MISSING: Any = object()
@@ -243,6 +268,7 @@ class Database:
         self.shares = Shares(self)
         self.known_accounts = KnownAccounts(self)
         self.offboarding_runs = OffboardingRuns(self)
+        self.delete_jobs = BucketDeleteJobs(self)
         self.audit = AuditLog(self)
 
     # -- plumbing -----------------------------------------------------------
@@ -735,6 +761,72 @@ class OffboardingRuns(_Repo):
     def get(self, run_id: int) -> dict[str, Any] | None:
         r = self.db.query_one("SELECT * FROM offboarding_runs WHERE id = ?", (run_id,))
         return self._row(r) if r else None
+
+
+class BucketDeleteJobs(_Repo):
+    """Jobs that empty and delete a bucket (see `bucket_delete.py`). At most one
+    queued/running job per bucket (unique index): `create` raises `sqlite3.IntegrityError`."""
+
+    def create(self, bucket: str, owner_uid: str, owner_ad: str, objects_hint: int | None,
+               bytes_hint: int | None) -> dict[str, Any]:
+        with self.db.tx() as c:
+            t = now()
+            cur = c.execute(
+                "INSERT INTO bucket_delete_jobs (bucket, owner_uid, owner_ad, state, "
+                "objects_hint, bytes_hint, created_at, updated_at) "
+                "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)",
+                (bucket, owner_uid, owner_ad, objects_hint, bytes_hint, t, t))
+            return self.get(cur.lastrowid)  # type: ignore[return-value]
+
+    def get(self, job_id: int) -> dict[str, Any] | None:
+        return self.db.query_one("SELECT * FROM bucket_delete_jobs WHERE id = ?", (job_id,))
+
+    def latest_for(self, bucket: str) -> dict[str, Any] | None:
+        return self.db.query_one(
+            "SELECT * FROM bucket_delete_jobs WHERE bucket = ? ORDER BY id DESC LIMIT 1",
+            (bucket,))
+
+    def unfinished(self) -> list[dict[str, Any]]:
+        """Queued or running jobs (what a restart resumes)."""
+        return self.db.query("SELECT * FROM bucket_delete_jobs WHERE state IN "
+                             "('queued', 'running') ORDER BY id")
+
+    def list_for(self, owner_uid: str, done_since: str) -> list[dict[str, Any]]:
+        """The owner's jobs: every one not done, plus those done since `done_since`."""
+        return self.db.query(
+            "SELECT * FROM bucket_delete_jobs WHERE owner_uid = ? AND "
+            "(state != 'done' OR finished_at >= ?) ORDER BY id", (owner_uid, done_since))
+
+    def start(self, job_id: int) -> bool:
+        with self.db.tx() as c:
+            return c.execute(
+                "UPDATE bucket_delete_jobs SET state = 'running', attempts = attempts + 1, "
+                "last_error = NULL, finished_at = NULL, updated_at = ? WHERE id = ? "
+                "AND state IN ('queued', 'running')", (now(), job_id)).rowcount > 0
+
+    def requeue(self, job_id: int) -> bool:
+        """blocked/failed -> queued (retry); False if the job is in another state."""
+        with self.db.tx() as c:
+            return c.execute(
+                "UPDATE bucket_delete_jobs SET state = 'queued', last_error = NULL, "
+                "finished_at = NULL, updated_at = ? WHERE id = ? AND state IN "
+                "('blocked', 'failed')", (now(), job_id)).rowcount > 0
+
+    def progress(self, job_id: int, deleted: int, size: int, remaining: int | None) -> None:
+        with self.db.tx() as c:
+            c.execute(
+                "UPDATE bucket_delete_jobs SET deleted_objects = deleted_objects + ?, "
+                "deleted_bytes = deleted_bytes + ?, remaining_objects = COALESCE(?, "
+                "remaining_objects), updated_at = ? WHERE id = ?",
+                (deleted, size, remaining, now(), job_id))
+
+    def finish(self, job_id: int, state: str, message: str | None = None) -> None:
+        assert state in ("done", "blocked", "failed")
+        with self.db.tx() as c:
+            t = now()
+            c.execute("UPDATE bucket_delete_jobs SET state = ?, last_error = ?, "
+                      "finished_at = ?, updated_at = ? WHERE id = ?",
+                      (state, message, t, t, job_id))
 
 
 class AuditLog(_Repo):

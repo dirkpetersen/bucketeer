@@ -89,6 +89,15 @@ def no_key_cleanup_on_start(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_delete_jobs_background(monkeypatch):
+    """Bucket delete jobs are driven explicitly by tests (`bucket_delete.run_job`)."""
+    from bucketeer import bucket_delete
+
+    monkeypatch.setattr(bucket_delete, "AUTOSTART", False)
+    monkeypatch.setattr(bucket_delete, "RESUME_ON_START", False)
+
+
+@pytest.fixture(autouse=True)
 def no_offboarding_schedule(monkeypatch):
     """The daily offboarding scheduler is tested explicitly."""
     from bucketeer import offboarding

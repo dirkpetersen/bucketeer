@@ -435,3 +435,22 @@
   .mp-filter { grid-template-columns: minmax(0, 1fr) auto; }
   .mp-filter .input { grid-column: 1 / -1; }
 }
+
+/* Delete jobs: progress while a non-empty bucket is emptied, reason and Retry when it stopped. */
+.bk-row[data-deleting="true"] { background: var(--surface-2); }
+.bk-row[data-deleting="true"] .bk-ic,
+.bk-row[data-deleting="true"] .bk-usage,
+.bk-row[data-deleting="true"] .bk-tail { opacity: 0.45; pointer-events: none; }
+.bk-job { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); margin-top: var(--sp-1);
+  font-size: var(--fs-sm); color: var(--text); font-variant-numeric: tabular-nums; }
+.bk-job .spinner { color: var(--accent-text); }
+.bk-job-meter { flex: 1 1 8rem; max-width: 16rem; margin-top: 0; }
+.bk-job-stopped { align-items: flex-start; flex-wrap: nowrap; padding: var(--sp-3); border-radius: var(--r-md);
+  border: 1px solid var(--border); background: var(--surface-2); }
+.bk-job-stopped[data-kind="failed"] { background: var(--danger-bg); border-color: var(--danger); }
+.bk-job-stopped > .icon { margin-top: 0.15rem; color: var(--text-muted); }
+.bk-job-stopped[data-kind="failed"] > .icon { color: var(--danger); }
+.bk-job-body { display: grid; gap: var(--sp-1); min-width: 0; flex: 1; }
+.bk-job-msg { color: var(--text-muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.bk-job-stopped .btn { flex: none; }
+@media (max-width: 34em) { .bk-job-stopped { flex-wrap: wrap; } }

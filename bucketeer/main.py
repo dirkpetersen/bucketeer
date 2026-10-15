@@ -14,6 +14,7 @@ from . import (
     admin_settings,
     audit_viewer,
     auth,
+    bucket_delete,
     bucket_keys,
     buckets,
     cors,
@@ -86,6 +87,9 @@ def create_app(
         if bucket_keys.CLEANUP_ON_START:  # background: never blocks startup or /health
             cleanup = asyncio.get_running_loop().create_task(
                 bucket_keys.cleanup_pending(_app))
+        resume = None
+        if bucket_delete.RESUME_ON_START:  # unfinished delete jobs; never blocks startup
+            resume = asyncio.get_running_loop().create_task(bucket_delete.resume(_app))
         schedule = None
         if offboarding.SCHEDULE_ON_START:  # background: never blocks startup or /health
             schedule = asyncio.get_running_loop().create_task(
@@ -100,6 +104,10 @@ def create_app(
             if cleanup is not None:
                 cleanup.cancel()
                 await asyncio.gather(cleanup, return_exceptions=True)
+            if resume is not None:
+                resume.cancel()
+                await asyncio.gather(resume, return_exceptions=True)
+            await bucket_delete.shutdown(_app)
             await _app.state.rgw.aclose()
             await client.aclose()
             if owned:
@@ -164,6 +172,7 @@ def create_app(
     api.include_router(rgw_user.router)
     api.include_router(credentials.router)
     api.include_router(profile.router)
+    api.include_router(bucket_delete.router)  # before /buckets/{name}
     api.include_router(buckets.router)
     api.include_router(bucket_keys.router)
     api.include_router(bucket_keys.admin_router)

@@ -57,7 +57,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
-from . import s3docs
+from . import bucket_delete, s3docs
 from .admin import croit_http_error
 from .auth import SessionUser, require_user
 from .budget import BudgetNumberError, budget_example, validate_budget_number
@@ -636,6 +636,9 @@ async def delete_bucket(name: str, request: Request, acct: Account, user: User,
         raise HTTPException(404, "Bucket not found.")
     objects, size = _usage(bucket)
     confirmed = body is not None and body.confirmName == short
+    if bucket_delete.uses_jobs(request.app):  # rgw: empty through S3 as a background job
+        return await bucket_delete.delete_on_rgw(request, acct, user, full, short, objects,
+                                                 size, confirmed)
     try:
         if confirmed:
             task = await croit.delete_bucket_and_data(full, user_confirmed=True)

@@ -102,6 +102,11 @@ export const listBucketObjects = (name, prefix, limit = 20) =>
   api(`/buckets/${encodeURIComponent(name)}/objects?prefix=${encodeURIComponent(prefix)}&limit=${limit}`);
 export const createShareLink = (name, key, expiresIn) =>
   api(`/buckets/${encodeURIComponent(name)}/share-link`, { method: "POST", json: { key, expiresIn } });
+// Delete jobs (rgw backend): a non-empty bucket is emptied in the background. deleteBucket answers
+// {job} (202) for those; a job is {id, bucket, state: queued|running|done|blocked|failed,
+// deletedObjects, deletedBytes, remainingObjects, objectsHint, bytesHint, message}.
+export const listDeleteJobs = () => api("/buckets/delete-jobs");
+export const retryDeleteJob = (id) => api(`/buckets/delete-jobs/${encodeURIComponent(id)}/retry`, { method: "POST" });
 export const deleteBucket = (name, confirmName) =>
   api(`/buckets/${encodeURIComponent(name)}`, { method: "DELETE", json: confirmName ? { confirmName } : {} });
 

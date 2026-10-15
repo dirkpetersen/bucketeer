@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
+from bucketeer import bucket_delete
 from bucketeer.bucket_keys import cleanup_pending
 
 from .conftest import REQUIRED
@@ -60,6 +61,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "PUT /api/buckets/{name}/shares/{share_id}": ("bucket.share_update",),
     "DELETE /api/buckets/{name}/shares/{share_id}": ("bucket.unshare",),
     "DELETE /api/buckets/{name}": ("bucket.delete",),
+    "POST /api/buckets/delete-jobs/{job_id}/retry": ("bucket.delete_retry",),
     "POST /api/buckets/{name}/keys": ("bucket_key.create",),
     "POST /api/bucket-keys/{key_id}/reveal": ("bucket_key.reveal",),
     "DELETE /api/bucket-keys/{key_id}": ("bucket_key.revoke",),
@@ -93,6 +95,8 @@ EVENTS = {
     "bucket.create_failed": "croit down or task failed while creating a bucket",
     "bucket.delete_failed": "croit down or task failed while deleting a bucket",
     "bucket.versioning_failed": "croit down while changing versioning",
+    "bucket.delete_started": "rgw backend: a non-empty bucket's delete job was queued",
+    "bucket.delete_blocked": "rgw backend: object lock or legal hold stopped a delete job",
     "bucket_key.cleanup": "startup clean-up of stale pending bucket keys (actor system)",
     "bucket.unshare": "deleting a bucket marks its shares revoked (reason bucket_deleted)",
     "offboarding.run_failed": "a run whose croit suspension failed",
@@ -323,6 +327,23 @@ def run(tmp_path_factory, moto_server):
     env.transport.fail = None
     r.step("DELETE /api/buckets/{name}", lambda: a.request("DELETE", "/api/buckets/alice-cov",
                                                            headers=H))
+
+    # rgw backend: delete job queued, blocked by a legal hold, then retried by the owner
+    # (the run uses the croit backend, so the job path is switched on for these steps)
+    env.croit_state.create_bucket("alice-held", "alice", versioning="ENABLED", object_lock=True)
+    env.bridge.owner_client("alice").put_object(
+        Bucket="alice-held", Key="k", Body=b"1", ObjectLockLegalHoldStatus="ON")
+    saved = (bucket_delete.uses_jobs, bucket_delete.AUTOSTART)
+    bucket_delete.uses_jobs, bucket_delete.AUTOSTART = (lambda app: True), False
+    try:
+        queued = r.step("event", lambda: a.request(
+            "DELETE", "/api/buckets/alice-held", headers=H, json={"confirmName": "alice-held"}))
+        job_id = queued.json()["job"]["id"]
+        r.step("event", lambda: asyncio.run(bucket_delete.run_job(env.app, job_id)))
+        r.step("POST /api/buckets/delete-jobs/{job_id}/retry", lambda: a.post(
+            f"/api/buckets/delete-jobs/{job_id}/retry", headers=H))
+    finally:
+        bucket_delete.uses_jobs, bucket_delete.AUTOSTART = saved
 
     # startup clean-up (background job) and first-use RGW user creation
     stale_pending_row(env)
