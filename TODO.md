@@ -219,7 +219,7 @@ order, except that A3 to A6 can run in parallel once A2 is done.
   same typed-name confirmation, job state in SQLite (migration), progress
   shown in the UI, resumable after a restart, audited (`bucket.delete` when
   done, `bucket.delete_failed`). Bucket keys and shares are revoked as today.
-- [ ] A5. Placement and endpoint without croit: with `rgw`, admins enter the
+- [x] A5. Placement and endpoint without croit: with `rgw`, admins enter the
   allowed placements on the Settings tab (validated only for format, with a
   hint to check them against `radosgw-admin zonegroup placement list`), and
   `S3_ENDPOINT_URL` is required (Settings refuses to start without it).
