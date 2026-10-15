@@ -41,9 +41,9 @@ def env(tmp_path):
 
 
 @pytest.fixture
-def lenient(monkeypatch):
-    """Lift the 10% limit so one person can be offboarded among a few."""
-    monkeypatch.setattr(offboarding, "MAX_PERCENT", 100)
+def lenient(env):
+    """Lift the percentage limit so one person can be offboarded among a few."""
+    env.db.settings.set("offboarding", {**offboarding.DEFAULT_SETTINGS, "maxPercent": 100})
 
 
 def go(env, trigger="manual", actor="bob"):
@@ -211,8 +211,14 @@ def test_ldap_error_aborts_the_run(env, lenient):
     assert go(env)["outcome"] == "aborted" and not suspended(env, "alice")
 
 
+def put_th(env, **kw):
+    r = env.admin.put("/api/admin/offboarding/settings", json=kw, headers=H)
+    assert r.status_code == 200, r.text
+
+
 def test_percent_threshold_aborts(env):
     set_mode(env, "enforce")
+    put_th(env, minPeopleForPercent=1)
     leave(env, "alice")  # 1 of 2 known people = 50% > 10%
     run = go(env)
     assert run["outcome"] == "aborted" and "1 of 2" in run["reason"] and "10%" in run["reason"]
@@ -585,12 +591,15 @@ def test_overview(env, lenient):
     leave(env, "alice")
     go(env)
     body = env.admin.get("/api/admin/offboarding").json()
-    assert body["settings"] == {"mode": "report", "time": "03:00"}
+    assert body["settings"] == {"mode": "report", "time": "03:00", "maxPercent": 100,
+                                "minPeopleForPercent": 4, "maxPeople": 20}
     assert body["running"] is False and body["knownPeople"] == 2
-    assert body["thresholds"] == {"percent": offboarding.MAX_PERCENT, "max": 20}
     assert datetime.fromisoformat(body["nextRun"]).minute == 0
     (run,) = body["runs"]
     assert run["outcome"] == "ok" and run["trigger"] == "manual" and run["mode"] == "report"
+    assert run["counts"]["thresholds"] == {"maxPercent": 100, "minPeopleForPercent": 4,
+                                           "maxPeople": 20}
+    assert body["runs"][0]["thresholds"] == run["counts"]["thresholds"]
     assert run["results"][0]["uid"] == "alice" and run["finishedAt"]
 
 
@@ -607,6 +616,9 @@ def test_admin_only_and_csrf(env):
 @pytest.mark.parametrize("body", [
     {}, {"mode": "delete"}, {"mode": "ENFORCE"}, {"time": "24:00"}, {"time": "3:00"},
     {"time": "03:60"}, {"time": "03:00\n"}, {"time": ""}, {"time": 300}, {"mode": "report", "x": 1},
+    {"maxPercent": 0}, {"maxPercent": 101}, {"maxPercent": 10.5}, {"maxPercent": "10"},
+    {"maxPercent": True}, {"maxPercent": None}, {"minPeopleForPercent": 0},
+    {"minPeopleForPercent": 1001}, {"maxPeople": 0}, {"maxPeople": 100001}, {"maxPeople": -1},
 ])
 def test_settings_validation(env, body):
     r = env.admin.put("/api/admin/offboarding/settings", json=body, headers=H)
@@ -616,21 +628,22 @@ def test_settings_validation(env, body):
 
 def test_settings_save_and_audit(env):
     r = env.admin.put("/api/admin/offboarding/settings", json={"mode": "enforce"}, headers=H)
-    assert r.json() == {"mode": "enforce", "time": "03:00"}
+    d = offboarding.DEFAULT_SETTINGS
+    assert r.json() == {**d, "mode": "enforce"}
     r = env.admin.put("/api/admin/offboarding/settings", json={"time": "04:15"}, headers=H)
-    assert r.json() == {"mode": "enforce", "time": "04:15"}
+    assert r.json() == {**d, "mode": "enforce", "time": "04:15"}
     env.admin.put("/api/admin/offboarding/settings", json={"time": "04:15"}, headers=H)  # same
     rows = sorted(acts(env, "admin.settings.offboarding"), key=lambda a: a["id"])
     assert len(rows) == 2 and {a["actor"] for a in rows} == {"bob"}
     assert rows[0]["target_type"] == "setting" and rows[0]["target"] == "offboarding"
-    assert rows[1]["details"] == {"before": {"mode": "enforce", "time": "03:00"},
-                                  "after": {"mode": "enforce", "time": "04:15"}}
-    assert env.svc.settings() == {"mode": "enforce", "time": "04:15"}
+    assert rows[1]["details"] == {"before": {**d, "mode": "enforce"},
+                                  "after": {**d, "mode": "enforce", "time": "04:15"}}
+    assert env.svc.settings() == {**d, "mode": "enforce", "time": "04:15"}
 
 
 def test_garbage_in_the_settings_table_falls_back_to_the_defaults(env):
     env.db.settings.set("offboarding", {"mode": "nuke", "time": "9pm"})
-    assert env.svc.settings() == {"mode": "report", "time": "03:00"}
+    assert env.svc.settings() == offboarding.DEFAULT_SETTINGS
 
 
 # -- the AD side -----------------------------------------------------------------------
@@ -943,3 +956,111 @@ def test_unknown_suspend_leaves_keys_live_until_the_next_enforce_run(env, lenien
     asyncio.run(env.svc.on_login("alice", acct))
     assert not suspended(env, "alice") and not suspended(env, "acme$carol")
     assert env.db.bucket_keys.get(k["id"])["suspended_at"] is None
+
+
+# -- Q14: thresholds as settings ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("cand,known,pct,mn,mx,abort", [
+    (1, 4, 10, 4, 20, False),   # 25% but below the minimum of 4 people
+    (2, 10, 10, 4, 20, False),
+    (4, 20, 10, 4, 20, True),   # 20% > 10% and >= 4
+    (4, 40, 10, 4, 20, False),  # exactly 10%
+    (4, 39, 10, 4, 20, True),   # just over 10%
+    (3, 5, 10, 4, 20, False),   # a mass misreading of a small install, still below the min
+    (4, 5, 10, 4, 20, True),    # ... but 4 of 5 is stopped
+    (1, 2, 10, 1, 20, True),    # minimum 1 restores the old behaviour
+    (20, 1000, 10, 4, 20, False),  # exactly maxPeople
+    (21, 1000, 10, 4, 20, True),
+    (21, 1000, 100, 4, 20, True),  # maxPeople applies whatever the percentage
+    (5, 5, 100, 4, 20, False),  # 100% is never "more than 100%"
+    (0, 0, 10, 4, 20, False),
+])
+def test_abort_rule_boundaries(cand, known, pct, mn, mx, abort):
+    th = {"maxPercent": pct, "minPeopleForPercent": mn, "maxPeople": mx}
+    assert offboarding.should_abort(cand, known, th) is abort
+
+
+def test_one_leaver_on_a_small_install_goes_through(env):
+    set_mode(env, "enforce")
+    leave(env, "alice")  # 1 of 2 known people, defaults (minimum 4)
+    run = go(env)
+    assert run["outcome"] == "ok" and suspended(env, "alice")
+
+
+def test_mass_misreading_is_still_stopped(env):
+    for i in range(6):
+        env.mock.state.croit.create_user(f"gone{i}", f"G{i}")
+        env.db.known_accounts.record(f"gone{i}", f"gone{i}", "linked")  # not in AD
+    set_mode(env, "enforce")
+    run = go(env)  # 6 of 8 gone
+    assert run["outcome"] == "aborted" and "6 of 8" in run["reason"]
+    assert not any(suspended(env, f"gone{i}") for i in range(6))
+
+
+def test_ldap_error_still_aborts_with_loose_thresholds(env):
+    put_th(env, maxPercent=100, maxPeople=100000)
+    set_mode(env, "enforce")
+    leave(env, "alice")
+    env.fake.fail_search = lambda *a, **k: True
+    run = go(env)
+    assert run["outcome"] == "aborted" and not suspended(env, "alice")
+
+
+def test_changed_thresholds_apply_and_are_stored_in_the_run(env):
+    put_th(env, maxPercent=25, minPeopleForPercent=2, maxPeople=7)
+    set_mode(env, "enforce")
+    leave(env, "alice")
+    run = go(env)  # 1 of 2: below the minimum of 2
+    assert run["outcome"] == "ok"
+    th = {"maxPercent": 25, "minPeopleForPercent": 2, "maxPeople": 7}
+    assert run["counts"]["thresholds"] == th
+    stored = env.admin.get("/api/admin/offboarding").json()["runs"][0]
+    assert stored["thresholds"] == th
+    put_th(env, minPeopleForPercent=1, maxPercent=30)
+    env.croit_users["alice"].suspended = False
+    env.db.known_accounts.clear_offboarding_for_uid("alice")
+    run = go(env)
+    assert run["outcome"] == "aborted"
+    assert "more than 30% of known people and at least 1 people, or more than 7 people" \
+        in run["reason"]
+    assert run["counts"]["thresholds"]["maxPercent"] == 30
+    (a,) = acts(env, "offboarding.aborted")
+    assert a["details"]["counts"]["thresholds"] == run["counts"]["thresholds"]
+
+
+def test_threshold_validation_reports_each_field(env):
+    r = env.admin.put("/api/admin/offboarding/settings", headers=H,
+                      json={"maxPercent": 0, "minPeopleForPercent": 5, "maxPeople": "x"})
+    assert r.status_code == 422
+    body = r.json()
+    assert {e["field"] for e in body["errors"]} == {"maxPercent", "maxPeople"}
+    assert all(e["message"] for e in body["errors"]) and body["detail"]
+    assert env.db.settings.get("offboarding") is None  # nothing partially saved
+
+
+def test_threshold_audit_before_after(env):
+    put_th(env, maxPercent=15, maxPeople=30)
+    put_th(env, maxPercent=15)  # same: no entry
+    (a,) = acts(env, "admin.settings.offboarding")
+    d = offboarding.DEFAULT_SETTINGS
+    assert a["details"] == {"before": d, "after": {**d, "maxPercent": 15, "maxPeople": 30}}
+    assert env.svc.settings()["maxPeople"] == 30
+
+
+def test_old_stored_settings_without_thresholds_use_the_defaults(env):
+    env.db.settings.set("offboarding", {"mode": "enforce", "time": "05:00"})
+    assert env.svc.settings() == {**offboarding.DEFAULT_SETTINGS, "mode": "enforce",
+                                  "time": "05:00"}
+    body = env.admin.get("/api/admin/offboarding").json()
+    assert body["settings"]["maxPercent"] == 10 and body["settings"]["minPeopleForPercent"] == 4
+    put_th(env, maxPeople=9)  # saving merges with the defaults
+    assert env.db.settings.get("offboarding") == {**offboarding.DEFAULT_SETTINGS,
+                                                  "mode": "enforce", "time": "05:00",
+                                                  "maxPeople": 9}
+
+
+def test_bad_stored_thresholds_fall_back(env):
+    env.db.settings.set("offboarding", {"maxPercent": 0, "minPeopleForPercent": "4",
+                                        "maxPeople": True})
+    assert env.svc.settings() == offboarding.DEFAULT_SETTINGS

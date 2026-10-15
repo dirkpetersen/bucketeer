@@ -88,3 +88,13 @@
 @media (prefers-reduced-motion: reduce) { .off-chev { transition: none; } }
 
 textarea.input { resize: vertical; line-height: var(--lh-body); }
+
+.off-limits { display: grid; gap: var(--sp-4); }
+@media (min-width: 56em) { .off-limits { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; } .off-limit-err, .off-limits-act { grid-column: 1 / -1; } }
+.off-limit { align-content: start; }
+.off-unit { align-items: center; flex-wrap: nowrap; }
+.off-num { width: 7.5rem; font-variant-numeric: tabular-nums; }
+.off-unit-t { color: var(--text-muted); font-size: var(--fs-sm); }
+.off-limit-err ul { margin: 0; padding-left: var(--sp-4); }
+.off-limits-act .btn { min-height: 2.5rem; }
+.off-limits-used b { color: var(--text); font-weight: 600; }

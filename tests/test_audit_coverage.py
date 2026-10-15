@@ -374,22 +374,19 @@ def run(tmp_path_factory, moto_server):
 
     # offboarding: a clean report run, then dave leaves AD: aborted by the 10% limit, then
     # (limit lifted) enforced; his next login undoes it
-    from bucketeer import offboarding
     r.step("POST /api/admin/offboarding/run", lambda: b.post(
         "/api/admin/offboarding/run", headers=H))
     r.step("PUT /api/admin/offboarding/settings", lambda: b.put(
-        "/api/admin/offboarding/settings", json={"mode": "enforce", "time": "04:30"}, headers=H))
+        "/api/admin/offboarding/settings",
+        json={"mode": "enforce", "time": "04:30", "minPeopleForPercent": 1}, headers=H))
     dave = env.fake.users["CN=dave,OU=Users,DC=example,DC=org"]
     dave["userAccountControl"] = "514"
     r.step("event", lambda: b.post("/api/admin/offboarding/run", headers=H))  # aborted
-    offboarding.MAX_PERCENT = 100
-    try:
-        fail("PATCH", "/s3/users")  # croit down for the suspension: the run fails
-        r.step("event", lambda: b.post("/api/admin/offboarding/run", headers=H))
-        env.transport.fail = None
-        r.step("event", lambda: b.post("/api/admin/offboarding/run", headers=H))  # suspends
-    finally:
-        offboarding.MAX_PERCENT = 10
+    b.put("/api/admin/offboarding/settings", json={"maxPercent": 100}, headers=H)
+    fail("PATCH", "/s3/users")  # croit down for the suspension: the run fails
+    r.step("event", lambda: b.post("/api/admin/offboarding/run", headers=H))
+    env.transport.fail = None
+    r.step("event", lambda: b.post("/api/admin/offboarding/run", headers=H))  # suspends
     dave["userAccountControl"] = "512"
 
     async def dave_returns():

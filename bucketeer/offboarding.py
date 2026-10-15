@@ -10,11 +10,19 @@ deletes anything and only suspends.
   `ok | disabled | not_in_group | not_found` for each name, or raises on any LDAP trouble,
   which aborts the whole run.
 * **Candidates** are people whose AD status is not `ok` and whose RGW account is not
-  suspended already (an admin's suspension is never touched). More than 10% of the known
-  people, or more than 20 people, aborts the run and suspends nobody.
-* **Modes** (`settings` key `offboarding` `{mode: report|enforce, time: "HH:MM"}`, default
-  report, 03:00 server local time): report records who WOULD be suspended; enforce suspends the
-  user in croit and their live bucket keys (`suspended_by = 'offboarding'`), flags the
+  suspended already (an admin's suspension is never touched).
+* **Abort rule** (Q14, admin settings `maxPercent` 1..100, default 10; `minPeopleForPercent`
+  1..1000, default 4; `maxPeople` 1..100000, default 20). With C candidates and K known people
+  (all in scope, suspended ones included) the run aborts and suspends nobody when
+  `C * 100 > maxPercent * K AND C >= minPeopleForPercent` (strictly more than the percentage,
+  at least the minimum), OR `C > maxPeople` (strictly more). So 1 of 4 (25 %) passes with
+  minimum 4, 4 of 20 (20 %) aborts at 10 %, exactly 10 % passes, and exactly `maxPeople` passes.
+  Any LDAP error aborts regardless. The thresholds in force are stored in the run's `counts`
+  (`counts.thresholds`) and quoted in the abort reason.
+* **Modes** (`settings` key `offboarding` `{mode: report|enforce, time: "HH:MM", maxPercent,
+  minPeopleForPercent, maxPeople}`; stored settings lacking the thresholds use the defaults),
+  default report, 03:00 server local time): report records who WOULD be suspended; enforce
+  suspends the user in croit and their live bucket keys (`suspended_by = 'offboarding'`), flags the
   known-account row, invalidates the resolver cache and audits per user.
 * **Coming back**: `OffboardingService.on_login` (called from the post-login warm-up) unsuspends a
   person whose row is flagged, and only the keys with `suspended_by = 'offboarding'`. Any admin
@@ -25,14 +33,18 @@ deletes anything and only suspends.
 
 API (`/api/admin/offboarding`, admin only, CSRF via the parent router):
 
-* `GET` -> `{settings: {mode, time}, running, nextRun (ISO with offset), knownPeople,
-  thresholds: {percent, max}, runs: [{id, startedAt, finishedAt, mode, trigger, actor,
+* `GET` -> `{settings: {mode, time, maxPercent, minPeopleForPercent, maxPeople}, running,
+  nextRun (ISO with offset), knownPeople,
+  runs: [{id, startedAt, finishedAt, mode, trigger, actor,
   outcome (running|ok|aborted|failed), reason, counts, results: [{uid, adUsernames, reason
   (disabled|not_in_group|not_found), action (would_suspend|not_suspended|suspended|partial|
-  failed|unknown|skipped|keys_pending|keys_completed), keys, note?}]}]}` newest first.
+  failed|unknown|skipped|keys_pending|keys_completed), keys, note?}], thresholds:
+  {maxPercent, minPeopleForPercent, maxPeople}|null (those in force for that run)}]}` newest
+  first.
 * `POST /run` -> the finished run (same shape as one `runs` entry); it runs inline, shielded
   from a dropped connection (`GET` shows `running` meanwhile). 409 while one is running.
-* `PUT /settings {mode?, time?}` -> the new settings; 422 for bad values; audit
+* `PUT /settings {mode?, time?, maxPercent?, minPeopleForPercent?, maxPeople?}` -> the new
+  settings; 422 `{detail, errors: [{field, message}]}` for bad values; audit
   `admin.settings.offboarding` (target_type `setting`) when something changed.
 
 Audit (actor `system` for scheduled runs and login unsuspends, else the admin):
@@ -49,6 +61,7 @@ from datetime import datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from .admin import Admin, apply_key_suspension
@@ -61,10 +74,12 @@ from .rgw_user import RgwAccount, ad_names_for_uid, is_key_uid
 log = logging.getLogger("bucketeer.offboarding")
 
 SCHEDULE_ON_START = True  # tests switch it off (like bucket_keys.CLEANUP_ON_START)
-MAX_PERCENT = 10  # abort when candidates exceed this share of the known people ...
-MAX_PEOPLE = 20  # ... or this many people
 MAX_STORED_RESULTS = 200
-DEFAULT_SETTINGS = {"mode": "report", "time": "03:00"}
+DEFAULT_SETTINGS = {"mode": "report", "time": "03:00", "maxPercent": 10,
+                    "minPeopleForPercent": 4, "maxPeople": 20}
+# name -> (low, high), inclusive
+LIMITS = {"maxPercent": (1, 100), "minPeopleForPercent": (1, 1000), "maxPeople": (1, 100000)}
+THRESHOLD_KEYS = tuple(LIMITS)
 MODES = ("report", "enforce")
 _TIME = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)\Z")
 TICK = 60.0  # the scheduler re-reads the settings at least this often
@@ -77,13 +92,30 @@ class AlreadyRunning(Exception):
 # -- settings and schedule (pure) ---------------------------------------------------------
 
 
-def load_settings(store) -> dict[str, str]:
+def valid_limit(name: str, value: Any) -> bool:
+    lo, hi = LIMITS[name]
+    return isinstance(value, int) and not isinstance(value, bool) and lo <= value <= hi
+
+
+def should_abort(candidates: int, known: int, th: dict[str, Any]) -> bool:
+    """The Q14 abort rule (see the module docstring for the exact boundaries)."""
+    if not candidates:
+        return False
+    over_pct = (candidates * 100 > th["maxPercent"] * known
+                and candidates >= th["minPeopleForPercent"])
+    return over_pct or candidates > th["maxPeople"]
+
+
+def load_settings(store) -> dict[str, Any]:
     saved = store.get("offboarding", None) or {}
     out = dict(DEFAULT_SETTINGS)
     if saved.get("mode") in MODES:
         out["mode"] = saved["mode"]
     if _TIME.match(str(saved.get("time", ""))):
         out["time"] = saved["time"]
+    for k in THRESHOLD_KEYS:
+        if valid_limit(k, saved.get(k)):
+            out[k] = saved[k]
     return out
 
 
@@ -164,14 +196,17 @@ class OffboardingService:
 
     async def _execute(self, run_id: int, mode: str, trigger: str, actor: str) -> None:
         outcome, reason, counts, results = "failed", None, {}, []
+        cfg = await self.db.run(load_settings, self.db.settings)
+        th = {k: cfg[k] for k in THRESHOLD_KEYS}
         try:
-            outcome, reason, counts, results = await self._run(run_id, mode, actor)
+            outcome, reason, counts, results = await self._run(run_id, mode, actor, th)
         except (LdapUnavailable, InvalidCredentials) as e:
             outcome = "aborted"
             reason = f"AD could not be read ({str(e)[:150]}); nobody was suspended."
         except Exception as e:  # noqa: BLE001 - recorded, never raised into the scheduler
             log.exception("offboarding run %s failed", run_id)
             outcome, reason = "failed", f"{type(e).__name__}: {str(e)[:200]}"
+        counts = {**counts, "thresholds": th}
         try:
             await self.db.run(self.db.offboarding_runs.finish, run_id, outcome, reason,
                               counts, results[:MAX_STORED_RESULTS])
@@ -232,7 +267,7 @@ class OffboardingService:
             p["rows"].append(row)
         return people, missing, list(skipped.values())
 
-    async def _run(self, run_id: int, mode: str, actor: str):
+    async def _run(self, run_id: int, mode: str, actor: str, th: dict[str, Any]):
         people, missing, skipped = await self._scope()
         counts: dict[str, Any] = {
             "known": len(people), "knownMissingInCroit": missing, "checked": 0,
@@ -273,10 +308,10 @@ class OffboardingService:
              "action": "would_suspend", "keys": []}
             for uid, p, why in candidates
         ]
-        over_pct = len(candidates) * 100 > MAX_PERCENT * len(people)
-        if candidates and (over_pct or len(candidates) > MAX_PEOPLE):
+        if should_abort(len(candidates), len(people), th):
             what = (f"{len(candidates)} of {len(people)} known people would be suspended "
-                    f"(limit: {MAX_PERCENT}% of known people or {MAX_PEOPLE} people)")
+                    f"(limits: more than {th['maxPercent']}% of known people and at least "
+                    f"{th['minPeopleForPercent']} people, or more than {th['maxPeople']} people)")
             for r in results:
                 r["action"] = "not_suspended"
             return "aborted", f"{what}. AD may be misconfigured; nobody was suspended.", \
@@ -483,6 +518,7 @@ def _run_view(r: dict) -> dict[str, Any]:
         "id": r["id"], "startedAt": r["started_at"], "finishedAt": r["finished_at"],
         "mode": r["mode"], "trigger": r["trigger"], "actor": r["actor"],
         "outcome": r["outcome"], "reason": r["reason"], "counts": r["counts"],
+        "thresholds": (r["counts"] or {}).get("thresholds"),
         "results": r["results"],
     }
 
@@ -497,7 +533,6 @@ async def overview(_a: Admin, svc: Service, db: Db):
         "running": svc.running,
         "nextRun": next_run(svc.now(), cfg["time"]).astimezone().isoformat(timespec="minutes"),
         "knownPeople": len(known),
-        "thresholds": {"percent": MAX_PERCENT, "max": MAX_PEOPLE},
         "runs": [_run_view(r) for r in runs],
     }
 
@@ -518,18 +553,35 @@ class SettingsBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: str | None = None
     time: str | None = None
+    maxPercent: Any = None
+    minPeopleForPercent: Any = None
+    maxPeople: Any = None
 
 
 @router.put("/settings")
 async def put_settings(body: SettingsBody, admin: Admin, db: Db, svc: Service):
-    if body.mode is None and body.time is None:
-        raise HTTPException(422, "Give a mode and/or a time.")
+    given = body.model_fields_set & {"mode", "time", *THRESHOLD_KEYS}
+    if not given or any(getattr(body, k) is None for k in given):
+        raise HTTPException(422, "Give a mode, a time and/or thresholds.")
+    errors: list[dict[str, str]] = []
     if body.mode is not None and body.mode not in MODES:
-        raise HTTPException(422, "mode must be 'report' or 'enforce'.")
+        errors.append({"field": "mode", "message": "mode must be 'report' or 'enforce'."})
     if body.time is not None and not _TIME.match(body.time):
-        raise HTTPException(422, "time must be HH:MM (24 hours, server local time).")
+        errors.append({"field": "time",
+                       "message": "time must be HH:MM (24 hours, server local time)."})
+    for k in THRESHOLD_KEYS:
+        v = getattr(body, k)
+        if v is not None and not valid_limit(k, v):
+            lo, hi = LIMITS[k]
+            errors.append({"field": k, "message": f"Enter a whole number from {lo} to {hi}."})
+    if errors:
+        return JSONResponse(status_code=422,
+                            content={"detail": errors[0]["message"], "errors": errors})
     before = await db.run(load_settings, db.settings)
-    after = {"mode": body.mode or before["mode"], "time": body.time or before["time"]}
+    after = dict(before)
+    for k in ("mode", "time", *THRESHOLD_KEYS):
+        if getattr(body, k) is not None:
+            after[k] = getattr(body, k)
     if after != before:
         await db.run(db.settings.set, "offboarding", after, admin.username)
         svc.note_settings_changed()
