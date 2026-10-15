@@ -151,7 +151,7 @@ skips them too.
   cleanup, multipart abort), alongside the existing simple rules.
 - [x] Bucket notifications, with endpoints from the admin allowlist only
   (no broker credentials, Q6).
-- [ ] Multipart upload cleanup (list and abort).
+- [x] Multipart upload cleanup (list and abort).
 - [ ] Subusers (read/write/readwrite/full) and their keys.
 
 ## Verify against a real croit cluster

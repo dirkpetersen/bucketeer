@@ -20,6 +20,7 @@ from . import (
     credentials,
     lifecycle,
     lifecycle_rules,
+    multipart,
     notifications,
     object_lock,
     offboarding,
@@ -171,6 +172,7 @@ def create_app(
     api.include_router(tags.router)
     api.include_router(object_lock.router)
     api.include_router(share_links.router)
+    api.include_router(multipart.router)
     api.include_router(acl.router)
     api.include_router(sharing.router)
     api.include_router(admin.router)

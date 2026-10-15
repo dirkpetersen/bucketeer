@@ -46,6 +46,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "PUT /api/buckets/{name}/cors": ("bucket.cors",),
     "PUT /api/buckets/{name}/notifications": ("bucket.notifications",),
     "PUT /api/buckets/{name}/tags": ("bucket.tags",),
+    "POST /api/buckets/{name}/multipart/abort": ("bucket.multipart_abort",),
     "PUT /api/buckets/{name}/budget": ("bucket.budget",),
     "PUT /api/buckets/{name}/object-lock": ("bucket.object_lock",),
     "PUT /api/buckets/{name}/objects/retention": ("object.retention",),
@@ -265,6 +266,11 @@ def run(tmp_path_factory, moto_server):
     r.step("PUT /api/buckets/{name}/notifications", lambda: a.put(
         "/api/buckets/alice-tag/notifications", headers=H, json={"etag": et, "notifications": [{
             "id": "n1", "endpoint": "covhook", "events": ["s3:ObjectCreated:*"]}]}))
+    # unfinished uploads
+    up = env.moto().create_multipart_upload(Bucket="alice-tag", Key="big.bin")["UploadId"]
+    r.step("POST /api/buckets/{name}/multipart/abort", lambda: a.post(
+        "/api/buckets/alice-tag/multipart/abort", headers=H,
+        json={"uploads": [{"key": "big.bin", "uploadId": up}]}))
     # tags and budget number
     et = a.get("/api/buckets/alice-tag/tags").json()["etag"]
     r.step("PUT /api/buckets/{name}/tags", lambda: a.put(

@@ -223,3 +223,18 @@ export const putObjectRetention = (name, key, versionId, body) =>
   api(`/buckets/${encodeURIComponent(name)}/objects/retention?${lockQuery(key, versionId)}`, { method: "PUT", json: body });
 export const putObjectLegalHold = (name, key, versionId, status) =>
   api(`/buckets/${encodeURIComponent(name)}/objects/legal-hold?${lockQuery(key, versionId)}`, { method: "PUT", json: { status } });
+
+// Unfinished multipart uploads (Advanced). params: {prefix, keyMarker, uploadIdMarker, limit} ->
+// {uploads: [{key, uploadId, initiated, initiator?, storageClass?}], truncated, nextKeyMarker,
+// nextUploadIdMarker, totalShown}. One S3 page per call; no part counts or sizes.
+export const listMultipartUploads = (name, params = {}) => {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) q.set(k, String(v));
+  const qs = q.toString();
+  return api(`/buckets/${encodeURIComponent(name)}/multipart${qs ? `?${qs}` : ""}`);
+};
+// body: {uploads: [{key, uploadId}]} or {olderThanDays, prefix?, confirm?}. Without confirm the
+// older-than form answers 409 {requiresConfirmation, count, truncated} and writes nothing.
+// 200 -> {aborted, failed: [{key, uploadId, error}], notFound, truncated}.
+export const abortMultipartUploads = (name, body) =>
+  api(`/buckets/${encodeURIComponent(name)}/multipart/abort`, { method: "POST", json: body });
