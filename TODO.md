@@ -132,7 +132,33 @@ skips them too.
   anything. Safeguards per CLAUDE.md (Q10): known accounts only, auto-unsuspend
   on login for job suspensions, abort thresholds, report-only until an admin
   enables enforce, 03:00 daily plus run-now.
-
+- [ ] croit allowlisting gateway `tools/croit-gate` (limits the croit admin
+  token's blast radius; croit support called it a reasonable hardening
+  measure). A standalone tool under the `tools/` rules (single file, stdlib
+  only, never imports Bucketeer):
+  - Listens on 127.0.0.1 (`CROIT_GATE_LISTEN`, e.g. `127.0.0.1:18089`),
+    forwards to `CROIT_URL` with the real `CROIT_API_TOKEN` (TLS via
+    `CROIT_CA_CERT_FILE` / `CROIT_TLS_VERIFY`). Clients authenticate with a
+    separate `CROIT_GATE_CLIENT_TOKEN` (constant-time compare); the real
+    token never leaves the gateway, and croit's responses never echo it.
+  - Forwards only the method+path pairs Bucketeer's `CroitClient` uses
+    (`/s3/...` users, keys, quotas, buckets, placements, usage, bucket
+    policy; `GET /tasks/{id}`; `GET /auth/token-info`). Everything else gets
+    403 and a log line (method, path, client; never tokens, bodies or query
+    strings, which can hold secret keys). Match on the raw path: refuse `..`,
+    `//`, encoded `/` (`%2F`) and anything that is not a single path segment
+    per parameter. Keep a test that compares the allowlist against
+    `bucketeer/croit.py`, so a new client call fails the test until the
+    gateway allows it.
+  - Streams request and response bodies, has size and time limits, and needs
+    no Bucketeer change: Bucketeer's `CROIT_URL` points to the gateway and its
+    `CROIT_API_TOKEN` holds the client token. If `Settings` refuses
+    `http://` for `CROIT_URL`, allow plain http for 127.0.0.1/localhost
+    only.
+  - Document it in `tools/README.md`: a systemd user unit, running it as a
+    separate Unix user from Bucketeer so a compromised portal can't read the
+    real token, and token rotation. Tests run it in-process against the mock
+    croit.
 ## Phase 4: Advanced (behind the global Advanced toggle)
 
 - [x] Advanced toggle, remembered per user.
@@ -218,3 +244,15 @@ The loop never picks these; they need a new decision from the owner first.
   confirmation and an admin list of public buckets (Q12).
 - Lifecycle transitions to another storage class (Q13). Until then admins
   handle tiering.
+- RGW Admin Ops API instead of croit for the S3 admin plane (users, keys,
+  quotas, buckets, usage), using an RGW user with only
+  `users=read,write; buckets=read,write; usage=read` caps. croit support
+  (2026-10) said this works on Reef, they will support it, and croit never
+  overwrites S3 entities it didn't create. This would make the admin
+  credential RGW-only by design; it reverses the "croit API for the admin
+  plane" decision, so it needs the owner's go-ahead.
+- RGW accounts (after a Tentacle upgrade): croit's UI doesn't support them
+  but won't interfere. Moving a user into an account
+  (`radosgw-admin user modify --uid=... --account-id=...`) is irreversible.
+- croit S3-scoped API tokens: requested from croit as a feature (2026-10).
+  If they ship, the gateway becomes optional.
