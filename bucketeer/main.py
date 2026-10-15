@@ -20,6 +20,7 @@ from . import (
     credentials,
     lifecycle,
     lifecycle_rules,
+    notifications,
     object_lock,
     policy_editor,
     profile,
@@ -154,6 +155,7 @@ def create_app(
     api.include_router(lifecycle_rules.router)
     api.include_router(policy_editor.router)
     api.include_router(cors.router)
+    api.include_router(notifications.router)
     api.include_router(tags.router)
     api.include_router(object_lock.router)
     api.include_router(share_links.router)

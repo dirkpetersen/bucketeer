@@ -44,6 +44,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "PUT /api/buckets/{name}/lifecycle": ("bucket.lifecycle",),
     "PUT /api/buckets/{name}/lifecycle/rules": ("bucket.lifecycle_rules",),
     "PUT /api/buckets/{name}/cors": ("bucket.cors",),
+    "PUT /api/buckets/{name}/notifications": ("bucket.notifications",),
     "PUT /api/buckets/{name}/tags": ("bucket.tags",),
     "PUT /api/buckets/{name}/budget": ("bucket.budget",),
     "PUT /api/buckets/{name}/object-lock": ("bucket.object_lock",),
@@ -249,6 +250,13 @@ def run(tmp_path_factory, moto_server):
     r.step("PUT /api/buckets/{name}/cors", lambda: a.put(
         "/api/buckets/alice-tag/cors", headers=H, json={"etag": et, "rules": [{
             "allowedOrigins": ["https://example.org"], "allowedMethods": ["GET"]}]}))
+    # notifications (endpoint from the admin allowlist)
+    ok(b.put(f"{S}/notification-endpoints/covhook", headers=H, json={
+        "type": "https", "url": "https://hooks.example.org/s3"}))
+    et = a.get("/api/buckets/alice-tag/notifications").json()["etag"]
+    r.step("PUT /api/buckets/{name}/notifications", lambda: a.put(
+        "/api/buckets/alice-tag/notifications", headers=H, json={"etag": et, "notifications": [{
+            "id": "n1", "endpoint": "covhook", "events": ["s3:ObjectCreated:*"]}]}))
     # tags and budget number
     et = a.get("/api/buckets/alice-tag/tags").json()["etag"]
     r.step("PUT /api/buckets/{name}/tags", lambda: a.put(

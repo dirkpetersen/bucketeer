@@ -292,9 +292,9 @@ def test_mapping_syntax(env, ad, body):
 def test_endpoint_crud_and_audit(env):
     r = put(env, "/notification-endpoints/ci-hook", EP)
     assert r.status_code == 200 and r.json()["name"] == "ci-hook"
-    k = {"type": "kafka", "url": "kafka://k1.example.org:9092", "topic": "events"}
+    k = {"type": "kafka", "url": "kafka://k1.example.org:9092"}
     assert put(env, "/notification-endpoints/bus", k).status_code == 200
-    a = {"type": "amqps", "url": "amqps://mq:5671"}
+    a = {"type": "amqps", "url": "amqps://mq:5671", "topic": "ex"}
     assert put(env, "/notification-endpoints/q", {**a, "type": "amqp"}).status_code == 200
     names = [e["name"] for e in env.admin.get(S).json()["notificationEndpoints"]]
     assert names == ["bus", "ci-hook", "q"]
@@ -317,6 +317,8 @@ def test_endpoint_crud_and_audit(env):
     {"type": "https", "url": "https://x.org/?t=1"}, {"type": "https", "url": "x.org"},
     {"type": "https"}, {"url": "https://x.org"}, {**EP, "password": "hunter2"},
     {**EP, "username": "u"}, {**EP, "topic": "a b"},
+    {"type": "kafka", "url": "kafka://k1.example.org:9092", "topic": "events"},
+    {"type": "amqp", "url": "amqp://mq:5672"},
 ])
 def test_endpoint_validation(env, body):
     r = put(env, "/notification-endpoints/e1", body)

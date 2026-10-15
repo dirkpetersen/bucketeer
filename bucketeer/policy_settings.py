@@ -490,9 +490,10 @@ _SCHEMES = {
 def normalize_endpoint(raw: Any) -> dict[str, Any]:
     """Validate one allowlist entry; raises SettingsError.
 
-    Fields: name, type (http|https|amqp|kafka), url, topic (the AMQP exchange
-    or Kafka topic; optional), verifyTls (default true; applies to https and
-    amqps). **No credentials in v1**: a URL with user info, a query string or a
+    Fields: name, type (http|https|amqp|kafka), url, topic (the AMQP exchange,
+    required for amqp; refused for kafka, whose topic is the per-user RGW topic name),
+    verifyTls (default true; applies to https and amqps).
+    **No credentials in v1**: a URL with user info, a query string or a
     fragment is refused so no secret can sit in plain view in the database,
     audit log or browser. Brokers that need a login are out of scope until
     the owner asks for it (then add write-only fields, never returned)."""
@@ -537,7 +538,13 @@ def normalize_endpoint(raw: Any) -> dict[str, Any]:
         except ValueError as e:
             raise SettingsError("The host name is not valid.") from e
     if typ == "kafka" and parts.path not in ("", "/"):
-        raise SettingsError("A Kafka endpoint is host and port only; use the topic field.")
+        raise SettingsError("A Kafka endpoint is host and port only.")
+    if typ == "kafka" and topic:
+        raise SettingsError(
+            "Kafka events go to a topic Bucketeer names per user: bucketeer-<endpoint>-<user>; "
+            "leave the topic empty.")
+    if typ == "amqp" and not topic:
+        raise SettingsError("An AMQP endpoint needs the exchange name.")
     return {"name": name, "type": typ, "url": url, "topic": topic, "verifyTls": verify}
 
 

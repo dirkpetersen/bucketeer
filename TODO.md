@@ -88,8 +88,6 @@ skips them too.
   and revoke shares. Recipients are people who could log in (Q8): members of
   `LDAP_REQUIRED_GROUP_DN` when set, anyone in AD when not; a recipient
   without an S3 account gets one created on the spot.
-- [ ] (blocked: Q11) Group shares: share a bucket with an AD group, expanded to
-  its members' uids at share time.
 - [x] Versioning on by default (Q7): new buckets default to versioning on, and a
   new versioned bucket gets the managed "expire noncurrent versions after 30
   days" lifecycle rule. Update the create dialog default and tests.
@@ -108,6 +106,11 @@ skips them too.
 - [x] Presigned share links, 7 days at most. Choose the object with a key field
   plus prefix autocomplete from a read-only listing (Q1); no tree browser.
 - [x] Audit log entries for every bucket, key and share change.
+- [ ] Raw policy editor: refuse public and self-lockout statements (Q12). A new
+  or changed `Allow` for principal `*`, or a `Deny` that would lock the owner
+  out of the bucket or its policy, is 422 with a clear message; such a
+  statement already stored may only be kept as stored or removed. Show the
+  reason in the editor before saving.
 
 ## Phase 3: Admin
 
@@ -144,8 +147,7 @@ skips them too.
 - [x] Full lifecycle editor: prefix and tag filters, object-size filters, and
   expiration rules (current, noncurrent with versions-to-keep, delete-marker
   cleanup, multipart abort), alongside the existing simple rules.
-- [ ] (blocked: Q13) Lifecycle transitions to another storage class.
-- [ ] Bucket notifications, with endpoints from the admin allowlist only
+- [x] Bucket notifications, with endpoints from the admin allowlist only
   (no broker credentials, Q6).
 - [ ] Multipart upload cleanup (list and abort).
 - [ ] Subusers (read/write/readwrite/full) and their keys.
@@ -183,6 +185,13 @@ available, and fix the client and the mock if reality differs:
 - [ ] (needs cluster) Lifecycle: RGW supports object-size filters
   (`ObjectSizeGreaterThan`/`LessThan`) and `NewerNoncurrentVersions`, and refuses
   tag filters combined with delete-marker cleanup or multipart abort.
+- [ ] (needs cluster) Notifications: RGW topic attributes (push-endpoint,
+  amqp-exchange, verify-ssl) via CreateTopic with a user's key, CreateTopic
+  updating an existing topic's attributes, and events actually delivered to
+  HTTP/AMQP/Kafka endpoints. Pre-Squid RGW has no topic ownership, so any
+  user with their own keys can rewrite a topic in the tenant; verify the
+  cluster version and behaviour. Kafka topics are per-user RGW topic names
+  (`bucketeer-<endpoint>-<user>`): check broker auto-creation.
 - [ ] (needs cluster) User quota: `maxObjects` null means unlimited and
   `maxSize` is in bytes (1 TiB default).
 - [ ] (needs cluster) RGW uids are case-sensitive (`Alice` and `alice` are
@@ -197,3 +206,13 @@ available, and fix the client and the mock if reality differs:
 - [ ] (needs cluster) Static website hosting: needs RGW website mode and wildcard DNS.
 - [ ] (needs cluster) STS temporary credentials: needs an RGW STS key and roles. This also
   gives short-lived bucket-scoped keys.
+
+## Roadmap (deferred by the owner, not planned)
+
+The loop never picks these; they need a new decision from the owner first.
+- Group shares: share a bucket with an AD group, expanded to its members'
+  uids at share time (Q11).
+- Public buckets: allow public policy statements with a warning, an extra
+  confirmation and an admin list of public buckets (Q12).
+- Lifecycle transitions to another storage class (Q13). Until then admins
+  handle tiering.

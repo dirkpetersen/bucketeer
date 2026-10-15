@@ -388,3 +388,14 @@
   .lcr-top { align-items: stretch; }
 }
 .lcr-inline.lcr-solo { padding-left: 0; }
+
+/* Notifications editor (builds on .cors-*, .pol and .qd) */
+.nt-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-3); }
+.nt-card { display: grid; gap: var(--sp-3); padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); min-width: 0; }
+.nt-card > * { min-width: 0; }
+.nt-card .field > label { font-size: var(--fs-sm); font-weight: 600; }
+.nt-external { background: var(--surface-2); }
+.nt-groups { display: grid; gap: var(--sp-3); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 40em) { .nt-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.nt-group { align-content: start; }
+.nt-ev { margin: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }

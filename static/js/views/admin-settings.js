@@ -375,7 +375,7 @@ function mappingsSection(data, apply) {
 
 const EP_TYPES = [["https", "HTTPS webhook"], ["http", "HTTP webhook"], ["amqp", "AMQP"], ["kafka", "Kafka"]];
 const SCHEME_HINT = { https: "https", http: "http", amqp: "amqp or amqps", kafka: "kafka" };
-const TOPIC_LABEL = { amqp: "Exchange", kafka: "Topic" };
+const TOPIC_LABEL = { amqp: "Exchange" };
 
 function endpointsSection(data, apply) {
   const rows = data.notificationEndpoints;
@@ -387,7 +387,8 @@ function endpointsSection(data, apply) {
   const fName = field("Name", name, { hint: "What users see when they pick an endpoint." });
   const fType = field("Type", type);
   const fUrl = field("Address", url);
-  const fTopic = field("Topic", topic, { hint: "Optional." });
+  const fTopic = field("Exchange", topic, { hint: "Required for AMQP." });
+  const kafkaHelp = h("p", { class: "set-hint", text: "Kafka events go to a topic named per user: bucketeer-<endpoint>-<user> (special characters are written as _xx). The broker must auto-create topics, or you create them for each user." });
   const add = h("button", { class: "btn btn-primary", type: "submit" }, icon("plus"), "Save endpoint");
   const clear = h("button", { class: "btn", type: "button", text: "Clear", hidden: true });
   const verifyEl = check("Verify TLS certificate", verify, "Turn off only for internal brokers with self-signed certificates.");
@@ -396,13 +397,14 @@ function endpointsSection(data, apply) {
     const label = fUrl.el.querySelector("label");
     label.textContent = `Address (starts with ${SCHEME_HINT[t]}://)`;
     fTopic.el.hidden = !(t in TOPIC_LABEL);
-    fTopic.el.querySelector("label").textContent = `${TOPIC_LABEL[t] ?? "Topic"} (optional)`;
+    fTopic.el.querySelector("label").textContent = "Exchange";
+    kafkaHelp.hidden = t !== "kafka";
     verifyEl.hidden = !(t === "https" || t === "amqp");
   };
   type.addEventListener("change", paint);
   paint();
   const form = h("form", { novalidate: true, class: "set-form set-inline" },
-    h("div", { class: "set-grid" }, fName.el, fType.el, fUrl.el, fTopic.el), verifyEl,
+    h("div", { class: "set-grid" }, fName.el, fType.el, fUrl.el, fTopic.el), kafkaHelp, verifyEl,
     h("div", { class: "set-actions" }, clear, add));
   const reset = () => { name.value = url.value = topic.value = ""; type.value = "https"; verify.checked = true; name.readOnly = false; clear.hidden = true; add.lastChild.textContent = "Save endpoint"; for (const f of [fName, fType, fUrl, fTopic]) f.error(""); paint(); };
   clear.addEventListener("click", reset);
@@ -413,7 +415,7 @@ function endpointsSection(data, apply) {
     busy = true; add.disabled = true;
     for (const f of [fName, fType, fUrl, fTopic]) f.error("");
     try {
-      const res = await saveEndpoint(name.value.trim(), { type: type.value, url: url.value.trim(), topic: topic.value.trim(), verifyTls: verify.checked });
+      const res = await saveEndpoint(name.value.trim(), { type: type.value, url: url.value.trim(), topic: type.value === "amqp" ? topic.value.trim() : "", verifyTls: verify.checked });
       toast.show("Endpoint saved.");
       apply({ notificationEndpoints: [...rows.filter((r) => r.name.toLowerCase() !== res.name.toLowerCase()), res].sort((a, b) => a.name.localeCompare(b.name)) });
     } catch (err) {
@@ -427,12 +429,14 @@ function endpointsSection(data, apply) {
         h("span", { class: "set-pair" }, h("b", { text: r.name }), chip(r.type.toUpperCase())),
         h("code", { class: "set-url", text: r.url }),
         h("div", { class: "chips" },
-          r.topic ? chip(`${TOPIC_LABEL[r.type] ?? "Topic"}: ${r.topic}`) : null,
+          r.topic && r.type === "amqp" ? chip(`Exchange: ${r.topic}`) : null,
+          r.topic && r.type === "kafka" ? chip("Topic field ignored: edit and save to clear", "chip-warn") : null,
+          r.type === "amqp" && !r.topic ? chip("Exchange missing: users cannot use this", "chip-warn") : null,
           (r.type === "https" || r.type === "amqp") && (r.url.startsWith("https") || r.url.startsWith("amqps")) ? chip(r.verifyTls ? "TLS verified" : "TLS not verified", r.verifyTls ? "chip-ok" : "chip-warn") : null)),
       h("div", { class: "acts" },
         h("button", { class: "btn btn-sm", type: "button", "aria-label": `Edit endpoint ${r.name}`, on: { click: () => { name.value = r.name; name.readOnly = true; type.value = r.type; url.value = r.url; topic.value = r.topic; verify.checked = r.verifyTls; clear.hidden = false; add.lastChild.textContent = "Update endpoint"; paint(); url.focus(); } } }, icon("edit"), "Edit"),
         h("button", { class: "btn btn-sm btn-quiet-danger", type: "button", "aria-label": `Remove endpoint ${r.name}`, on: { click: async () => {
-          if (!(await confirmDialog({ title: `Remove ${r.name}?`, message: "Users can no longer choose this endpoint for new notifications. Existing notification configurations are not changed.", confirmLabel: "Remove", danger: true }))) return;
+          if (!(await confirmDialog({ title: `Remove ${r.name}?`, message: "Users can no longer choose this endpoint for new notifications. Topics users already created keep delivering to the old address until the users remove their notifications; Bucketeer does not clean them up.", confirmLabel: "Remove", danger: true }))) return;
           try { await deleteEndpoint(r.name); toast.show("Endpoint removed."); apply({ notificationEndpoints: rows.filter((x) => x !== r) }); } catch (err) { toast.error(err.message); }
         } } }, icon("trash"), "Remove")))))
     : emptyRow("No endpoints. Users cannot set up bucket notifications until you add one.");

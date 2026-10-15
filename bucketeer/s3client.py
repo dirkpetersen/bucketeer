@@ -54,6 +54,20 @@ def default_factory(endpoint: str, access_key: str, secret_key: str, settings: S
     )
 
 
+def default_sns_factory(endpoint: str, access_key: str, secret_key: str,
+                        settings: Settings) -> Any:
+    """RGW serves its SNS-compatible topic API on the same endpoint as S3."""
+    return boto3.client(
+        "sns",
+        endpoint_url=endpoint,
+        region_name=settings.s3_region,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        config=Config(retries={"max_attempts": 2, "mode": "standard"},
+                      connect_timeout=5, read_timeout=30),
+    )
+
+
 class S3Clients:
     def __init__(
         self,
@@ -61,17 +75,17 @@ class S3Clients:
         settings: Settings,
         endpoints: EndpointResolver,
         factory: Callable[[str, str, str, Settings], Any] = default_factory,
+        sns_factory: Callable[[str, str, str, Settings], Any] = default_sns_factory,
     ):
         self.croit, self.settings, self.endpoints = croit, settings, endpoints
         self.factory = factory
+        self.sns_factory = sns_factory
         # botocore logs canonical requests and SigV4 signatures at DEBUG (also for
         # presigned URLs): keep them out of the log whatever LOG_LEVEL is.
         for name in ("botocore", "boto3", "urllib3.connectionpool"):
             logging.getLogger(name).setLevel(logging.WARNING)
 
-    async def client_for(self, uid: str) -> Any:
-        """A boto3 client signed with the first access key of RGW user `uid`.
-        Raises HTTPException (503/409) when there is no endpoint or key."""
+    async def _creds(self, uid: str) -> tuple[str, str, str]:
         try:
             keys = await self.croit.list_keys(uid)
         except CroitClientError as e:
@@ -84,7 +98,22 @@ class S3Clients:
         endpoint = await self.endpoints.resolve(uid)
         if not endpoint:
             raise HTTPException(503, "The S3 endpoint is not configured. Ask an administrator.")
-        return self.factory(endpoint, own[0]["access_key"], own[0]["secret_key"], self.settings)
+        return endpoint, own[0]["access_key"], own[0]["secret_key"]
+
+    async def client_for(self, uid: str) -> Any:
+        """A boto3 client signed with the first access key of RGW user `uid`.
+        Raises HTTPException (503/409) when there is no endpoint or key."""
+        endpoint, access, secret = await self._creds(uid)
+        return self.factory(endpoint, access, secret, self.settings)
+
+    async def call_with_sns(self, uid: str, fn: Callable[..., Any], *args: Any,
+                            **kwargs: Any) -> Any:
+        """`fn(s3_client, sns_client, ...)`, both signed with the user's own first key
+        (bucket notifications need RGW's topic API next to S3)."""
+        endpoint, access, secret = await self._creds(uid)
+        s3 = self.factory(endpoint, access, secret, self.settings)
+        sns = self.sns_factory(endpoint, access, secret, self.settings)
+        return await asyncio.to_thread(fn, s3, sns, *args, **kwargs)
 
     async def call(self, uid: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """`fn(s3_client, *args, **kwargs)` in a worker thread, as the user."""

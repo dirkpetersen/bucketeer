@@ -192,6 +192,13 @@ export const putBucketTags = (name, body) =>
 // {budgetNumber: string|null} -> {name, budgetNumber, changed, tagSynced, warning?}
 export const setBucketBudget = (name, budgetNumber) =>
   api(`/buckets/${encodeURIComponent(name)}/budget`, { method: "PUT", json: { budgetNumber } });
+// Bucket notifications (Advanced). get -> {notifications: [{id, endpoint|null, managed, kind, topic,
+// events, prefix|null, suffix|null}], endpoints: [{name, type}], etag}. put sends {notifications, etag}:
+// managed {id, endpoint, events, prefix?, suffix?}, external kept as {id, external: true}. A 422 body has
+// errors [{item, field, message}], a 409 etagMismatch carries {current}.
+export const getBucketNotifications = (name) => api(`/buckets/${encodeURIComponent(name)}/notifications`);
+export const putBucketNotifications = (name, body) =>
+  api(`/buckets/${encodeURIComponent(name)}/notifications`, { method: "PUT", json: body });
 export const getBucketCors = (name) => api(`/buckets/${encodeURIComponent(name)}/cors`);
 export const putBucketCors = (name, body) =>
   api(`/buckets/${encodeURIComponent(name)}/cors`, { method: "PUT", json: body });

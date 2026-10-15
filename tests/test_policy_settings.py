@@ -199,8 +199,11 @@ def test_endpoint_ok_per_type():
     }
     assert ps.normalize_endpoint(ep(type="http", url="http://10.0.0.5:8080/x"))["type"] == "http"
     assert ps.normalize_endpoint(ep(type="amqp", url="amqps://mq.example.org:5671", topic="ex1"))
-    assert ps.normalize_endpoint(ep(type="amqp", url="amqp://mq"))["topic"] == ""
-    assert ps.normalize_endpoint(ep(type="kafka", url="kafka://k1.example.org:9092", topic="t"))
+    with pytest.raises(SettingsError, match="exchange"):
+        ps.normalize_endpoint(ep(type="amqp", url="amqp://mq"))
+    assert ps.normalize_endpoint(ep(type="kafka", url="kafka://k1.example.org:9092"))
+    with pytest.raises(SettingsError, match="per user"):
+        ps.normalize_endpoint(ep(type="kafka", url="kafka://k1.example.org:9092", topic="t"))
     assert ps.normalize_endpoint(ep(url="https://[::1]:8443/x"))
     assert ps.normalize_endpoint(ep(verifyTls=False))["verifyTls"] is False
 
