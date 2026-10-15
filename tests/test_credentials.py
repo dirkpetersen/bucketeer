@@ -18,6 +18,7 @@ from .backends import (
     admin_client,
     croit_only,
     on_rgw,
+    rgw_only,
 )
 from .conftest import REQUIRED
 from .test_admin import Transport
@@ -204,7 +205,7 @@ def test_endpoint_from_env_never_asks_croit(env):
 
 
 def test_endpoint_from_s3cfg_and_cache(make_env):
-    croit_only("endpoint discovery from the .s3cfg has no Admin Ops counterpart (Phase 5 A5)")
+    croit_only("rgw never reads the .s3cfg; see test_rgw_endpoint_is_configured_never_discovered")
     e = make_env()  # no S3_ENDPOINT_URL
     assert e.alice.get("/api/credentials").json()["endpointUrl"] == "http://127.0.0.1:7480"
     e.alice.get("/api/credentials")
@@ -214,8 +215,21 @@ def test_endpoint_from_s3cfg_and_cache(make_env):
     assert len(e.s3cfg_calls()) == 2
 
 
+def test_rgw_endpoint_is_configured_never_discovered(make_env):
+    rgw_only("croit discovers the endpoint from the .s3cfg instead")
+    e = make_env(s3_endpoint_url="https://s3.example.org")
+    assert e.alice.get("/api/credentials").json()["endpointUrl"] == "https://s3.example.org"
+    # without a configured endpoint the resolver answers null and never asks the backend
+    bare = make_env()
+    assert bare.alice.get("/api/credentials").json()["endpointUrl"] is None
+    bare.now[0] += ENDPOINT_MISS_TTL + 1
+    bare.alice.get("/api/credentials")
+    assert not any("cfg" in c[1] for c in bare.transport.calls)
+    assert not any("cfg" in c[1] for c in bare.transport.raw_calls)
+
+
 def test_endpoint_none_when_unavailable_and_retried_soon(make_env):
-    croit_only("endpoint discovery from the .s3cfg has no Admin Ops counterpart (Phase 5 A5)")
+    croit_only("rgw never reads the .s3cfg; see test_rgw_endpoint_is_configured_never_discovered")
     e = make_env()
     e.transport.fail = lambda req: (
         httpx.Response(500, json={}) if "cfg-file" in str(req.url) else None

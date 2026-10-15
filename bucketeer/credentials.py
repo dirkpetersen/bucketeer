@@ -70,7 +70,7 @@ def endpoint_from_s3cfg(text: str) -> str | None:
 
 
 class EndpointResolver:
-    """S3_ENDPOINT_URL, else the croit `.s3cfg` host (cached in memory)."""
+    """S3_ENDPOINT_URL, else (croit backend only) the croit `.s3cfg` host (cached in memory)."""
 
     def __init__(
         self, croit: CroitClient, settings: Settings, clock: Callable[[], float] = time.time
@@ -81,6 +81,8 @@ class EndpointResolver:
     async def resolve(self, uid: str) -> str | None:
         if self.configured:
             return self.configured
+        if getattr(self.croit, "backend", "croit") == "rgw":
+            return None  # no .s3cfg to ask; Settings requires S3_ENDPOINT_URL with rgw
         now = self.clock()
         if self._cached and self._cached[0] > now:
             return self._cached[1]

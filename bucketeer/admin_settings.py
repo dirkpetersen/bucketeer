@@ -31,6 +31,7 @@ from .policy_settings import (
     ENDPOINTS_KEY,
     MAX_PATTERN_LEN,
     NAMING_KEY,
+    PLACEMENT_HINT,
     PLACEMENT_KEY,
     QUOTA_KEY,
     SettingsError,
@@ -44,9 +45,11 @@ from .policy_settings import (
     normalize_endpoint,
     normalize_naming,
     normalize_placement,
+    normalize_placement_manual,
     normalize_quota,
     placement_names,
     quota_or_default,
+    rgw_placement_ids,
     suggest_prefix,
     validate_ad_username,
     validate_bucket_name,
@@ -73,6 +76,19 @@ async def _placements(croit) -> tuple[list[dict], str | None]:
     except CroitClientError as e:
         raise croit_http_error(e) from e
     return (res.get("placements") or []), res.get("defaultPlacementRule")
+
+
+def _manual(croit) -> bool:
+    """rgw backend: nothing lists the cluster's placements, so admins type the ids."""
+    return getattr(croit, "backend", "croit") == "rgw"
+
+
+def _manual_placement_view(stored: dict) -> dict:
+    _, invalid = rgw_placement_ids(stored)
+    return {"invalid": invalid, "default": stored["default"], "allowed": stored["allowed"],
+            "manual": True,
+            "hint": PLACEMENT_HINT, "croitDefault": None, "available": None,
+            "stale": [], "error": None}
 
 
 def _placement_view(stored: dict, rows: list[dict] | None, croit_default: str | None, error):
@@ -127,17 +143,19 @@ async def get_settings(_a: Admin, croit: Croit, db: Db):
     s = db.settings
     stored_placement = await db.run(load_placement, s)
     rows, croit_default, perr = None, None, None
-    try:
-        res = await croit.list_placements()
-        rows, croit_default = (res.get("placements") or []), res.get("defaultPlacementRule")
-    except CroitClientError as e:
-        perr = croit_http_error(e).detail
+    if not _manual(croit):
+        try:
+            res = await croit.list_placements()
+            rows, croit_default = (res.get("placements") or []), res.get("defaultPlacementRule")
+        except CroitClientError as e:
+            perr = croit_http_error(e).detail
     known = await _known_uids(croit)
     quota = await db.run(load_default_quota, s)
     mappings = await db.run(db.uid_mappings.list)
     return {
         "naming": await db.run(load_naming, s),
-        "placement": _placement_view(stored_placement, rows, croit_default, perr),
+        "placement": (_manual_placement_view(stored_placement) if _manual(croit)
+                      else _placement_view(stored_placement, rows, croit_default, perr)),
         "defaultQuota": _quota_view(quota),
         "budgetNumber": await db.run(load_budget_rules, s),
         "uidMappings": [
@@ -223,6 +241,16 @@ async def test_budget_number(body: Body_, _a: Admin):
 
 @router.put("/placement")
 async def set_placement(body: Body_, admin: Admin, croit: Croit, db: Db):
+    if _manual(croit):
+        try:
+            new = normalize_placement_manual(body)
+        except SettingsError as e:
+            raise _bad(e) from e
+        before = await db.run(load_placement, db.settings)
+        await db.run(db.settings.set, PLACEMENT_KEY, new, admin.username)
+        await _audit(db, admin, "admin.settings.placement", "setting", PLACEMENT_KEY,
+                     {"before": before, "after": new})
+        return _manual_placement_view(new)
     rows, croit_default = await _placements(croit)
     try:
         new = normalize_placement(body, placement_names(rows))

@@ -164,6 +164,8 @@ def _verify_setting(settings: Settings) -> ssl.SSLContext | bool:
 
 
 class CroitClient:
+    backend = "croit"
+
     def __init__(
         self,
         settings: Settings,

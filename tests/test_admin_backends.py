@@ -40,6 +40,7 @@ def rgw_settings(admin_ops, **extra):
     return Settings(
         _env_file=None,
         **{**REQUIRED, "admin_backend": "rgw", "rgw_admin_url": RGW_URL,
+           "s3_endpoint_url": "https://s3.example.org",
            "rgw_admin_access_key": admin_ops.admin.access_key,
            "rgw_admin_secret_key": admin_ops.admin.secret_key, **extra},
     )
@@ -428,17 +429,26 @@ async def test_calls_without_an_admin_ops_counterpart(rgw, call, item):
 # --- settings and wiring --------------------------------------------------------
 
 RGW_ENV = {"admin_backend": "rgw", "rgw_admin_url": "https://rgw.example.org",
-           "rgw_admin_access_key": "ADMINKEY", "rgw_admin_secret_key": "admin-secret"}
+           "rgw_admin_access_key": "ADMINKEY", "rgw_admin_secret_key": "admin-secret",
+           "s3_endpoint_url": "https://s3.example.org"}
 NO_CROIT = {k: v for k, v in REQUIRED.items() if not k.startswith("croit")}
 
 
 def test_rgw_backend_needs_its_settings_and_not_croit():
     s = Settings(_env_file=None, **NO_CROIT, **RGW_ENV)
     assert s.admin_backend == "rgw" and s.croit_url == ""
-    for name in ("rgw_admin_url", "rgw_admin_access_key", "rgw_admin_secret_key"):
+    for name in ("rgw_admin_url", "rgw_admin_access_key", "rgw_admin_secret_key",
+                 "s3_endpoint_url"):
         with pytest.raises(ValueError) as e:
             Settings(_env_file=None, **NO_CROIT, **{**RGW_ENV, name: ""})
         assert name.upper() in str(e.value)
+
+
+def test_rgw_backend_requires_s3_endpoint_croit_does_not():
+    env = {k: v for k, v in RGW_ENV.items() if k != "s3_endpoint_url"}
+    with pytest.raises(ValueError, match="S3_ENDPOINT_URL: REQUIRED when ADMIN_BACKEND=rgw"):
+        Settings(_env_file=None, **NO_CROIT, **env)
+    assert Settings(_env_file=None, **REQUIRED).s3_endpoint_url == ""  # croit: optional
 
 
 def test_croit_backend_needs_croit_and_ignores_rgw():
@@ -490,7 +500,8 @@ def test_startup_message_names_the_missing_backend_settings(monkeypatch, tmp_pat
     monkeypatch.chdir(tmp_path)  # no .env here
     with pytest.raises(SystemExit) as e:
         load_settings()
-    for name in ("RGW_ADMIN_URL", "RGW_ADMIN_ACCESS_KEY", "RGW_ADMIN_SECRET_KEY"):
+    for name in ("RGW_ADMIN_URL", "RGW_ADMIN_ACCESS_KEY", "RGW_ADMIN_SECRET_KEY",
+                 "S3_ENDPOINT_URL"):
         assert name in str(e.value)
     assert "CROIT_URL" not in str(e.value)
 

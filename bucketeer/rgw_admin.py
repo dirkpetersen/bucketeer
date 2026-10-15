@@ -50,7 +50,8 @@ Gaps: no Admin Ops counterpart, so these raise `RgwAdminUnsupported` (a `CroitEr
 `create_bucket` and the versioning PATCH of `update_bucket` (A3, S3 data plane), `delete_bucket`
 and `delete_bucket_and_data` (A4; croit returns a task there and a task cannot be faked),
 `wait_for_task` and `get_task` (no tasks exist: A3/A4 remove the callers), `list_placements`
-and `cfg_file` (A5: placements entered by the admin, `S3_ENDPOINT_URL` required), plus
+and `cfg_file` (A5: no caller reaches them; the admin types the placements and
+`S3_ENDPOINT_URL` is required), plus
 `token_info`, the bucket policy calls (S3 data plane) and the usage calls (not mapped yet).
 
 Signing: every request is signed with botocore's `S3SigV4Auth` (service `s3`, `S3_REGION`),
@@ -173,6 +174,8 @@ def _bucket_ref(name: str) -> str:
 
 
 class RgwAdminClient:
+    backend = "rgw"  # callers branch on this (placements, endpoint discovery), not on Settings
+
     def __init__(
         self,
         settings: Settings,
@@ -576,11 +579,11 @@ class RgwAdminClient:
 
     async def list_placements(self) -> dict:
         raise RgwAdminUnsupported(
-            "list_placements", "Phase 5 A5 takes placements from the admin settings")
+            "list_placements", "A5: placements are the ids admins enter on the Settings tab")
 
     async def cfg_file(self, uid: str) -> dict:
         raise RgwAdminUnsupported(
-            "cfg_file", "Phase 5 A5 requires S3_ENDPOINT_URL (no .s3cfg discovery)")
+            "cfg_file", "A5: S3_ENDPOINT_URL is required with ADMIN_BACKEND=rgw (no .s3cfg)")
 
     async def token_info(self) -> dict:
         raise RgwAdminUnsupported("token_info", "RGW has no API token session")

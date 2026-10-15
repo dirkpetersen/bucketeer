@@ -215,8 +215,52 @@ function budgetSection(data, apply) {
     form);
 }
 
+function manualPlacementSection(data, apply) {
+  const p = data.placement;
+  const ids = (s) => s.split(/[\s,]+/).filter(Boolean);
+  const allowed = h("textarea", { class: "input", id: nid("s"), rows: "4", spellcheck: "false", placeholder: "default-placement" });
+  allowed.value = p.allowed.join("\n");
+  const def = h("input", { class: "input", type: "text", id: nid("s"), spellcheck: "false", autocomplete: "off", placeholder: "Cluster default", value: p.default ?? "" });
+  const fAllowed = field("Placement ids", allowed, { hint: "One per line. Users get a choice (under Advanced) when more than one is listed. Leave empty to offer none." });
+  const fDef = field("Default for new buckets", def, { hint: "One of the ids above. Leave empty to use the cluster's own default." });
+  const CMD = "radosgw-admin zonegroup placement list";
+  const [pre, post] = p.hint.split(CMD);
+  const note = h("p", { class: "set-hint", role: "note" }, icon("alert"), pre, h("code", { text: CMD }), post ?? "");
+  const bad = p.invalid?.length
+    ? h("p", { class: "set-warn", role: "status" }, icon("alert"),
+      `Not a valid placement id, so not offered to users: ${p.invalid.join(", ")}. Fix or remove ${p.invalid.length > 1 ? "them" : "it"} and save.`)
+    : null;
+  const ft = footer();
+  const dirty = () => (def.value.trim() || null) !== (p.default ?? null) || ids(allowed.value).join() !== p.allowed.join();
+  const changed = () => ft.update(dirty());
+  allowed.addEventListener("input", changed);
+  def.addEventListener("input", changed);
+  const form = h("form", { novalidate: true, class: "set-form" }, bad, fAllowed.el, fDef.el, note, ft.el);
+  wireForm(form, ft, async () => {
+    fAllowed.error(""); fDef.error("");
+    try {
+      const res = await savePlacement({ default: def.value.trim() || null, allowed: ids(allowed.value) });
+      toast.show("Placement settings saved.");
+      apply({ placement: res });
+    } catch (err) {
+      (/default/i.test(err.message) ? fDef : fAllowed).error(err.message);
+      ft.update(true);
+    }
+  });
+  if (bad) ft.update(true);
+  ft.cancel.addEventListener("click", () => {
+    def.value = p.default ?? "";
+    allowed.value = p.allowed.join("\n");
+    fAllowed.error(""); fDef.error(""); ft.update(false);
+  });
+  return card("Placement", chip(p.default ?? "Cluster default"),
+    "Placements decide which pools store a bucket's data. Enter the placement ids of your zonegroup; by default every bucket lands on the cluster's own default and users get no choice.",
+    form);
+}
+
 function placementSection(data, apply, reload) {
   const p = data.placement;
+  if (p.manual) return manualPlacementSection(data, apply);
   if (!p.available) {
     return card("Placement", chip("Unavailable", "chip-warn"),
       "Which storage placement new buckets use, and whether users may choose one.",

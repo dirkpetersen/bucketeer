@@ -38,7 +38,7 @@ def test_required_are_exactly_the_empty_keys_without_empty_default():
     text = ENV_DEFAULT.read_text()
     for name, backend in (("CROIT_URL", "croit"), ("CROIT_API_TOKEN", "croit"),
                           ("RGW_ADMIN_URL", "rgw"), ("RGW_ADMIN_ACCESS_KEY", "rgw"),
-                          ("RGW_ADMIN_SECRET_KEY", "rgw")):
+                          ("RGW_ADMIN_SECRET_KEY", "rgw"), ("S3_ENDPOINT_URL", "rgw")):
         block = text[: text.index(f"\n{name}=")].rsplit("\n\n", 1)[-1]
         assert f"REQUIRED when ADMIN_BACKEND={backend}" in block, name
 

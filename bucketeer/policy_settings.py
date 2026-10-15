@@ -362,6 +362,57 @@ def normalize_placement(raw: Any, available: list[str]) -> dict[str, Any]:
     return {"default": default, "allowed": [a for a in available if a in set(allowed)]}
 
 
+PLACEMENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+MAX_PLACEMENTS = 50
+PLACEMENT_HINT = (
+    "These ids are not checked against the cluster. Compare them with the output of "
+    "radosgw-admin zonegroup placement list before saving."
+)
+
+
+def normalize_placement_manual(raw: Any) -> dict[str, Any]:
+    """Format-only validation for the rgw backend, where nothing lists the cluster's
+    placements: id charset and length, no duplicates, the default is null or in `allowed`.
+    The admin's order is kept."""
+    if not isinstance(raw, dict):
+        raise SettingsError("Placement settings must be an object.")
+    default, allowed = raw.get("default"), raw.get("allowed", [])
+    if default is not None and not isinstance(default, str):
+        raise SettingsError("The default placement must be a name or null.")
+    default = (default or "").strip() or None
+    if not isinstance(allowed, list) or not all(isinstance(a, str) for a in allowed):
+        raise SettingsError("The allowed placements must be a list of names.")
+    allowed = [a.strip() for a in allowed]
+    if len(allowed) > MAX_PLACEMENTS:
+        raise SettingsError(f"At most {MAX_PLACEMENTS} placements can be listed.")
+    for name in ([default] if default else []) + allowed:
+        if not PLACEMENT_ID_RE.match(name):
+            raise SettingsError(
+                f"\"{name}\" is not a valid placement id: 1-64 letters, digits, '.', '_' or '-', "
+                "starting with a letter or digit.")
+    if len(set(allowed)) != len(allowed):
+        raise SettingsError("A placement is listed twice.")
+    if default and default not in allowed:
+        raise SettingsError("The default placement must be one of the allowed placements.")
+    return {"default": default, "allowed": allowed}
+
+
+def rgw_placement_ids(rules: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """(usable, invalid) ids of a stored placement value on the rgw backend: the allowed ids
+    then the default (a stored default stays effective even when not allowed, as on croit),
+    keeping only well-formed ones. Ids stored under croit were never format-checked, and an
+    id goes into `LocationConstraint`, so an invalid one is never offered or sent."""
+    ids = [*(rules.get("allowed") or []), *([rules["default"]] if rules.get("default") else [])]
+    good: list[str] = []
+    bad: list[str] = []
+    for i in ids:
+        ok = isinstance(i, str) and PLACEMENT_ID_RE.match(i)
+        target = good if ok else bad
+        if i not in target:
+            target.append(i)
+    return good, bad
+
+
 def load_placement(settings_repo) -> dict[str, Any]:
     stored = settings_repo.get(PLACEMENT_KEY, None) or {}
     return {**DEFAULT_PLACEMENT, **{k: v for k, v in stored.items() if k in DEFAULT_PLACEMENT}}

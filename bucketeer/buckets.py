@@ -74,6 +74,7 @@ from .policy_settings import (
     load_placement,
     placement_names,
     placement_options,
+    rgw_placement_ids,
     suggest_prefix,
     validate_bucket_name,
 )
@@ -255,6 +256,11 @@ def _task_failure(e: CroitTaskError, what: str) -> HTTPException:
 async def _placement_view(request: Request) -> dict[str, Any]:
     db, croit = request.app.state.db, request.app.state.croit
     rules = await db.run(load_placement, db.settings)
+    if getattr(croit, "backend", "croit") == "rgw":  # the admin's own list; nothing to ask
+        usable, invalid = rgw_placement_ids(rules)
+        if invalid:
+            log.warning("ignoring %d stored placement id(s) with an invalid format", len(invalid))
+        return placement_options(rules, None, usable)
     try:
         resp = await croit.list_placements()
     except CroitClientError:

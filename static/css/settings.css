@@ -86,3 +86,5 @@
 .off-run-body { display: grid; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4) var(--sp-4); background: var(--surface-sunken); }
 .off-run-body .off-alert { margin: 0; }
 @media (prefers-reduced-motion: reduce) { .off-chev { transition: none; } }
+
+textarea.input { resize: vertical; line-height: var(--lh-body); }

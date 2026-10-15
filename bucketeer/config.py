@@ -156,6 +156,8 @@ class Settings(BaseSettings):
                 problems.append("RGW_ADMIN_ACCESS_KEY")
             if not self.rgw_admin_secret_key.get_secret_value():
                 problems.append("RGW_ADMIN_SECRET_KEY")
+            if not self.s3_endpoint_url:  # no croit .s3cfg to discover it from
+                problems.append("S3_ENDPOINT_URL")
             if problems:
                 raise ValueError(
                     f"{', '.join(problems)}: REQUIRED when ADMIN_BACKEND=rgw, not set"
@@ -212,7 +214,8 @@ def _backend_problems() -> list[str]:
     env = os.environ
     backend = (env.get("ADMIN_BACKEND") or "croit").strip().lower()
     names = {"croit": ("CROIT_URL", "CROIT_API_TOKEN"),
-             "rgw": ("RGW_ADMIN_URL", "RGW_ADMIN_ACCESS_KEY", "RGW_ADMIN_SECRET_KEY")}.get(backend)
+             "rgw": ("RGW_ADMIN_URL", "RGW_ADMIN_ACCESS_KEY", "RGW_ADMIN_SECRET_KEY",
+                   "S3_ENDPOINT_URL")}.get(backend)
     return [f"  {n}: REQUIRED when ADMIN_BACKEND={backend}, not set"
             for n in names or () if not env.get(n)]
 

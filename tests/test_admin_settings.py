@@ -7,6 +7,12 @@ import pytest
 
 from bucketeer.croit import CroitUnavailable
 
+from .backends import (
+    admin_backend,  # noqa: F401  (fixture: both admin backends)
+    croit_only,
+    on_rgw,
+    rgw_only,
+)
 from .test_admin import Env, H
 
 
@@ -72,14 +78,18 @@ def test_defaults(env):
     assert d["uidMappings"] == [] and d["notificationEndpoints"] == []
     p = d["placement"]
     assert p["default"] is None and p["allowed"] == [] and p["error"] is None
-    assert p["croitDefault"] == "default-placement"
-    assert [a["name"] for a in p["available"]] == ["default-placement", "nvme-placement"]
-    first = p["available"][0]
-    assert first["isDefault"] and first["storageClasses"] == ["COLD", "STANDARD"]
+    if on_rgw():
+        assert p["manual"] is True and p["available"] is None and p["stale"] == []
+    else:
+        assert p["croitDefault"] == "default-placement"
+        assert [a["name"] for a in p["available"]] == ["default-placement", "nvme-placement"]
+        first = p["available"][0]
+        assert first["isDefault"] and first["storageClasses"] == ["COLD", "STANDARD"]
     assert env.audit("admin.settings") == []  # reading audits nothing
 
 
 def test_get_survives_croit_outage(env):
+    croit_only("rgw lists no placements, so an outage cannot hide them")
     env.transport.fail = lambda req: CroitUnavailable("down")
     d = env.admin.get(S).json()
     assert d["placement"]["available"] is None and "unreachable" in d["placement"]["error"]
@@ -132,6 +142,7 @@ def test_naming_test_endpoint(env):
 
 
 def test_placement_save_validated_against_croit(env):
+    croit_only("validated against croit's list; rgw: see the manual placement tests")
     r = put(env, "/placement", {"default": "nvme-placement",
                                 "allowed": ["nvme-placement", "default-placement"]})
     assert r.status_code == 200
@@ -149,12 +160,14 @@ def test_placement_save_validated_against_croit(env):
     {"allowed": "x"},
 ])
 def test_placement_rejects_unknown(env, body):
+    croit_only("validated against croit's list; rgw: see the manual placement tests")
     r = put(env, "/placement", body)
     assert r.status_code == 422
     assert env.db.settings.all() == {}
 
 
 def test_placement_stale_after_cluster_change(env):
+    croit_only("validated against croit's list; rgw: see the manual placement tests")
     env.db.settings.set("placement", {"default": "gone", "allowed": ["gone", "nvme-placement"]})
     p = env.admin.get(S).json()["placement"]
     assert p["stale"] == ["gone"]
@@ -162,6 +175,7 @@ def test_placement_stale_after_cluster_change(env):
 
 
 def test_placement_croit_down_is_503_and_nothing_saved(env):
+    croit_only("validated against croit's list; rgw: see the manual placement tests")
     env.transport.fail = lambda req: CroitUnavailable("down")
     r = put(env, "/placement", {"default": None, "allowed": []})
     assert r.status_code == 503
@@ -169,8 +183,41 @@ def test_placement_croit_down_is_503_and_nothing_saved(env):
 
 
 def test_placement_croit_error_is_502(env):
+    croit_only("validated against croit's list; rgw: see the manual placement tests")
     env.transport.fail = lambda req: httpx.Response(500, json={"code": 500, "message": "boom"})
     assert put(env, "/placement", {"default": None, "allowed": []}).status_code == 502
+
+
+# -- placement on the rgw backend: ids typed by the admin ----------------------------
+
+
+def test_rgw_placement_saved_for_format_only_and_hint_shown(env):
+    rgw_only("croit validates against its own placement list")
+    r = put(env, "/placement", {"default": "fast", "allowed": ["slow", "fast"]})
+    assert r.status_code == 200
+    j = r.json()
+    assert (j["default"], j["allowed"], j["manual"]) == ("fast", ["slow", "fast"], True)
+    assert "radosgw-admin zonegroup placement list" in j["hint"] and "not checked" in j["hint"]
+    assert not any("placement" in c[1] for c in env.transport.calls)  # nothing asked the cluster
+    (a,) = env.audit("admin.settings.placement")
+    assert a["details"]["after"] == {"default": "fast", "allowed": ["slow", "fast"]}
+    g = env.admin.get(S).json()["placement"]
+    assert g["allowed"] == ["slow", "fast"] and "radosgw-admin" in g["hint"]
+    # a null default and an empty list are fine
+    assert put(env, "/placement", {"default": None, "allowed": []}).status_code == 200
+
+
+@pytest.mark.parametrize("body", [
+    {"default": "a b", "allowed": ["a b"]}, {"allowed": ["-lead"]}, {"allowed": ["x" * 65]},
+    {"allowed": ["ok", "ok"]}, {"default": "z", "allowed": ["a"]}, {"default": "a"},
+    {"default": 5}, {"allowed": "x"}, {"allowed": [""]}, {"allowed": ["a;b"]},
+    {"allowed": [f"p{i}" for i in range(51)]},
+])
+def test_rgw_placement_format_validation(env, body):
+    rgw_only("croit validates against its own placement list")
+    r = put(env, "/placement", body)
+    assert r.status_code == 422
+    assert env.db.settings.all() == {}
 
 
 # -- default quota -----------------------------------------------------------------------
@@ -258,6 +305,7 @@ def test_mapping_warns_when_rgw_user_missing(env):
 
 
 def test_mapping_warns_when_croit_down(env):
+    croit_only("rgw fails closed when the service user cannot be looked up")
     env.transport.fail = lambda req: CroitUnavailable("down")
     r = put(env, "/uid-mappings/dave", {"rgwUid": "x1"})
     assert r.status_code == 200 and r.json()["exists"] is None and r.json()["warning"]
@@ -364,3 +412,44 @@ def test_one_audit_entry_per_change_and_actor(env):
         ("admin.settings.naming", "bob"),
         ("admin.settings.placement", "bob"),
     ]
+
+
+# -- users see the stored list in the create-bucket options ---------------------------------
+
+
+def test_options_use_the_stored_placements_on_both_backends(env):
+    if on_rgw():
+        body = {"default": "fast", "allowed": ["fast", "slow"]}
+        assert put(env, "/placement", body).status_code == 200
+        o = env.user.get("/api/buckets/options").json()
+        assert o["placements"] == ["fast", "slow"] and o["defaultPlacement"] == "fast"
+        assert not any("placement" in c[1] for c in env.transport.calls)
+        put(env, "/placement", {"default": "fast", "allowed": ["fast"]})
+        o = env.user.get("/api/buckets/options").json()
+        assert o["placements"] == [] and o["defaultPlacement"] == "fast"  # one id: no choice
+    else:
+        assert put(env, "/placement", {"default": "nvme-placement",
+                                       "allowed": ["nvme-placement", "default-placement"]}
+                   ).status_code == 200
+        o = env.user.get("/api/buckets/options").json()
+        assert o["placements"] == ["default-placement", "nvme-placement"]
+        assert o["defaultPlacement"] == "nvme-placement"
+
+
+def test_rgw_croit_shaped_stored_placement_stays_effective_and_flags_bad_ids(env):
+    rgw_only("croit-shaped values only matter after switching to rgw")
+    env.db.settings.set("placement", {"default": "nvme-placement",
+                                      "allowed": ["good-one", "bad id;", "good-two"]})
+    o = env.user.get("/api/buckets/options").json()
+    assert o["defaultPlacement"] == "nvme-placement"  # kept though not in allowed
+    assert o["placements"] == ["nvme-placement", "good-one", "good-two"]
+    assert "bad id;" not in json.dumps(o)
+    p = env.admin.get(S).json()["placement"]
+    assert p["invalid"] == ["bad id;"] and p["default"] == "nvme-placement"
+    env.db.settings.set("placement", {"default": "nvme-placement", "allowed": []})
+    o = env.user.get("/api/buckets/options").json()
+    assert o["defaultPlacement"] == "nvme-placement" and o["placements"] == []
+    env.db.settings.set("placement", {"default": "bad id;", "allowed": []})
+    o = env.user.get("/api/buckets/options").json()
+    assert o["defaultPlacement"] is None
+    assert env.admin.get(S).json()["placement"]["invalid"] == ["bad id;"]
