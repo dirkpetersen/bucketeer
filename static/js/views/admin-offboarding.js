@@ -209,7 +209,7 @@ export function renderOffboarding() {
     for (const f of LIMIT_FIELDS) {
       const raw = inputs[f.key].value.trim();
       const n = Number(raw);
-      if (!raw || !Number.isInteger(n) || n < f.min || n > f.max) {
+      if (!/^\d+$/.test(raw) || n < f.min || n > f.max) {
         bad.push({ field: f.key, message: `Enter a whole number from ${f.min} to ${f.max}.` });
       } else if (n !== data.settings[f.key]) {
         body[f.key] = n;
@@ -217,7 +217,7 @@ export function renderOffboarding() {
     }
     if (bad.length) return showLimitErrors(bad, inputs, errBox);
     for (const f of LIMIT_FIELDS) inputs[f.key].value = String(Number(inputs[f.key].value.trim()));
-    if (!Object.keys(body).length) return;
+    if (!Object.keys(body).length) { button.disabled = true; return; }  // nothing changed
     button.disabled = true;
     try {
       const res = await saveOffboardingSettings(body);

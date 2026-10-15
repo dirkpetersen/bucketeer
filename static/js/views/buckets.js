@@ -158,7 +158,7 @@ export function bucketsCard() {
       createBtn),
     h("p", { class: "panel-note", text: "Your buckets, with usage against quota and the budget number each is charged to." }),
     body,
-    h("p", { class: "adv-only", text: "Advanced: policies, CORS, lifecycle and tagging will appear here." }));
+    h("p", { class: "adv-only", text: "Advanced: bucket policy, ACLs, CORS, tags, notifications, object lock, unfinished uploads and full lifecycle rules are in each bucket's More menu." }));
 
   function paint() {
     count.hidden = !buckets.length;

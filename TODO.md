@@ -132,7 +132,7 @@ skips them too.
   anything. Safeguards per CLAUDE.md (Q10): known accounts only, auto-unsuspend
   on login for job suspensions, abort thresholds, report-only until an admin
   enables enforce, 03:00 daily plus run-now.
-- [ ] Offboarding abort thresholds as admin settings (Q14): `maxPercent` (default 10),
+- [x] Offboarding abort thresholds as admin settings (Q14): `maxPercent` (default 10),
   `minPeopleForPercent` (default 4) and `maxPeople` (default 20) on the Offboarding tab;
   abort when candidates > maxPercent % of known people AND >= minPeopleForPercent, or
   > maxPeople. Validated, audited, shown in the run report.
