@@ -152,7 +152,7 @@ skips them too.
 - [x] Bucket notifications, with endpoints from the admin allowlist only
   (no broker credentials, Q6).
 - [x] Multipart upload cleanup (list and abort).
-- [ ] Subusers (read/write/readwrite/full) and their keys.
+- [ ] (blocked: Q15) Subusers (read/write/readwrite/full) and their keys.
 
 ## Verify against a real croit cluster
 

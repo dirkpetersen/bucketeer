@@ -36,6 +36,34 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 **Answer:**
 
+### Q15: Subusers: how many, which permissions, and how many keys?
+
+- **Blocks:** TODO "Subusers (read/write/readwrite/full) and their keys".
+- **Context:** a subuser (`uid:name`) is a second identity under a user's
+  own account, with its own keys and a permission that applies to *all* of
+  that user's buckets: read, write, read-write or full-control. croit
+  supports creating, changing and deleting them and their keys. CLAUDE.md
+  already says they are Advanced-only, but not how many a user may have.
+  Things to settle:
+  1. **Limits:** subusers per user, and keys per subuser. (Bucket keys are 10
+     per user and 5 per bucket, Q9; a user's own keys are capped at 5.)
+  2. **Full-control:** a full-control subuser can do everything the user can,
+     including bucket policies, ACLs and deleting buckets. Offer it, or stop
+     at read-write?
+  3. **Names:** like bucket-key labels: `[a-z0-9-]`, 1-20 characters, never
+     reused after deletion?
+- **Recommendation:**
+  1. At most 5 subusers per user, and 2 keys per subuser (so a key can be
+     rotated).
+  2. Offer full-control, with a warning and an extra confirmation.
+  3. Names as for bucket-key labels, never reused. Subusers are suspended
+     with their user (RGW does this itself) and show the same reveal and
+     config snippets as the user's own keys, with profile
+     `bucketeer-sub-<name>`. A cluster check is still needed on whether RGW
+     enforces subuser permissions for S3 requests, not only for Swift.
+
+**Answer:**
+
 ## Resolved
 
 ### Q10: Offboarding: how careful should the daily suspension job be?
