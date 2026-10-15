@@ -38,6 +38,24 @@ from .config import Settings
 log = logging.getLogger(__name__)
 
 REDACTED = "<redacted>"
+
+SUBUSER_PERMISSIONS = ("read", "write", "read-write", "full-control")
+_PERMISSION_ALIASES = {"readwrite": "read-write", "full": "full-control",
+                       "read, write": "read-write"}
+
+
+def normalize_permission(raw: object) -> str | None:
+    """A subuser permission as `read|write|read-write|full-control`, or None for none
+    (croit's `NONE`/null, RGW's `<none>`). Unknown words are kept so nothing is hidden."""
+    if not isinstance(raw, str) or raw.strip().lower() in ("", "none", "<none>"):
+        return None
+    word = raw.strip().lower()
+    return _PERMISSION_ALIASES.get(word, word)
+
+
+def subuser_name(raw: object) -> str:
+    """The subuser's own name from `uid:name` (the uid may carry `tenant$`, never `:`)."""
+    return str(raw or "").rpartition(":")[2]
 DEFAULT_POLL_INTERVAL = 1.0
 DEFAULT_TASK_TIMEOUT = 300.0
 OUTPUT_TAIL = 500  # characters of task output kept in a CroitTaskFailed
@@ -422,6 +440,57 @@ class CroitClient:
         await self._request(
             "DELETE", _path("/s3/users/{uid}/keys/{access_key}", uid=uid, access_key=access_key)
         )
+
+    # -- subusers --
+    # A subuser is `uid:name` with a permission (read|write|read-write|full-control) and its
+    # own S3 keys (`user` = `uid:name`). The create, change and delete calls answer a task
+    # here, which these methods wait for, so every call is finished when it returns.
+
+    async def list_subusers(self, uid: str) -> list[dict]:
+        """`[{name, permission}]`, permission None for none."""
+        rows = await self._request("GET", _path("/s3/users/{uid}/subusers", uid=uid))
+        return [{"name": subuser_name(r.get("id")),
+                 "permission": normalize_permission(r.get("permissions"))}
+                for r in rows or [] if isinstance(r, dict)]
+
+    async def create_subuser(self, uid: str, name: str, permission: str) -> None:
+        task = await self._request(
+            "POST", _path("/s3/users/{uid}", uid=uid),
+            json={"subuser": name, "permissions": permission})
+        await self.wait_for_task(task)
+
+    async def set_subuser_permission(self, uid: str, name: str, permission: str) -> None:
+        task = await self._request(
+            "PATCH", _path("/s3/users/{uid}/subusers/{name}", uid=uid, name=name),
+            json={"permissions": permission})
+        await self.wait_for_task(task)
+
+    async def delete_subuser(self, uid: str, name: str) -> None:
+        """Deletes the subuser; croit removes its keys with it."""
+        task = await self._request(
+            "DELETE", _path("/s3/users/{uid}/subusers/{name}", uid=uid, name=name))
+        await self.wait_for_task(task)
+
+    async def list_subuser_keys(self, uid: str, name: str) -> list[dict]:
+        """`[{user: "uid:name", access_key, secret_key}]`."""
+        return await self._request(
+            "GET", _path("/s3/users/{uid}/subusers/{name}/keys", uid=uid, name=name))
+
+    async def put_subuser_key(self, uid: str, name: str, access_key: str,
+                              secret_key: str) -> None:
+        await self._request(
+            "PUT",
+            _path("/s3/users/{uid}/subusers/{name}/keys/{access_key}",
+                  uid=uid, name=name, access_key=access_key),
+            params={"secretKey": secret_key},
+            secrets=(secret_key,),
+        )
+
+    async def delete_subuser_key(self, uid: str, name: str, access_key: str) -> None:
+        await self._request(
+            "DELETE",
+            _path("/s3/users/{uid}/subusers/{name}/keys/{access_key}",
+                  uid=uid, name=name, access_key=access_key))
 
     # -- placements --
 

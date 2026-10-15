@@ -1,0 +1,16 @@
+/* Subusers section of the Credentials card (Advanced). Reuses the .bkd-* list, form and
+   option styles from buckets.css; only the section frame lives here. */
+.sub { display: grid; gap: var(--sp-4); margin-top: var(--sp-2); padding-top: var(--sp-5);
+  border-top: 1px solid var(--border); grid-template-columns: minmax(0, 1fr); }
+.sub[hidden] { display: none; }
+.sub > * { min-width: 0; }
+.sub-head { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.sub-head h3 { font: 560 var(--fs-lg) / 1.15 var(--font-display); letter-spacing: -0.005em; }
+.sub-head .chip { font-variant-numeric: tabular-nums; }
+.sub .bkd-sub .chip-warn svg { width: 0.9rem; height: 0.9rem; }
+.sub .bkd-detail select.input { max-width: 22rem; }
+.sub .cred-warn[hidden], .sub .qd-error[hidden] { display: none; }
+@media (max-width: 34em) {
+  .sub .bk-del-l { display: none; }
+  .sub .bk-acts .btn-sm { padding-inline: var(--sp-3); }
+}

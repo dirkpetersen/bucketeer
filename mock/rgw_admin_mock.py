@@ -71,7 +71,13 @@ email optional, `tenant=` only here, where it overrides), modify (`suspended`,
 `display-name`, `email`, key add), remove (`purge-data`), key put/delete (`key-type=s3`
 only; keys are returned sorted by access key), user/bucket quota get/set, user list
 (`/admin/metadata/user` and `/admin/user?list`), bucket list/stats/info, bucket quota set,
-bucket delete (`purge-objects`), minimal usage. Not implemented (501/405): subusers, caps
+bucket delete (`purge-objects`), minimal usage, subusers (`PUT|POST|DELETE
+/admin/user?uid=&subuser=name`, `access=read|write|readwrite|full`, delete purges the
+subuser's keys by default; their keys via `?key&uid=&subuser=name&access-key=&secret-key=` and
+`DELETE ?key&subuser=name&access-key=`, listed in `keys[]` with `user` = `uid:name`; user info
+shows `subusers: [{id, permissions}]`). Cluster check: how real RGW routes `?key&subuser=`
+(its handler may pick the subuser op first), the 409 code for an existing subuser, and
+whether S3 requests honour a subuser's permission. Not implemented (501/405): caps
 changes, swift keys, user stats, bucket link/unlink/index check, usage trim, `format=xml`.
 Uids are `tenant$uid` in the `uid` parameter; user info reports `"tenant": "acme",
 "user_id": "carol"` and only `keys[].user` stays `acme$carol`. `+` is fine in a uid but, like
@@ -408,8 +414,18 @@ def get_user(ops: AdminOps, uid: str):
 
 
 def key_list(user) -> list[dict]:
-    return [{"user": user.uid, "access_key": k["access_key"], "secret_key": k["secret_key"]}
+    return [{"user": f"{user.uid}:{k['subuser']}" if k.get("subuser") else user.uid,
+             "access_key": k["access_key"], "secret_key": k["secret_key"]}
             for k in sorted(user.keys, key=lambda k: k["access_key"])]
+
+
+ACCESS_TO_PERMISSION = {"read": "read", "write": "write", "readwrite": "read-write",
+                        "full": "full-control"}
+
+
+def subuser_list(user) -> list[dict]:
+    return [{"id": f"{user.uid}:{n}", "permissions": p or "<none>"}
+            for n, p in sorted(user.subusers.items())]
 
 
 def caps_view(ops: AdminOps, uid: str) -> list[dict]:
@@ -425,7 +441,7 @@ def user_view(ops: AdminOps, user) -> dict:
         "tenant": user.tenant, "user_id": user.uid.partition("$")[2] or user.uid,
         "display_name": user.name,
         "email": user.email, "suspended": int(user.suspended), "max_buckets": 1000,
-        "subusers": [], "keys": key_list(user), "swift_keys": [],
+        "subusers": subuser_list(user), "keys": key_list(user), "swift_keys": [],
         "caps": caps_view(ops, user.uid),
         "op_mask": "read, write, delete", "system": False, "admin": False,
         "default_placement": user.default_placement or "",
@@ -597,14 +613,74 @@ def op_user_delete(ops, params, body):
     ops.croit.delete_user(uid)
 
 
+def subuser_name(ops, params, uid: str) -> str:
+    name = params.get("subuser") or ""
+    if not name:
+        raise AdminError(400, "InvalidArgument", "subuser is required")
+    if name not in get_user(ops, uid).subusers:
+        raise AdminError(404, "NoSuchSubUser", f"{uid}:{name}")
+    return name
+
+
+def access_permission(params):
+    raw = params.get("access")
+    if raw is None:
+        return None
+    if raw not in ACCESS_TO_PERMISSION:
+        raise AdminError(400, "InvalidArgument", "access must be read, write, readwrite or full")
+    return ACCESS_TO_PERMISSION[raw]
+
+
+def api_error(fn, *args):
+    try:
+        return fn(*args)
+    except Exception as e:
+        if type(e).__name__ != "ApiError":  # croit_mock.ApiError, by duck type
+            raise
+        code = {404: "NoSuchSubUser", 409: "KeyExists"}.get(e.status, "InvalidArgument")
+        raise AdminError(e.status, code, str(e)) from None
+
+
+def op_subuser_create(ops, params, body):
+    uid = resolve_uid(params)
+    name = params.get("subuser") or ""
+    check_key_type(params)
+    permission = access_permission(params)
+    material = key_material(params, uid, ops, default_generate=False) \
+        if params.has("access-key") or params.has("secret-key") else None
+    api_error(ops.croit.create_subuser, uid, name, permission)
+    if material:
+        api_error(ops.croit.put_subuser_key, uid, name, *material)
+    return subuser_list(get_user(ops, uid))
+
+
+def op_subuser_modify(ops, params, body):
+    uid = resolve_uid(params)
+    name = subuser_name(ops, params, uid)
+    permission = access_permission(params)
+    if permission is not None:
+        api_error(ops.croit.set_subuser_permission, uid, name, permission)
+    return subuser_list(get_user(ops, uid))
+
+
+def op_subuser_remove(ops, params, body):
+    uid = resolve_uid(params)
+    name = subuser_name(ops, params, uid)
+    api_error(ops.croit.delete_subuser, uid, name, params.bool("purge-keys", True))
+
+
 def op_key_put(ops, params, body):
     uid = resolve_uid(params)
     user = get_user(ops, uid)
     check_key_type(params)
+    sub = subuser_name(ops, params, uid) if params.has("subuser") else None
     material = key_material(params, uid, ops)
     if not material:
         raise AdminError(400, "InvalidArgument", "access-key is required without generate-key")
-    ops.croit.put_key(uid, *material)
+    if sub:
+        api_error(ops.croit.put_subuser_key, uid, sub, *material)
+    else:
+        ops.croit.put_key(uid, *material)
     return key_list(user)
 
 
@@ -615,10 +691,14 @@ def op_key_delete(ops, params, body):
     access = params.get("access-key")
     if not access:
         raise AdminError(400, "InvalidArgument", "access-key is required")
-    if not any(k["access_key"] == access for k in user.keys):
+    sub = subuser_name(ops, params, uid) if params.has("subuser") else None
+    if not any(k["access_key"] == access and k.get("subuser") == sub for k in user.keys):
         # RGW answers the same for another user's key and a key that exists nowhere
         raise AdminError(403, "InvalidAccessKeyId", "")
-    ops.croit.remove_key(uid, access)
+    if sub:
+        ops.croit.remove_subuser_key(uid, sub, access)
+    else:
+        ops.croit.remove_key(uid, access)
 
 
 def _quota_by_type(ops, user, kind: str) -> dict:
@@ -793,9 +873,8 @@ def find_route(method: str, path: str, params: Params):
     """(cap type, needed perm, operation) for a request, or an AdminError."""
     perm = "read" if method in ("GET", "HEAD") else "write"
     if path == "user":
-        for unsupported in ("subuser", "caps"):
-            if params.has(unsupported):
-                return "users", perm, _raise(not_implemented(f"user {unsupported}"))
+        if params.has("caps"):
+            return "users", perm, _raise(not_implemented("user caps"))
         if method == "GET":
             if params.has("quota"):
                 return "users", perm, op_quota_get
@@ -807,11 +886,15 @@ def find_route(method: str, path: str, params: Params):
         if method == "PUT":
             if params.has("key"):
                 return "users", perm, op_key_put
+            if params.has("subuser"):
+                return "users", perm, op_subuser_create
             return "users", perm, op_quota_put if params.has("quota") else op_user_create
         if method == "POST":
-            return "users", perm, op_user_modify
+            return "users", perm, op_subuser_modify if params.has("subuser") else op_user_modify
         if method == "DELETE":
-            return "users", perm, op_key_delete if params.has("key") else op_user_delete
+            if params.has("key"):
+                return "users", perm, op_key_delete
+            return "users", perm, op_subuser_remove if params.has("subuser") else op_user_delete
     elif path == "bucket":
         if method == "GET":
             return "buckets", perm, op_bucket_info

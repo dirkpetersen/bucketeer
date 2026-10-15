@@ -302,6 +302,9 @@ available, and fix the client and the mock if reality differs:
   `maxSize` is in bytes (1 TiB default).
 - [ ] (needs cluster) Subusers: RGW enforces subuser permissions (read, write, read-write) for S3
   requests, not only Swift.
+- [ ] (needs cluster) Subuser keys over Admin Ops: `PUT|DELETE /admin/user?key&uid=&subuser=<name>` really
+  adds/removes a key of the subuser (RGW may route a `subuser` parameter to the subuser op first), and
+  `DELETE ?subuser=&purge-keys=true` removes its keys.
 - [ ] (needs cluster) RGW uids are case-sensitive (`Alice` and `alice` are
   different users).
 - [ ] (needs cluster) Bucket keys: a zero user quota doesn't block writes to the shared

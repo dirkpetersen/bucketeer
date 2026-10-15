@@ -96,6 +96,13 @@ ROUTES = [
     ("GET", "/s3/users/{uid}/key", False),
     ("PUT", "/s3/users/{uid}/keys/{access_key}", True),  # ?secretKey= (a secret!)
     ("DELETE", "/s3/users/{uid}/keys/{access_key}", False),
+    ("GET", "/s3/users/{uid}/subusers", False),
+    ("POST", "/s3/users/{uid}", False),  # create a subuser
+    ("PATCH", "/s3/users/{uid}/subusers/{name}", False),
+    ("DELETE", "/s3/users/{uid}/subusers/{name}", False),
+    ("GET", "/s3/users/{uid}/subusers/{name}/keys", False),
+    ("PUT", "/s3/users/{uid}/subusers/{name}/keys/{access_key}", True),  # ?secretKey= (a secret!)
+    ("DELETE", "/s3/users/{uid}/subusers/{name}/keys/{access_key}", False),
     ("GET", "/s3/placements", False),
     ("GET", "/s3/buckets", False),
     ("GET", "/s3/buckets/{name}", True),  # ?owner=

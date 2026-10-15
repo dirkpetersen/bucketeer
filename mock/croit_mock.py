@@ -121,7 +121,9 @@ class User:
     name: str
     email: str = ""
     suspended: bool = False
-    keys: list[dict] = field(default_factory=list)  # {access_key, secret_key}
+    # {access_key, secret_key}; a subuser's key also has `subuser` (its name)
+    keys: list[dict] = field(default_factory=list)
+    subusers: dict[str, str | None] = field(default_factory=dict)  # name -> permission
     user_quota: dict = field(default_factory=new_quota)
     bucket_quota: dict = field(default_factory=new_quota)
     default_placement: str | None = None
@@ -466,10 +468,80 @@ class CroitState:
         owner = self.access_keys.get(access)
         if owner and owner != uid:
             raise ApiError(409, f"Access key {access} belongs to another user")
+        if any(k["access_key"] == access and k.get("subuser") for k in user.keys):
+            raise ApiError(409, f"Access key {access} belongs to a subuser")
         user.keys = [k for k in user.keys if k["access_key"] != access]
         user.keys.append({"access_key": access, "secret_key": secret})
         self.access_keys[access] = uid
         self._fire("key_added", uid, access, secret)
+
+    # -- subusers (shared with the RGW Admin Ops mock) --
+    # A subuser is `uid:name` with a permission. Its S3 keys live in the owner's key list
+    # with a `subuser` field and show as user `uid:name`. Whether RGW enforces the
+    # permission for S3 requests is a cluster check; the mock enforces nothing.
+    @staticmethod
+    def key_identity(uid: str, key: dict) -> str:
+        return f"{uid}:{key['subuser']}" if key.get("subuser") else uid
+
+    def key_views(self, uid: str) -> list[dict]:
+        return [{"user": self.key_identity(uid, k), "access_key": k["access_key"],
+                 "secret_key": k["secret_key"]} for k in self.get_user(uid).keys]
+
+    def _subuser(self, uid: str, name: str) -> User:
+        user = self.get_user(uid)
+        if name not in user.subusers:
+            raise ApiError(404, f"Subuser {uid}:{name} not found")
+        return user
+
+    @staticmethod
+    def _check_permission(permission):
+        if permission not in (None, "NONE", "read", "write", "read-write", "full-control"):
+            raise ApiError(400, f"Invalid subuser permission: {permission!r}")
+        return None if permission == "NONE" else permission
+
+    @locked
+    def create_subuser(self, uid: str, name: str, permission):
+        user = self.get_user(uid)
+        if not name or any(c in name for c in ":$/ "):
+            raise ApiError(400, f"Invalid subuser name: {name!r}")
+        if name in user.subusers:
+            raise ApiError(409, f"Subuser {uid}:{name} already exists")
+        user.subusers[name] = self._check_permission(permission)
+
+    @locked
+    def set_subuser_permission(self, uid: str, name: str, permission):
+        self._subuser(uid, name).subusers[name] = self._check_permission(permission)
+
+    @locked
+    def delete_subuser(self, uid: str, name: str, purge_keys: bool = True):
+        user = self._subuser(uid, name)
+        if purge_keys:
+            for k in [k for k in user.keys if k.get("subuser") == name]:
+                self.remove_subuser_key(uid, name, k["access_key"])
+        del user.subusers[name]
+
+    @locked
+    def put_subuser_key(self, uid: str, name: str, access: str, secret: str):
+        user = self._subuser(uid, name)
+        if not access or not secret:
+            raise ApiError(400, "access key and secret key must not be empty")
+        owner = self.access_keys.get(access)
+        existing = next((k for k in user.keys if k["access_key"] == access), None)
+        if (owner and owner != uid) or (existing and existing.get("subuser") != name):
+            raise ApiError(409, f"Access key {access} belongs to another user")
+        user.keys = [k for k in user.keys if k["access_key"] != access]
+        user.keys.append({"access_key": access, "secret_key": secret, "subuser": name})
+        self.access_keys[access] = uid
+        self._fire("key_added", f"{uid}:{name}", access, secret)
+
+    @locked
+    def remove_subuser_key(self, uid: str, name: str, access: str):
+        user = self._subuser(uid, name)
+        if not any(k["access_key"] == access and k.get("subuser") == name for k in user.keys):
+            raise ApiError(404, f"Key {access} not found for subuser {uid}:{name}")
+        user.keys = [k for k in user.keys if k["access_key"] != access]
+        self.access_keys.pop(access, None)
+        self._fire("key_removed", f"{uid}:{name}", access)
 
     @locked
     def remove_key(self, uid: str, access: str):
@@ -496,7 +568,8 @@ class CroitState:
 
     def cfg_file(self, uid: str) -> dict:
         user = self.get_user(uid)
-        key = user.keys[0] if user.keys else {"access_key": "", "secret_key": ""}
+        own = [k for k in user.keys if not k.get("subuser")]
+        key = own[0] if own else {"access_key": "", "secret_key": ""}
         text = (
             "[default]\n"
             f"access_key = {key['access_key']}\n"
@@ -669,7 +742,9 @@ class CroitState:
     def user_view(self, u: User) -> dict:
         return {
             "uid": u.uid, "name": u.name, "email": u.email, "suspended": u.suspended,
-            "subusers": [], "subusersFormatted": "",
+            "subusers": [{"id": f"{u.uid}:{n}", "permissions": p}
+                         for n, p in u.subusers.items()],
+            "subusersFormatted": ", ".join(f"{n}({p})" for n, p in u.subusers.items()),
             "userQuota": self.quota_view(u.user_quota),
             "bucketQuota": self.quota_view(u.bucket_quota),
             "defaultPlacement": u.default_placement,
@@ -775,6 +850,15 @@ class KeyBody(Model):
 
 class UpdateKeysBody(Model):
     keys: list[KeyBody]
+
+
+class SubuserBody(Model):
+    subuser: str
+    permissions: str | None = None
+
+
+class SubuserUpdateBody(Model):
+    permissions: str | None = None
 
 
 class QuotaBody(Model):
@@ -989,14 +1073,13 @@ def s3_user_bucket_quota(uid: str, body: QuotaBody, request: Request, _a: Admin)
 # keys
 @router.get("/s3/users/{uid}/keys")
 def s3_keys_get(uid: str, request: Request, _v: Viewer):
-    user = st(request).get_user(uid)
-    return [{"user": uid, **k} for k in user.keys]
+    return st(request).key_views(uid)
 
 
 @router.get("/s3/users/{uid}/key")
 def s3_key_get(uid: str, request: Request, _v: Viewer):
-    user = st(request).get_user(uid)
-    return {"user": uid, **user.keys[0]} if user.keys else None
+    own = [k for k in st(request).key_views(uid) if k["user"] == uid]
+    return own[0] if own else None
 
 
 @router.put("/s3/users/{uid}/keys")
@@ -1014,6 +1097,54 @@ def s3_key_put(uid: str, accessKey: str, secretKey: str, request: Request, _a: A
 @router.delete("/s3/users/{uid}/keys/{accessKey}", **NO_CONTENT)
 def s3_key_delete(uid: str, accessKey: str, request: Request, _a: Admin):
     st(request).remove_key(uid, accessKey)
+
+
+# subusers (create/change/delete answer a task, like croit)
+@router.get("/s3/users/{uid}/subusers")
+def s3_subusers_get(uid: str, request: Request, _v: Viewer):
+    user = st(request).get_user(uid)
+    return [{"id": f"{uid}:{n}", "permissions": p} for n, p in user.subusers.items()]
+
+
+@router.post("/s3/users/{uid}")
+def s3_subuser_create(uid: str, body: SubuserBody, request: Request, p: Admin):
+    state = st(request)
+    state.create_subuser(uid, body.subuser, body.permissions)
+    return state.new_task("Create S3 subuser", uid, p.username)
+
+
+@router.patch("/s3/users/{uid}/subusers/{subuser}")
+def s3_subuser_update(uid: str, subuser: str, body: SubuserUpdateBody, request: Request,
+                      p: Admin):
+    state = st(request)
+    state.set_subuser_permission(uid, subuser, body.permissions)
+    return state.new_task("Update S3 subuser", uid, p.username)
+
+
+@router.delete("/s3/users/{uid}/subusers/{subuser}")
+def s3_subuser_delete(uid: str, subuser: str, request: Request, p: Admin):
+    state = st(request)
+    state.delete_subuser(uid, subuser)
+    return state.new_task("Delete S3 subuser", uid, p.username)
+
+
+@router.get("/s3/users/{uid}/subusers/{subuser}/keys")
+def s3_subuser_keys(uid: str, subuser: str, request: Request, _v: Viewer):
+    state = st(request)
+    state._subuser(uid, subuser)
+    return [k for k in state.key_views(uid) if k["user"] == f"{uid}:{subuser}"]
+
+
+@router.put("/s3/users/{uid}/subusers/{subuser}/keys/{accessKey}", **NO_CONTENT)
+def s3_subuser_key_put(uid: str, subuser: str, accessKey: str, secretKey: str,
+                       request: Request, _a: Admin):
+    st(request).put_subuser_key(uid, subuser, accessKey, secretKey)
+
+
+@router.delete("/s3/users/{uid}/subusers/{subuser}/keys/{accessKey}", **NO_CONTENT)
+def s3_subuser_key_delete(uid: str, subuser: str, accessKey: str, request: Request,
+                          _a: Admin):
+    st(request).remove_subuser_key(uid, subuser, accessKey)
 
 
 @router.get("/s3/users/{uid}/cfg-file/download")

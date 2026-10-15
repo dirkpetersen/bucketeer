@@ -31,6 +31,7 @@ from . import (
     s3client,
     share_links,
     sharing,
+    subusers,
     tags,
 )
 from .config import Settings
@@ -171,6 +172,7 @@ def create_app(
     api.include_router(demo_router)
     api.include_router(rgw_user.router)
     api.include_router(credentials.router)
+    api.include_router(subusers.router)
     api.include_router(profile.router)
     api.include_router(bucket_delete.router)  # before /buckets/{name}
     api.include_router(buckets.router)

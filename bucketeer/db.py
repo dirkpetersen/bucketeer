@@ -191,6 +191,16 @@ MIGRATIONS: list[str] = [
         WHERE state IN ('queued', 'running');
     CREATE INDEX bucket_delete_jobs_owner ON bucket_delete_jobs (owner_uid);
     """,
+    # v10: every subuser name a user ever created (a name is never reused, deleted or not).
+    """
+    CREATE TABLE subuser_names (
+        rgw_uid    TEXT NOT NULL,
+        name       TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        deleted_at TEXT,
+        PRIMARY KEY (rgw_uid, name)
+    );
+    """,
 ]
 
 _MISSING: Any = object()
@@ -266,6 +276,7 @@ class Database:
         self.buckets = Buckets(self)
         self.bucket_keys = BucketKeys(self)
         self.shares = Shares(self)
+        self.subusers = SubuserNames(self)
         self.known_accounts = KnownAccounts(self)
         self.offboarding_runs = OffboardingRuns(self)
         self.delete_jobs = BucketDeleteJobs(self)
@@ -653,6 +664,32 @@ class BucketKeys(_Repo):
                     (owner, by),
                 )
             return cur.rowcount
+
+
+class SubuserNames(_Repo):
+    """Subuser names ever used per RGW uid. RGW is the source of truth for what exists; this
+    table only remembers names so a deleted one is never handed out again."""
+
+    def claim(self, uid: str, name: str) -> bool:
+        """Record `name` for `uid`; False when it was used before (deleted or not)."""
+        with self.db.tx() as c:
+            return c.execute(
+                "INSERT OR IGNORE INTO subuser_names (rgw_uid, name, created_at) "
+                "VALUES (?, ?, ?)", (uid, name, now())).rowcount > 0
+
+    def release(self, uid: str, name: str) -> None:
+        """Forget a claim whose create never happened (a clean failure)."""
+        with self.db.tx() as c:
+            c.execute("DELETE FROM subuser_names WHERE rgw_uid = ? AND name = ?", (uid, name))
+
+    def mark_deleted(self, uid: str, name: str) -> None:
+        with self.db.tx() as c:
+            c.execute("UPDATE subuser_names SET deleted_at = ? WHERE rgw_uid = ? AND name = ? "
+                      "AND deleted_at IS NULL", (now(), uid, name))
+
+    def used(self, uid: str) -> list[str]:
+        return [r["name"] for r in self.db.query(
+            "SELECT name FROM subuser_names WHERE rgw_uid = ? ORDER BY name", (uid,))]
 
 
 class KnownAccounts(_Repo):

@@ -92,7 +92,22 @@ def croit_view(request: httpx.Request) -> httpx.Request:
     out_method, out_path, out_body = m, path, None
     if path == "/admin/user":
         base = f"/api/s3/users/{enc(uid)}"
-        if m == "PUT" and "key" in q:
+        sub = f"{base}/subusers/{enc(q.get('subuser', ''))}"
+        perm = {"read": "read", "write": "write", "readwrite": "read-write",
+                "full": "full-control"}.get(q.get("access", ""))
+        if "subuser" in q and "key" in q:
+            out_path = f"{sub}/keys/{enc(q['access-key'])}"
+            if m == "PUT":
+                out_path += f"?secretKey={enc(q['secret-key'])}"
+        elif "subuser" in q and m == "PUT":
+            out_method, out_path = "POST", base
+            out_body = {"subuser": q["subuser"], "permissions": perm}
+        elif "subuser" in q and m == "POST":
+            out_method, out_path = "PATCH", sub
+            out_body = {"permissions": perm}
+        elif "subuser" in q and m == "DELETE":
+            out_path = sub
+        elif m == "PUT" and "key" in q:
             out_path = f"{base}/keys/{enc(q['access-key'])}?secretKey={enc(q['secret-key'])}"
         elif m == "DELETE" and "key" in q:
             out_path = f"{base}/keys/{enc(q['access-key'])}"

@@ -89,7 +89,7 @@ from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
 from .config import Settings
-from .croit import REDACTED, CroitError, CroitUnavailable
+from .croit import REDACTED, CroitError, CroitUnavailable, normalize_permission, subuser_name
 
 log = logging.getLogger(__name__)
 
@@ -610,6 +610,66 @@ class RgwAdminClient:
             # The same answer as a bad admin key: the user's key list tells which it was.
             if not any(k["access_key"] == access_key for k in await self.list_keys(uid)):
                 raise CroitError(404, None, f"Key {access_key} not found for user {uid}") from e
+            raise
+
+    # -- subusers --
+    # `PUT|POST|DELETE /admin/user?subuser=<name>&uid=` with `access=read|write|readwrite|full`;
+    # their keys are `?key&uid=&subuser=<name>&key-type=s3&access-key=` (the keys of every
+    # subuser are in the user's `keys[]` with `user` = `uid:name`). Same shapes as croit's.
+
+    _ACCESS = {"read": "read", "write": "write", "read-write": "readwrite",
+               "full-control": "full"}
+
+    async def list_subusers(self, uid: str) -> list[dict]:
+        rows = (await self._user_info(uid)).get("subusers") or []
+        return [{"name": subuser_name(r.get("id")),
+                 "permission": normalize_permission(r.get("permissions"))}
+                for r in rows if isinstance(r, dict)]
+
+    async def create_subuser(self, uid: str, name: str, permission: str) -> None:
+        await self._request(
+            "PUT", "/admin/user",
+            [("uid", uid), ("subuser", name), ("access", self._ACCESS[permission]),
+             ("key-type", "s3"), ("generate-secret", "false")])
+
+    async def set_subuser_permission(self, uid: str, name: str, permission: str) -> None:
+        await self._request(
+            "POST", "/admin/user",
+            [("uid", uid), ("subuser", name), ("access", self._ACCESS[permission])])
+
+    async def delete_subuser(self, uid: str, name: str) -> None:
+        await self._request(
+            "DELETE", "/admin/user",
+            [("uid", uid), ("subuser", name), ("purge-keys", "true")])
+
+    async def list_subuser_keys(self, uid: str, name: str) -> list[dict]:
+        identity = f"{uid}:{name}"
+        return [k for k in await self.list_keys(uid) if k.get("user") == identity]
+
+    async def put_subuser_key(self, uid: str, name: str, access_key: str,
+                              secret_key: str) -> None:
+        await self._request(
+            "PUT", "/admin/user",
+            [("key", None), ("uid", uid), ("subuser", name), ("key-type", "s3"),
+             ("access-key", access_key), ("secret-key", secret_key),
+             ("generate-key", "false")],
+            secrets=(secret_key,),
+        )
+
+    async def delete_subuser_key(self, uid: str, name: str, access_key: str) -> None:
+        try:
+            await self._request(
+                "DELETE", "/admin/user",
+                [("key", None), ("uid", uid), ("subuser", name), ("key-type", "s3"),
+                 ("access-key", access_key)],
+            )
+        except CroitError as e:
+            if e.status != 403 or "InvalidAccessKeyId" not in e.message:
+                raise
+            if not any(k["access_key"] == access_key
+                       for k in await self.list_subuser_keys(uid, name)):
+                raise CroitError(
+                    404, None, f"Key {access_key} not found for subuser {uid}:{name}") from e
             raise
 
     # -- buckets --

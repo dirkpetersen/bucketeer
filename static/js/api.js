@@ -66,6 +66,22 @@ export const createKey = () => api("/credentials/keys", { method: "POST" });
 export const rotateKey = (accessKey) => api(`/credentials/keys/${enc(accessKey)}/rotate`, { method: "POST" });
 export const deleteKey = (accessKey) => api(`/credentials/keys/${enc(accessKey)}`, { method: "DELETE" });
 
+// Subusers (Advanced): extra identities of the account, each with one permission across all the
+// user's buckets and up to 2 keys. list -> {subusers: [{name, permission, keys: [{accessKey}]}],
+// permissions, limits: {maxSubusers, maxKeys}}. create/update with full-control need
+// `confirm: true` (else 409 with body.detail.requiresConfirmation). reveal is audited server-side.
+const sub = (name) => `/subusers/${enc(name)}`;
+export const listSubusers = () => api("/subusers");
+export const createSubuser = (name, permission, confirm = false) =>
+  api("/subusers", { method: "POST", json: { name, permission, confirm } });
+export const updateSubuser = (name, permission, confirm = false) =>
+  api(sub(name), { method: "PATCH", json: { permission, confirm } });
+export const deleteSubuser = (name) => api(sub(name), { method: "DELETE" });
+export const createSubuserKey = (name) => api(`${sub(name)}/keys`, { method: "POST" });
+export const rotateSubuserKey = (name, accessKey) => api(`${sub(name)}/keys/${enc(accessKey)}/rotate`, { method: "POST" });
+export const deleteSubuserKey = (name, accessKey) => api(`${sub(name)}/keys/${enc(accessKey)}`, { method: "DELETE" });
+export const revealSubuserKey = (name, accessKey) => api(`${sub(name)}/reveal`, { method: "POST", json: { accessKey } });
+
 // The signed-in user's profile: {username, displayName, email, defaultBudgetNumber|null}.
 // Saving "" or null clears the default budget number; a 422 carries the message to show.
 export const getProfile = () => api("/profile");

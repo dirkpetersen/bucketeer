@@ -10,7 +10,6 @@ from bucketeer.credentials import MAX_KEYS, generate_key_pair
 
 from .backends import (
     admin_backend,  # noqa: F401  (fixture: both admin backends)
-    croit_only,
     error_response,
     on_rgw,
 )
@@ -155,18 +154,16 @@ def test_refuse_deleting_last_key(env):
 
 
 def test_other_users_and_subuser_keys_are_404(env):
-    croit_only("the Admin Ops mock models no subuser keys")
     croit = env.mock.state.croit
-    user = croit.users["alice"]
-    user.keys.append({"access_key": "SUBKEY0000000000000X", "secret_key": "x" * 40,
-                      "user": "alice:sub"})
-    croit.access_keys["SUBKEY0000000000000X"] = "alice"
+    croit.create_subuser("alice", "sub", "read")
+    croit.put_subuser_key("alice", "sub", "SUBKEY0000000000000X", "x" * 40)
     env.alice.post("/api/credentials/keys", headers=H)  # so delete would otherwise be allowed
     for key in (BOB[2], "SUBKEY0000000000000X", ALICE[2][:-1]):
         assert env.alice.post(f"/api/credentials/keys/{key}/rotate", headers=H).status_code == 404
         assert env.alice.delete(f"/api/credentials/keys/{key}", headers=H).status_code == 404
     assert "bob" in croit.access_keys[BOB[2]]
     assert BOB[2] in {k["access_key"] for k in croit.users["bob"].keys}
+    assert "SUBKEY0000000000000X" in croit.access_keys
 
 
 def test_suspended_user_refused(env):

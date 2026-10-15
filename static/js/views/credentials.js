@@ -6,6 +6,7 @@ import { copyText } from "../clipboard.js";
 import { toast } from "../components/toast.js";
 import { confirmDialog } from "../components/confirm-dialog.js";
 import { configSnippet, credentialsSnippet, testCommand } from "../awsconfig.js";
+import { subusersSection } from "./subusers.js";
 
 // The Credentials card: account status first, then (account ready) the access key,
 // the masked secret and the ready-to-paste ~/.aws snippets. The secret exists in
@@ -181,7 +182,7 @@ function accountStatus() {
       const show = (d, select) => paint("chip-ok", "Account ready",
         h("p", { class: "acct-line" }, "Signed in to S3 as ", h("code", { class: "acct-uid", text: a.uid }),
           h("span", { class: "acct-sub", text: `Storage limit: ${quotaText(a.quota)}` })),
-        keysPanel(d, { select, reload }));
+        keysPanel(d, { select, reload }), subusersSection(d));
       // Re-read the key list after a change; the old panel (and any revealed secret) is dropped.
       const reload = async (select) => {
         try {
@@ -212,6 +213,5 @@ export function credentialsCard() {
   return h("section", { class: "card panel panel-wide", "aria-labelledby": "h-Credentials" },
     h("div", { class: "panel-head" }, h("h2", { id: "h-Credentials", text: "Credentials" }), chip),
     h("p", { class: "panel-note", text: "Your S3 access key, and ready-to-paste AWS config and credentials files." }),
-    body,
-    h("p", { class: "adv-only", text: "Advanced: scoped keys and subusers will appear here." }));
+    body);
 }

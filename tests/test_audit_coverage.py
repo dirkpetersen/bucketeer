@@ -39,6 +39,13 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "POST /api/credentials/keys": ("credentials.key.create",),
     "POST /api/credentials/keys/{access_key}/rotate": ("credentials.key.rotate",),
     "DELETE /api/credentials/keys/{access_key}": ("credentials.key.delete",),
+    "POST /api/subusers": ("subuser.create",),
+    "PATCH /api/subusers/{name}": ("subuser.update",),
+    "DELETE /api/subusers/{name}": ("subuser.delete",),
+    "POST /api/subusers/{name}/keys": ("subuser.key.create",),
+    "POST /api/subusers/{name}/keys/{access_key}/rotate": ("subuser.key.rotate",),
+    "DELETE /api/subusers/{name}/keys/{access_key}": ("subuser.key.delete",),
+    "POST /api/subusers/{name}/reveal": ("subuser.reveal",),
     "POST /api/buckets": ("bucket.create",),
     "POST /api/buckets/reconcile": ("bucket.tag_sync",),
     "PUT /api/buckets/{name}/versioning": ("bucket.versioning",),
@@ -111,7 +118,7 @@ EVENTS = {
 ACTION_RE = re.compile(r"^(?:[a-z][a-z_]*)(?:\.[a-z][a-z_]*)+$")
 ACTION_EXCEPTIONS = {"logout"}  # pre-dates the scheme; kept so old log rows still match
 TARGET_TYPES = {"user", "rgw_user", "bucket", "bucket_key", "access_key", "profile", "setting",
-                "uid_mapping", "notification_endpoint", "report", "offboarding_run"}
+                "uid_mapping", "notification_endpoint", "report", "offboarding_run", "subuser"}
 ACTORS = {"alice", "bob", "dave", "system", "mallory"}
 
 SECRET_PATTERNS = [
@@ -204,6 +211,23 @@ def run(tmp_path_factory, moto_server):
     k2 = rot.json()["accessKey"]
     r.step("DELETE /api/credentials/keys/{access_key}", lambda: a.delete(
         f"/api/credentials/keys/{k2}", headers=H))
+
+    # subusers (subuser.create_failed is covered in tests/test_subusers.py)
+    sub = r.step("POST /api/subusers", lambda: a.post(
+        "/api/subusers", headers=H,
+        json={"name": "cov", "permission": "full-control", "confirm": True}))
+    s1 = sub.json()["keys"][0]["accessKey"]
+    r.step("PATCH /api/subusers/{name}", lambda: a.patch(
+        "/api/subusers/cov", json={"permission": "read"}, headers=H))
+    s2 = r.step("POST /api/subusers/{name}/keys", lambda: a.post(
+        "/api/subusers/cov/keys", headers=H)).json()["accessKey"]
+    r.step("POST /api/subusers/{name}/reveal", lambda: a.post(
+        "/api/subusers/cov/reveal", json={"accessKey": s2}, headers=H))
+    s3 = r.step("POST /api/subusers/{name}/keys/{access_key}/rotate", lambda: a.post(
+        f"/api/subusers/cov/keys/{s1}/rotate", headers=H)).json()["accessKey"]
+    r.step("DELETE /api/subusers/{name}/keys/{access_key}", lambda: a.delete(
+        f"/api/subusers/cov/keys/{s3}", headers=H))
+    r.step("DELETE /api/subusers/{name}", lambda: a.delete("/api/subusers/cov", headers=H))
 
     # buckets
     r.step("POST /api/buckets", lambda: a.post(

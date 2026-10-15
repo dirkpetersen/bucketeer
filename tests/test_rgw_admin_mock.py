@@ -512,7 +512,7 @@ def test_usage_minimal(ops):
 
 
 def test_unsupported_routes(ops):
-    assert code(ops.put("/admin/user", subuser=None, uid="alice"), 501) == "NotImplemented"
+    assert code(ops.put("/admin/user", caps="users=read", uid="alice"), 501) == "NotImplemented"
     assert code(ops.get("/admin/user", stats="true", uid="alice"), 501) == "NotImplemented"
     assert code(ops.post("/admin/bucket", bucket="alice-data"), 501) == "NotImplemented"
     assert code(ops.request("POST", "/admin/usage"), 405) == "MethodNotAllowed"
