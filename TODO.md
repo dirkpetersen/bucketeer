@@ -223,7 +223,7 @@ order, except that A3 to A6 can run in parallel once A2 is done.
   allowed placements on the Settings tab (validated only for format, with a
   hint to check them against `radosgw-admin zonegroup placement list`), and
   `S3_ENDPOINT_URL` is required (Settings refuses to start without it).
-- [ ] A6. Admin lists and jobs on the rgw backend: the user list with details
+- [x] A6. Admin lists and jobs on the rgw backend: the user list with details
   (metadata list plus per-user reads with bounded concurrency and a short
   cache), bucket stats in one call, and chargeback, offboarding, the resolver
   and bucket keys all working on `rgw`. Run the existing admin, offboarding,

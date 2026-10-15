@@ -361,7 +361,12 @@ class OffboardingService:
             if not any(r["offboarding_suspended_at"] for r in rows):  # settled meanwhile
                 res.update(action="skipped", note="no longer suspended by the job")
                 return
-            current = await self.croit.get_user(uid)  # never act on a stale list
+            try:
+                current = await self.croit.get_user(uid)  # never act on a stale list
+            except CroitClientError as e:  # one bad read fails this entry, not the run
+                res.update(action="failed", note=f"croit: {str(e)[:150]}")
+                counts["failed"] += 1
+                return
             if current is None or not current.get("suspended"):
                 res.update(action="skipped", note="no longer suspended in RGW", keys=[])
                 return

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from bucketeer import offboarding
+from bucketeer.croit import CroitUnavailable
 from bucketeer.ldapauth import AdAuthenticator, LdapUnavailable
 from bucketeer.offboarding import AlreadyRunning, next_run
 from bucketeer.rgw_user import RgwResolver
@@ -371,6 +372,18 @@ def test_complete_keys_skips_an_account_that_is_no_longer_suspended(env, lenient
     assert res["action"] == "skipped" and "no longer suspended" in res["note"]
     assert counts["keysSuspended"] == 0 and not suspended(env, "acme$carol")
     assert env.db.bucket_keys.get(env.k_off["id"])["suspended_at"] is None
+
+
+def test_complete_keys_read_failure_fails_only_that_entry(env, lenient, monkeypatch):
+    partial_alice(env)
+
+    async def broken(uid):
+        raise CroitUnavailable("timed out")
+    monkeypatch.setattr(env.app.state.croit, "get_user", broken)
+    res, counts = {"uid": "alice"}, {"keysSuspended": 0, "failed": 0}
+    asyncio.run(env.svc._complete_keys(res, {"names": ["alice"]}, counts, "bob", 1))
+    assert res["action"] == "failed" and counts["failed"] == 1
+    assert counts["keysSuspended"] == 0 and not suspended(env, "acme$carol")
 
 
 # -- coming back -----------------------------------------------------------------------
