@@ -686,6 +686,20 @@ class RgwAdminClient:
             state = "ENABLED" if stats.get("versioning_enabled") else "SUSPENDED"
         return {"versioning": state}
 
+    async def bucket_owner(self, name: str) -> str | None:
+        """Owner uid of one bucket (`tenant:name`) by a direct lookup (`GET /admin/bucket?
+        bucket=tenant/name`, which unlike the global list does not skip tenant buckets).
+        None only when RGW says NoSuchBucket; any other trouble raises."""
+        try:
+            stats = await self._request("GET", "/admin/bucket", [("bucket", _bucket_ref(name))])
+        except CroitError as e:
+            if e.status == 404 and getattr(e, "rgw_code", None) == "NoSuchBucket":
+                return None
+            raise
+        if isinstance(stats, list):
+            stats = stats[0] if stats else None
+        return stats.get("owner") if isinstance(stats, dict) else None
+
     # -- gaps: no Admin Ops counterpart --
 
     async def create_bucket(self, name: str, owner: str, **_kw: Any) -> dict:

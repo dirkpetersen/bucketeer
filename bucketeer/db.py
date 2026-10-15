@@ -522,14 +522,17 @@ class Shares(_Repo):
             return c.execute("UPDATE shares SET revoked_at = ? WHERE id = ? "
                              "AND revoked_at IS NULL", (now(), share_id)).rowcount > 0
 
-    def revoke_bucket(self, bucket_name: str) -> list[dict[str, Any]]:
-        """Revoke every live share of a (deleted) bucket; returns the rows revoked."""
+    def revoke_bucket(self, bucket_name: str,
+                      owner_uid: str | None = None) -> list[dict[str, Any]]:
+        """Revoke every live share of a (deleted) bucket (only those of `owner_uid` when
+        given); returns the rows revoked."""
+        extra, args = ("", ()) if owner_uid is None else (" AND owner_uid = ?", (owner_uid,))
         with self.db.tx() as c:
             rows = [dict(r) for r in c.execute(
-                "SELECT * FROM shares WHERE bucket_name = ? AND revoked_at IS NULL",
-                (bucket_name,))]
+                "SELECT * FROM shares WHERE bucket_name = ? AND revoked_at IS NULL" + extra,
+                (bucket_name, *args))]
             c.execute("UPDATE shares SET revoked_at = ? WHERE bucket_name = ? "
-                      "AND revoked_at IS NULL", (now(), bucket_name))
+                      "AND revoked_at IS NULL" + extra, (now(), bucket_name, *args))
             return rows
 
 

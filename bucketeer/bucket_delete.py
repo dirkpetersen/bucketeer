@@ -44,7 +44,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .auth import SessionUser, require_user
-from .rgw_admin import RgwAdminClient
 from .rgw_user import RgwAccount, require_active_rgw_user
 
 log = logging.getLogger("bucketeer.bucket_delete")
@@ -66,7 +65,7 @@ User = Annotated[SessionUser, Depends(require_user)]
 
 def uses_jobs(app) -> bool:
     """Only the rgw backend deletes through jobs; croit has its own delete task."""
-    return isinstance(app.state.croit, RgwAdminClient)
+    return getattr(app.state.croit, "backend", "croit") == "rgw"
 
 
 def _short(full: str) -> str:
@@ -210,16 +209,20 @@ def _describe_locks(s3, bucket: str, samples: list[tuple[str, str]]) -> dict:
     return {"locked": locked, "until": until, "hold": hold}
 
 
-def _blocked_message(n: int, info: dict, partial: bool) -> str:
-    what = "object version is" if n == 1 else "object versions are"
+def _blocked_message(locked: int, other: int, info: dict, partial: bool) -> str:
+    what = "object version is" if locked == 1 else "object versions are"
     parts = []
     if info["until"] is not None:
         parts.append(f"retention {'lasts at least ' if partial else 'lasts '}until "
                      f"{info['until']:%Y-%m-%d %H:%M} UTC")
     if info["hold"]:
         parts.append("a legal hold stays until its owner removes it")
-    return (f"{n} {what} under object lock or legal hold ({'; '.join(parts) or 'no end date'}). "
-            "Everything else was removed. The bucket can be deleted after that: use Retry then.")
+    msg = f"{locked} {what} under object lock or legal hold ({'; '.join(parts) or 'no end date'})."
+    if other:
+        msg += (f" {other} more could not be removed because of storage errors."
+                if other != 1 else " 1 more could not be removed because of a storage error.")
+    return (msg + " All other versions were removed. The bucket can be deleted after that: "
+            "use Retry then.")
 
 
 # -- the job ----------------------------------------------------------------------------
@@ -286,21 +289,23 @@ class _Moved(Exception):
 
 
 async def _check_owner(app, job: dict) -> None:
-    """Refuse to touch a bucket that is listed with another owner (no S3 call is made)."""
+    """Refuse to touch a bucket that is listed with another owner (no S3 call is made).
+    A direct per-bucket lookup (the global list can omit tenant buckets); only a definite
+    NoSuchBucket means "gone" (S3 then takes the gone path), any other error ends the run
+    for a retry."""
     croit, uid, full = app.state.croit, job["owner_uid"], job["bucket"]
     try:
-        mine = [b for b in await croit.list_user_buckets(uid) or []
-                if isinstance(b, dict) and b.get("bucket") == full]
-        if mine and mine[0].get("owner") == uid:
-            return
-        everyone = [b for b in await croit.list_buckets() or []
+        if hasattr(croit, "bucket_owner"):
+            owner = await croit.bucket_owner(full)
+        else:  # croit lists every bucket
+            rows = [b for b in await croit.list_buckets() or []
                     if isinstance(b, dict) and b.get("bucket") == full]
+            owner = rows[0].get("owner") if rows else None
     except Exception:
         raise _Stop("The storage admin API could not be reached. Try again in a minute.") \
             from None
-    if everyone and everyone[0].get("owner") != uid:
+    if owner is not None and owner != uid:
         raise _Stop("This bucket now belongs to someone else, so it was not emptied.")
-    # not listed at all: it may be gone already; S3 NoSuchBucket takes the gone path
 
 
 async def _run(app, job_id: int) -> None:
@@ -352,8 +357,7 @@ async def _run(app, job_id: int) -> None:
         else:
             raise _Stop("This bucket is too large to empty in one go. Retry to continue.")
         if refused:
-            samples = [kv for kv in refused][:SAMPLE]
-            await _stuck(app, job, short, len(refused), set(refused.values()), samples)
+            await _stuck(app, job, short, refused)
             return
         if not gone:
             await _check_owner(app, job)
@@ -367,15 +371,18 @@ async def _run(app, job_id: int) -> None:
                 "Stop whatever writes to it, then retry.")
 
 
-async def _stuck(app, job: dict, short: str, remaining: int, codes: set, samples) -> None:
+async def _stuck(app, job: dict, short: str, refused: dict) -> None:
+    samples = list(refused)[:SAMPLE]
     info = await app.state.s3.call(job["owner_uid"], _describe_locks, short, samples)
+    other = sum(1 for c in refused.values() if c not in ("AccessDenied", "403"))
+    locked = len(refused) - other
     if info["locked"]:
-        msg = _blocked_message(remaining, info, partial=remaining > len(samples))
+        msg = _blocked_message(locked, other, info, partial=locked > len(samples))
         await _end(app, job["id"], "blocked", msg)
         return
+    codes = ", ".join(sorted({c for c in refused.values() if c})) or "refused"
     await _end(app, job["id"], "failed",
-               f"{remaining} object versions could not be removed "
-               f"({', '.join(sorted(c for c in codes if c)) or 'refused'}).")
+               f"{len(refused)} object versions could not be removed ({codes}).")
 
 
 async def _finish(app, job_id: int) -> None:
@@ -386,17 +393,12 @@ async def _finish(app, job_id: int) -> None:
     db = app.state.db
     job = await db.run(db.delete_jobs.get, job_id)
     full, owner = job["bucket"], SimpleNamespace(uid=job["owner_uid"], username=job["owner_ad"])
-    # Only records of the job's owner: after an ownership change they are someone else's.
+    # Only the job owner's records: after an ownership change the rest are someone else's.
     row = await db.run(db.buckets.get, full)
     if row is None or row["owner_uid"] == owner.uid:
         await db.run(db.buckets.delete, full)
-    key_rows = await db.run(db.bucket_keys.list, None, full)
-    share_rows = await db.run(db.shares.list_live, full)
-    keys = {"revoked": 0, "failed": []}
-    if all(k["owner_ad_username"].lower() == owner.username.lower() for k in key_rows):
-        keys = await revoke_for_deleted_bucket(_Shim(app), owner, full)
-    if all(r["owner_uid"] == owner.uid for r in share_rows):
-        await revoke_shares(_Shim(app), owner.username, full)
+    keys = await revoke_for_deleted_bucket(_Shim(app), owner, full, only_owner=True)
+    await revoke_shares(_Shim(app), owner.username, full, owner_uid=owner.uid)
     warning = None
     if keys["failed"]:
         warning = ("The bucket was deleted, but some of its keys could not be removed yet. "
@@ -498,6 +500,9 @@ async def delete_on_rgw(request: Request, acct, user, full: str, short: str, obj
         # another owner's old job: the bucket changed hands, so end it for good
         if prior["state"] != "done":
             await db.run(db.delete_jobs.supersede, prior["id"])
+            await _audit(app, user.username, "bucket.delete_superseded", full,
+                         uid=prior["owner_uid"], job=prior["id"], previous=prior["state"],
+                         newOwner=acct.uid)
         prior = None
     if prior and prior["state"] in ("queued", "running"):
         return JSONResponse(status_code=409, content={

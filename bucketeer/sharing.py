@@ -446,12 +446,13 @@ async def delete_share(name: str, share_id: str, request: Request, response: Res
     return {"id": share_id if row is None else row["id"], "revoked": True}
 
 
-async def revoke_for_deleted_bucket(request: Request, actor: str, full: str) -> int:
+async def revoke_for_deleted_bucket(request: Request, actor: str, full: str,
+                                    owner_uid: str | None = None) -> int:
     """After a bucket was deleted through Bucketeer: its statements went with it; mark the
     shares revoked. Never raises; returns how many."""
     db = request.app.state.db
     try:
-        rows = await db.run(db.shares.revoke_bucket, full)
+        rows = await db.run(db.shares.revoke_bucket, full, owner_uid)
         for r in rows:
             await _audit(request, actor, "bucket.unshare", full, share=r["id"],
                          recipient=r["recipient_ad"], uid=r["recipient_uid"],

@@ -96,6 +96,7 @@ EVENTS = {
     "bucket.delete_failed": "croit down or task failed while deleting a bucket",
     "bucket.versioning_failed": "croit down while changing versioning",
     "bucket.delete_started": "rgw backend: a non-empty bucket's delete job was queued",
+    "bucket.delete_superseded": "rgw backend: a job of the bucket's previous owner was ended",
     "bucket.delete_blocked": "rgw backend: object lock or legal hold stopped a delete job",
     "bucket_key.cleanup": "startup clean-up of stale pending bucket keys (actor system)",
     "bucket.unshare": "deleting a bucket marks its shares revoked (reason bucket_deleted)",
@@ -342,6 +343,10 @@ def run(tmp_path_factory, moto_server):
         r.step("event", lambda: asyncio.run(bucket_delete.run_job(env.app, job_id)))
         r.step("POST /api/buckets/delete-jobs/{job_id}/retry", lambda: a.post(
             f"/api/buckets/delete-jobs/{job_id}/retry", headers=H))
+        # the bucket changes hands: the new owner's delete supersedes the old job
+        env.croit_state.buckets["alice-held"].owner = "bob"
+        r.step("event", lambda: b.request(
+            "DELETE", "/api/buckets/alice-held", headers=H, json={"confirmName": "alice-held"}))
     finally:
         bucket_delete.uses_jobs, bucket_delete.AUTOSTART = saved
 

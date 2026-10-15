@@ -462,14 +462,16 @@ async def revoke_key(key_id: int, request: Request, response: Response, acct: Ac
     return {"id": key_id, "revoked": True}
 
 
-async def revoke_for_deleted_bucket(request: Request, acct: RgwAccount, full: str) -> dict:
+async def revoke_for_deleted_bucket(request: Request, acct: RgwAccount, full: str,
+                                    only_owner: bool = False) -> dict:
     """After a bucket was deleted through Bucketeer: revoke its keys (no policy to edit
     any more). Never raises; `{revoked: n, failed: [labels]}`."""
     db = request.app.state.db
     revoked, failed = 0, []
     try:
         async with _key_locks(request)(acct.uid), _bucket_lock(request, full):
-            for row in await db.run(db.bucket_keys.list, None, full):
+            for row in await db.run(db.bucket_keys.list,
+                                acct.username if only_owner else None, full):
                 if await revoke_row(request, acct.username, acct.uid, row, bucket_gone=True,
                                     reason="bucket_deleted"):
                     failed.append(row["label"])
