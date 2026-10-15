@@ -12,6 +12,10 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 ## Open
 
+None right now.
+
+## Resolved
+
 ### Q10: Offboarding: how careful should the daily suspension job be?
 
 - **Blocks:** TODO "Offboarding job"
@@ -42,9 +46,9 @@ Each question has a recommendation. Answering "ok" accepts it.
      It runs at 03:00 local time by default, and an admin can also start it
      by hand.
 
-**Answer:**
+**Answer:** yes
 
-## Resolved
+**Decision:** all four recommendations accepted: known accounts only, automatic unsuspend on the next login for job-made suspensions only, abort on AD errors or more than 10% / 20 people, report-only until an admin enables enforce (03:00 daily, plus run now). Recorded in CLAUDE.md.
 
 ### Q11: Group shares: which groups, and how big?
 

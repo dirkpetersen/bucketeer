@@ -127,9 +127,11 @@ skips them too.
 - [x] Admin: list all bucket keys (owner, bucket, access, status) and revoke
   any of them, audited as the admin.
 - [x] Audit log viewer with filters.
-- [ ] (blocked: Q10) Offboarding job (daily, in-process): suspend RGW users and their bucket
+- [ ] Offboarding job (daily, in-process): suspend RGW users and their bucket
   keys when the AD account is disabled or removed from the group. Never delete
-  anything.
+  anything. Safeguards per CLAUDE.md (Q10): known accounts only, auto-unsuspend
+  on login for job suspensions, abort thresholds, report-only until an admin
+  enables enforce, 03:00 daily plus run-now.
 
 ## Phase 4: Advanced (behind the global Advanced toggle)
 
