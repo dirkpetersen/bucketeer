@@ -683,9 +683,13 @@ class SubuserNames(_Repo):
             c.execute("DELETE FROM subuser_names WHERE rgw_uid = ? AND name = ?", (uid, name))
 
     def mark_deleted(self, uid: str, name: str) -> None:
+        """Record the deletion; a name Bucketeer never saw (made outside it) is recorded too,
+        so it is never reused either."""
+        ts = now()
         with self.db.tx() as c:
-            c.execute("UPDATE subuser_names SET deleted_at = ? WHERE rgw_uid = ? AND name = ? "
-                      "AND deleted_at IS NULL", (now(), uid, name))
+            c.execute("INSERT INTO subuser_names (rgw_uid, name, created_at, deleted_at) "
+                      "VALUES (?, ?, ?, ?) ON CONFLICT (rgw_uid, name) DO UPDATE SET "
+                      "deleted_at = COALESCE(deleted_at, excluded.deleted_at)", (uid, name, ts, ts))
 
     def used(self, uid: str) -> list[str]:
         return [r["name"] for r in self.db.query(

@@ -530,3 +530,45 @@ def test_delete_subuser_via_client_removes_keys_on_both_backends(env):
     assert {k["user"] for k in keys} == {"alice"}
     assert not {"KEYAAAAAAAAAAAAAAAAA", "KEYBBBBBBBBBBBBBBBBB"} & set(
         env.mock.state.croit.access_keys)
+
+
+
+# -- never-reused names, unknown outcomes, query order ---------------------------------------
+
+
+def test_deleting_a_subuser_made_elsewhere_still_burns_its_name(env):
+    env.mock.state.croit.create_subuser("alice", "outside", "read")
+    assert env.alice.delete(f"{SUB}/outside", headers=H).status_code == 200
+    assert env.db.subusers.used("alice") == ["outside"]
+    r = env.alice.post(SUB, json={"name": "outside", "permission": "read"}, headers=H)
+    assert r.status_code == 409 and "never reused" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("failure", ["down", "500"])
+def test_unknown_outcome_keeps_the_name_claimed(env, failure):
+    def fail(req):
+        if not (req.method == "POST" and req.url.path.endswith("/users/alice")):
+            return None
+        return httpx.ConnectError("down") if failure == "down" else httpx.Response(
+            500, json={"code": 500, "message": "boom"})
+
+    env.transport.fail = fail
+    r = env.alice.post(SUB, json={"name": "ci", "permission": "read"}, headers=H)
+    assert r.status_code in (502, 503)
+    env.transport.fail = None
+    assert env.db.subusers.used("alice") == ["ci"]
+    r = env.alice.post(SUB, json={"name": "ci", "permission": "read"}, headers=H)
+    assert r.status_code == 409
+
+
+def test_subuser_key_calls_send_key_as_the_first_query_pair(env):
+    if not on_rgw():
+        pytest.skip("Admin Ops query order only")
+    make(env, "ci")
+    access = only_key(env, "ci")
+    env.alice.post(f"{SUB}/ci/keys", headers=H)
+    env.alice.delete(f"{SUB}/ci/keys/{access}", headers=H)
+    writes = [p for m, p in env.transport.raw_calls
+              if m in ("PUT", "DELETE") and "subuser=ci" in p and "access-key=" in p]
+    assert len(writes) >= 3  # create's key, the added key, the delete
+    assert all(p.split("?", 1)[1].startswith("key&") for p in writes), writes

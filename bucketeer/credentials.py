@@ -111,7 +111,7 @@ async def _own_keys(request: Request, uid: str) -> list[dict]:
         keys = await request.app.state.croit.list_keys(uid)
     except CroitClientError as e:
         raise croit_http_error(e) from None
-    # Subuser keys (user "uid:sub") are not offered until subusers exist.
+    # Subuser keys have user "uid:sub": they are never the user's own keys.
     return [k for k in keys or [] if isinstance(k, dict) and k.get("access_key")
             and k.get("user") == uid]
 

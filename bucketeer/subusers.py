@@ -116,7 +116,7 @@ async def _keys(request: Request, uid: str, name: str) -> list[dict]:
     keys = await _read(request, _croit(request).list_subuser_keys, uid, name)
     identity = _identity(uid, name)
     return [k for k in keys or [] if isinstance(k, dict) and k.get("access_key")
-            and k.get("user") in (identity, None)]
+            and k.get("user") == identity]
 
 
 async def _all_access_keys(request: Request, uid: str) -> set[str]:
@@ -217,15 +217,13 @@ async def create_subuser(body: CreateBody, request: Request, response: Response,
 
 async def _fail_create(request: Request, acct: RgwAccount, body: CreateBody,
                        error: Exception) -> None:
-    """Remove a half-made subuser (and its keys) and audit the failure. The name stays
-    recorded, so it is never reused, unless RGW turns out not to have it at all."""
-    db, uid = request.app.state.db, acct.uid
+    """Remove a half-made subuser (and its keys) and audit the failure. The outcome is
+    unknown here (timeout, 5xx, or the subuser existed for a moment), so the name stays
+    recorded and is never reused; only a definite 4xx refusal releases it (in the caller)."""
+    uid = acct.uid
     try:
-        present = any(s["name"] == body.name for s in await _croit(request).list_subusers(uid))
-        if present:
+        if any(s["name"] == body.name for s in await _croit(request).list_subusers(uid)):
             await _croit(request).delete_subuser(uid, body.name)
-        else:
-            await db.run(db.subusers.release, uid, body.name)
     except Exception as e:  # best effort; the user can delete it from the list
         log.warning("subuser rollback for %s failed: %s", uid, type(e).__name__)
     await _audit(request, acct, "subuser.create_failed", "subuser",

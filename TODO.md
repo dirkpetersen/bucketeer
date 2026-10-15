@@ -304,7 +304,10 @@ available, and fix the client and the mock if reality differs:
   requests, not only Swift.
 - [ ] (needs cluster) Subuser keys over Admin Ops: `PUT|DELETE /admin/user?key&uid=&subuser=<name>` really
   adds/removes a key of the subuser (RGW may route a `subuser` parameter to the subuser op first), and
-  `DELETE ?subuser=&purge-keys=true` removes its keys.
+  `DELETE ?subuser=&purge-keys=true` removes its keys. Real RGW routes on the FIRST admin sub-resource
+  in the query (`key` is sent first; a test pins that order).
+- [ ] (needs cluster) croit / Admin Ops may auto-generate a Swift or S3 key when a subuser is created;
+  Bucketeer would then need to delete it, as bucket-key create removes croit's auto-key.
 - [ ] (needs cluster) RGW uids are case-sensitive (`Alice` and `alice` are
   different users).
 - [ ] (needs cluster) Bucket keys: a zero user quota doesn't block writes to the shared
