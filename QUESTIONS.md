@@ -12,7 +12,29 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 ## Open
 
-None right now.
+### Q14: Offboarding abort threshold on small installations
+
+- **Blocks:** nothing. The offboarding job ships in report-only mode, and the
+  current rule applies until you answer.
+- **Context:** Q10 set the safety limit as "abort if more than 10% of known
+  users, or more than 20 people, would be suspended in one run". With fewer
+  than 10 known people, a single genuine leaver is already more than 10%, so
+  every run aborts and enforce mode can never suspend anyone. Example: 4
+  known people, 1 left the group = 25%, run aborted. The 10% rule protects
+  against a misconfigured AD making many people look gone, which matters most
+  on large installations.
+- **Options:**
+  1. Keep it as is: more than 10% or more than 20 people aborts.
+  2. Add a floor: the 10% rule only applies above a minimum count, e.g. abort
+     only when more than 10% AND more than 3 people would be suspended, or
+     when more than 20 would be.
+  3. Make both numbers admin settings (percent and absolute cap), defaulting
+     to option 2's values.
+- **Recommendation:** 3, defaulting to 10%, at least 4 people for the
+  percentage rule, and 20 people absolute. One or two real leavers then go
+  through, while a mass misreading of AD is still stopped.
+
+**Answer:**
 
 ## Resolved
 
