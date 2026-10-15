@@ -132,6 +132,10 @@ skips them too.
   anything. Safeguards per CLAUDE.md (Q10): known accounts only, auto-unsuspend
   on login for job suspensions, abort thresholds, report-only until an admin
   enables enforce, 03:00 daily plus run-now.
+- [ ] Offboarding abort thresholds as admin settings (Q14): `maxPercent` (default 10),
+  `minPeopleForPercent` (default 4) and `maxPeople` (default 20) on the Offboarding tab;
+  abort when candidates > maxPercent % of known people AND >= minPeopleForPercent, or
+  > maxPeople. Validated, audited, shown in the run report.
 - [x] croit allowlisting gateway `tools/croit-gate` (limits the croit admin
   token's blast radius; croit support called it a reasonable hardening
   measure). A standalone tool under the `tools/` rules (single file, stdlib
@@ -189,7 +193,7 @@ skips them too.
 - [x] Bucket notifications, with endpoints from the admin allowlist only
   (no broker credentials, Q6).
 - [x] Multipart upload cleanup (list and abort).
-- [ ] (blocked: Q15) Subusers (read/write/readwrite/full) and their keys.
+- [ ] Subusers (read/write/readwrite/full) and their keys (Q15 rules in CLAUDE.md), on both admin backends.
 
 ## Phase 5: RGW Admin Ops instead of the croit API (owner decision)
 
@@ -296,6 +300,8 @@ available, and fix the client and the mock if reality differs:
   (`bucketeer-<endpoint>-<user>`): check broker auto-creation.
 - [ ] (needs cluster) User quota: `maxObjects` null means unlimited and
   `maxSize` is in bytes (1 TiB default).
+- [ ] (needs cluster) Subusers: RGW enforces subuser permissions (read, write, read-write) for S3
+  requests, not only Swift.
 - [ ] (needs cluster) RGW uids are case-sensitive (`Alice` and `alice` are
   different users).
 - [ ] (needs cluster) Bucket keys: a zero user quota doesn't block writes to the shared

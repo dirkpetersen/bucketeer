@@ -12,6 +12,10 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 ## Open
 
+None right now.
+
+## Resolved
+
 ### Q14: Offboarding abort threshold on small installations
 
 - **Blocks:** nothing. The offboarding job ships in report-only mode, and the
@@ -34,7 +38,9 @@ Each question has a recommendation. Answering "ok" accepts it.
   percentage rule, and 20 people absolute. One or two real leavers then go
   through, while a mass misreading of AD is still stopped.
 
-**Answer:**
+**Answer:** yes
+
+**Decision:** recommendation 3 accepted: the thresholds become admin settings, defaulting to 10 %, at least 4 people for the percentage rule, and 20 people absolute. Added as a TODO item. Recorded in CLAUDE.md.
 
 ### Q15: Subusers: how many, which permissions, and how many keys?
 
@@ -62,9 +68,9 @@ Each question has a recommendation. Answering "ok" accepts it.
      `bucketeer-sub-<name>`. A cluster check is still needed on whether RGW
      enforces subuser permissions for S3 requests, not only for Swift.
 
-**Answer:**
+**Answer:** yes
 
-## Resolved
+**Decision:** recommendations accepted: 5 subusers per user, 2 keys each, full-control offered with a warning and an extra confirmation, names like bucket-key labels and never reused, profile `bucketeer-sub-<name>`. Subusers item unblocked. Recorded in CLAUDE.md.
 
 ### Q10: Offboarding: how careful should the daily suspension job be?
 

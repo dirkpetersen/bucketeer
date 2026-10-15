@@ -189,6 +189,7 @@ Formats in the two files differ, so keep them straight:
   2. **Coming back:** a job suspension is recorded as made by `offboarding` (the user and their bucket keys, `suspended_by = 'offboarding'`). The person's next successful login unsuspends exactly those (the user and only keys with `suspended_by = 'offboarding'`), audited. Suspensions an admin made by hand are never undone automatically, and the job never touches an account an admin already suspended.
   3. **When AD looks wrong:** abort the whole run, suspending nobody, if AD can't be read (any lookup error, not just a full outage) or if more than 10% of known users or more than 20 people would be suspended in one run. The reason is shown on the admin page and audited.
   4. **Trial run first:** the job starts in report-only mode and shows on the admin page who would be suspended and why. An admin switches it to "enforce" in Settings (audited). It runs daily at 03:00 server local time by default, and an admin can also start a run by hand. Single process, in-process scheduler, never blocks startup or `/health`; one run at a time.
+  - **Thresholds are admin settings (Q14, owner accepted the recommendation):** the abort rule becomes "more than `maxPercent` % of known people AND at least `minPeopleForPercent` people, OR more than `maxPeople` people", editable on the Offboarding tab with defaults 10 %, 4 and 20. So one or two genuine leavers go through on a small installation, while a mass misreading of AD is still stopped. Changes are audited (`admin.settings.offboarding`).
 
 ### RGW user resolution
 
@@ -224,7 +225,7 @@ S3 keys belong to users, not buckets, so a bucket-scoped key needs its own ident
 - Defense in depth: `RgwResolver` re-checks `uid_claimed` after get/create and answers an uncached `uid_taken`; the admin suspend cascade treats a croit 404 for a `pending`/`failed` row as done.
 - moto enforces no policies, so tests assert the policy document, not enforcement. Whether RGW honours a zero user quota for a policy-granted user is the open cluster check.
 
-Subusers (read/write/readwrite/full across *all* of a user's buckets) are offered only under Advanced.
+Subusers (read/write/readwrite/full across *all* of a user's buckets) are offered only under Advanced. **Subuser rules (Q15, owner accepted the recommendation):** at most 5 subusers per user and 2 keys per subuser (so a key can be rotated); permissions read, write, read-write and full-control, where full-control needs a warning and an extra confirmation (it can do everything the user can, including policies, ACLs and deleting buckets); names like bucket-key labels (`[a-z0-9-]`, 1-20 characters), never reused after deletion; suspended with their user (RGW does this itself); reveal and config snippets as for the user's own keys, with profile `bucketeer-sub-<name>`. Whether RGW enforces subuser permissions for S3 (not only Swift) is a cluster check.
 
 ### Sharing
 
