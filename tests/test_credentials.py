@@ -7,13 +7,18 @@ from pydantic import ValidationError
 
 from bucketeer.config import Settings
 from bucketeer.credentials import ENDPOINT_MISS_TTL, ENDPOINT_TTL, endpoint_from_s3cfg
-from bucketeer.croit import CroitClient
 from bucketeer.db import Database
 from bucketeer.ldapauth import AdAuthenticator
 from bucketeer.main import create_app
 from mock.croit_mock import SEED_USERS
 from mock.croit_mock import create_app as create_mock
 
+from .backends import (
+    admin_backend,  # noqa: F401  (fixture: both admin backends)
+    admin_client,
+    croit_only,
+    on_rgw,
+)
 from .conftest import REQUIRED
 from .test_admin import Transport
 from .test_auth import SECRET_PW, FakeLdap, make_settings
@@ -29,7 +34,7 @@ class Env:
         self.mock = create_mock(seed=True, task_seconds=0, prefix="/api", admin_token=TOKEN)
         self.transport = Transport(self.mock)
         self.settings = make_settings(tmp_path, **over)
-        croit = CroitClient(self.settings, poll_interval=0.01, transport=self.transport)
+        croit = admin_client(self.settings, self.mock, self.transport)
         self.db = Database(":memory:")
         self.now = [1000.0]
         self.app = create_app(
@@ -106,13 +111,17 @@ def test_suspended_user_gets_no_keys(tmp_path):
         r = e.alice.post("/api/credentials/reveal", json={"accessKey": ALICE[2]}, headers=H)
         assert r.status_code == 403 and ALICE[3] not in r.text
         assert e.audit() == []
+        # no key read on croit; on Admin Ops user and keys are one read, so: no write at all
+        assert not [c for c in e.transport.raw_calls if c[0] != "GET"]
         assert not [c for c in e.transport.calls if c[1].endswith("/keys")]
     finally:
         e.db.close()
 
 
 def test_croit_down_is_503(env):
-    env.transport.fail = lambda req: httpx.ConnectError("down") if "/keys" in str(req.url) else None
+    # croit: only the key list is down; Admin Ops reads keys with the user, so all of it is
+    env.transport.fail = lambda req: (
+        httpx.ConnectError("down") if on_rgw() or "/keys" in str(req.url) else None)
     assert env.alice.get("/api/credentials").status_code == 503
 
 
@@ -143,6 +152,8 @@ def test_reveal_ignores_a_uid_sent_by_the_client(env):
                        json={"accessKey": BOB[2], "uid": "bob"}, headers=H)
     assert r.status_code == 404
     assert not [c for c in env.transport.calls if "/users/bob/" in c[1]]
+    # the croit view above maps every Admin Ops read to /users?uid=: check the real requests
+    assert not [c for c in env.transport.raw_calls if "uid=bob" in c[1] or "/users/bob" in c[1]]
 
 
 def test_reveal_requires_csrf_header(env):
@@ -193,6 +204,7 @@ def test_endpoint_from_env_never_asks_croit(env):
 
 
 def test_endpoint_from_s3cfg_and_cache(make_env):
+    croit_only("endpoint discovery from the .s3cfg has no Admin Ops counterpart (Phase 5 A5)")
     e = make_env()  # no S3_ENDPOINT_URL
     assert e.alice.get("/api/credentials").json()["endpointUrl"] == "http://127.0.0.1:7480"
     e.alice.get("/api/credentials")
@@ -203,6 +215,7 @@ def test_endpoint_from_s3cfg_and_cache(make_env):
 
 
 def test_endpoint_none_when_unavailable_and_retried_soon(make_env):
+    croit_only("endpoint discovery from the .s3cfg has no Admin Ops counterpart (Phase 5 A5)")
     e = make_env()
     e.transport.fail = lambda req: (
         httpx.Response(500, json={}) if "cfg-file" in str(req.url) else None

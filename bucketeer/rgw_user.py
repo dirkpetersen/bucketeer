@@ -112,6 +112,17 @@ def quota_summary(q: dict | None) -> dict[str, Any]:
     }
 
 
+async def is_service_uid(croit, uid: str) -> bool:
+    """Is `uid` the portal's own Admin Ops identity (`CroitClient.service_uid`; None with
+    croit)? Compared on the bare uid, case-insensitively, so no tenant form or spelling gets
+    around it. Raises the client's error when the service uid cannot be determined: callers
+    let that fail the request (fail closed) instead of assuming "no".
+
+    "Reserved" uids (RESERVED_UIDS) are fixed names; this one depends on the cluster."""
+    mine = await croit.service_uid()
+    return bool(mine) and uid.rpartition("$")[2].lower() == mine.rpartition("$")[2].lower()
+
+
 def split_uid(uid: str) -> tuple[str, str]:
     """`tenant$uid` -> (tenant, uid); no `$` -> ("", uid)."""
     tenant, sep, bare = uid.rpartition("$")
@@ -284,6 +295,15 @@ class RgwResolver:
     async def _resolve(self, username: str, display_name: str) -> RgwAccount:
         db = self._db()
         mapping = await db.run(db.uid_mappings.get, username)
+        # The Admin Ops service user is a plain RGW user: never adopt, map or create it. A
+        # failed lookup raises (the account is `unavailable`, nothing is cached).
+        if await is_service_uid(self.croit, mapping["rgw_uid"] if mapping else username):
+            await self._audit(
+                username, "rgw.user.invalid_username", username,
+                {"reason": "the portal's own RGW Admin Ops service account"},
+            )
+            return RgwAccount(username, None, CREATION_FAILED, display_name,
+                              reason="invalid_username")
         if mapping:
             uid, source = mapping["rgw_uid"], "mapping"
             if split_uid(uid)[1].lower() in RESERVED_UIDS:

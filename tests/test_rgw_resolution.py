@@ -10,7 +10,6 @@ import pytest
 from fastapi import Depends
 from fastapi.testclient import TestClient
 
-from bucketeer.croit import CroitClient
 from bucketeer.db import Database
 from bucketeer.ldapauth import AdAuthenticator
 from bucketeer.main import create_app
@@ -24,6 +23,10 @@ from bucketeer.rgw_user import (
 )
 from mock.croit_mock import create_app as create_mock
 
+from .backends import (
+    admin_backend,  # noqa: F401  (fixture: both admin backends)
+    admin_client,
+)
 from .conftest import REQUIRED
 from .test_admin import Transport
 from .test_auth import SECRET_PW, USERS_GROUP, FakeLdap, make_settings
@@ -43,7 +46,7 @@ class Env:
                           ("a&b", "ab@example.org")]:
             self.fake.add(sam, groups={USERS_GROUP}, display=sam.title() + " X", mail=mail)
         self.settings = make_settings(tmp_path, **over)
-        croit = CroitClient(self.settings, poll_interval=0.01, transport=self.transport)
+        croit = admin_client(self.settings, self.mock, self.transport)
         self.db = Database(":memory:")
         self.app = create_app(
             self.settings, croit=croit, db=self.db,

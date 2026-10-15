@@ -77,6 +77,7 @@ from .policy_settings import (
     suggest_prefix,
     validate_bucket_name,
 )
+from .rgw_admin import RgwAdminUnsupported
 from .rgw_user import RgwAccount, require_active_rgw_user, split_uid
 
 log = logging.getLogger("bucketeer.buckets")
@@ -186,6 +187,8 @@ async def _audit_unsure(request: Request, actor: str, action: str, target: str, 
     """Audit a failed croit mutation whose outcome is unknown (timeout, failed task, croit
     down, 5xx): the bucket may or may not have changed. A plain refusal (croit 4xx) changed
     nothing and is not audited. Never raises."""
+    if isinstance(exc, RgwAdminUnsupported):
+        return  # the backend cannot do this at all: a definite no-op
     if isinstance(exc, CroitError) and exc.status < 500:
         return
     try:

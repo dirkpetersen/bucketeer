@@ -202,7 +202,7 @@ order, except that A3 to A6 can run in parallel once A2 is done.
   users, keys and buckets line up whichever backend created them. Responses
   follow the Ceph Admin Ops docs for Reef (JSON shapes, error codes), and
   `mock/demo.py` can start either backend. Tests.
-- [ ] A2. `bucketeer/rgw_admin.py` `RgwAdminClient` with the same public
+- [x] A2. `bucketeer/rgw_admin.py` `RgwAdminClient` with the same public
   methods and exceptions as `CroitClient`, and the settings `ADMIN_BACKEND`
   (default `croit`), `RGW_ADMIN_URL`, `RGW_ADMIN_ACCESS_KEY` and
   `RGW_ADMIN_SECRET_KEY` (required with `rgw`) in `.env.default`. Tenant uids,

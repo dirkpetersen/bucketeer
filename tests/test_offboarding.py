@@ -16,6 +16,11 @@ from bucketeer.ldapauth import AdAuthenticator, LdapUnavailable
 from bucketeer.offboarding import AlreadyRunning, next_run
 from bucketeer.rgw_user import RgwResolver
 
+from .backends import (
+    admin_backend,  # noqa: F401  (fixture: both admin backends)
+    admin_secret,
+    error_response,
+)
 from .test_admin import TOKEN, Env, H
 from .test_auth import SECRET_PW, USERS_GROUP, FakeLdap, make_settings
 
@@ -283,11 +288,10 @@ def patch_fails(env, make):
 
 
 def test_definite_croit_refusal_releases_the_claim(env, lenient):
-    import httpx
-
+    secret = admin_secret()  # croit's token, or the Admin Ops secret key
     set_mode(env, "enforce")
     leave(env, "alice")
-    patch_fails(env, lambda: httpx.Response(400, json={"code": 400, "message": f"no {TOKEN}"}))
+    patch_fails(env, lambda: error_response(400, f"no {secret}"))
     run = go(env)
     assert run["outcome"] == "failed" and run["counts"]["failed"] == 1
     assert results(run)["alice"]["action"] == "failed" and TOKEN not in str(run)

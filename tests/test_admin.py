@@ -6,12 +6,19 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from bucketeer.croit import CroitClient
 from bucketeer.db import Database
 from bucketeer.ldapauth import AdAuthenticator
 from bucketeer.main import create_app
 from mock.croit_mock import create_app as create_mock
 
+from .backends import (
+    admin_backend,  # noqa: F401  (fixture: both admin backends)
+    admin_client,
+    admin_secret,
+    croit_view,
+    error_response,
+    on_rgw,
+)
 from .conftest import REQUIRED
 from .test_auth import SECRET_PW, FakeLdap, make_settings
 
@@ -24,12 +31,15 @@ class Transport(httpx.AsyncBaseTransport):
 
     def __init__(self, app):
         self.inner = httpx.ASGITransport(app=app)
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str]] = []  # as croit calls (see backends.croit_view)
+        self.raw_calls: list[tuple[str, str]] = []  # the requests actually sent
         self.fail = None  # callable(request) -> httpx.Response | Exception | None
 
     async def handle_async_request(self, request):
-        self.calls.append((request.method, request.url.raw_path.decode()))
-        if self.fail and (out := self.fail(request)) is not None:
+        self.raw_calls.append((request.method, request.url.raw_path.decode()))
+        view = croit_view(request) if on_rgw() else request  # tests speak croit's HTTP
+        self.calls.append((view.method, view.url.raw_path.decode()))
+        if self.fail and (out := self.fail(view)) is not None:
             if isinstance(out, Exception):
                 raise out
             return out
@@ -44,7 +54,7 @@ class Env:
         self.mock = create_mock(seed=True, task_seconds=0, prefix="/api", admin_token=TOKEN)
         self.transport = Transport(self.mock)
         settings = make_settings(tmp_path)
-        croit = CroitClient(settings, poll_interval=0.01, transport=self.transport)
+        croit = admin_client(settings, self.mock, self.transport)
         self.db = Database(":memory:")
         self.fake = FakeLdap()
         self.app = create_app(
@@ -106,7 +116,8 @@ def test_users_list_shape_and_no_secrets(env):
     r = env.admin.get("/api/admin/users")
     assert r.status_code == 200
     users = {u["uid"]: u for u in r.json()["users"]}
-    assert set(users) == {"alice", "bob", "acme$carol"}
+    # on the rgw backend the read-only Admin Ops mock user is an RGW user too
+    assert set(users) - {"bucketeer-readonly"} == {"alice", "bob", "acme$carol"}
     a = users["alice"]
     assert a == {
         "uid": "alice", "name": "Alice Anderson", "email": "alice@example.org", "tenant": "",
@@ -306,20 +317,19 @@ def test_croit_unreachable_is_503_without_leaks(env):
 
 
 def test_croit_errors_are_mapped(env):
-    env.transport.fail = lambda req: httpx.Response(
-        500, json={"code": 500, "message": f"internal {TOKEN}"})
+    secret = admin_secret()  # croit's token, or the Admin Ops secret key
+    env.transport.fail = lambda req: error_response(500, f"internal {secret}")
     r = env.admin.get("/api/admin/users")
-    assert r.status_code == 502 and TOKEN not in r.text and "internal" not in r.text
+    assert r.status_code == 502 and secret not in r.text and "internal" not in r.text
 
-    env.transport.fail = lambda req: httpx.Response(401, json={"code": 401, "message": "bad"})
+    env.transport.fail = lambda req: error_response(401, "bad")
     r = env.admin.get("/api/admin/buckets")
     assert r.status_code == 502 and "service credentials" in r.json()["detail"]
 
     env.transport.fail = lambda req: (
-        httpx.Response(400, json={"code": 400, "message": f"nope {TOKEN}"})
-        if req.method == "PUT" else None)
+        error_response(400, f"nope {secret}") if req.method == "PUT" else None)
     r = env.admin.put("/api/admin/buckets/alice-data/quota", json={"enabled": False}, headers=H)
-    assert r.status_code == 400 and TOKEN not in r.text and "nope" in r.json()["detail"]
+    assert r.status_code == 400 and secret not in r.text and "nope" in r.json()["detail"]
     assert env.audit() == []
 
 

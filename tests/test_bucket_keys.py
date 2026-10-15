@@ -15,6 +15,11 @@ from botocore.exceptions import ClientError
 from bucketeer import s3docs
 from bucketeer.bucket_keys import key_uid
 
+from .backends import (
+    admin_backend,  # noqa: F401  (fixture: both admin backends)
+    croit_only,
+    on_rgw,
+)
 from .test_auth import TEAM_GROUP, USERS_GROUP
 from .test_buckets import ALICE_KEY, Env, H, create
 
@@ -186,6 +191,7 @@ def test_other_users_and_unknown_buckets_are_404(env):
 
 
 def test_limits_per_bucket_and_per_user(env):
+    croit_only("creates a bucket through croit (Phase 5 A3)")
     for i in range(5):
         assert mk(env.alice, label=f"k{i}").status_code == 201
     r = mk(env.alice, label="k5")
@@ -268,8 +274,12 @@ def test_rollback_when_the_row_cannot_be_activated(env, monkeypatch):
 
 
 def test_zero_quota_not_in_effect_fails_closed(env):
-    # a croit that silently ignores the quota call must not leave a key that can store data
-    env.croit_state.set_quota = lambda target, body: None
+    # a backend that silently ignores the quota call must not leave a key that can store data
+    if on_rgw():  # answer 200 to the quota write without applying it
+        env.transport.fail = lambda req: (
+            httpx.Response(200) if req.method == "PUT" and "/quota" in req.url.path else None)
+    else:
+        env.croit_state.set_quota = lambda target, body: None
     assert mk(env.alice).status_code == 502
     assert_clean_failure(env)
 
@@ -415,6 +425,7 @@ def test_revoke_keeps_the_row_when_the_policy_cannot_be_changed(env):
 
 
 def test_bucket_delete_revokes_its_keys(env):
+    croit_only("deletes a bucket through croit (Phase 5 A4)")
     k = mk(env.alice, bucket="alice-empty").json()
     keep = mk(env.alice, bucket="alice-data", label="keep").json()
     r = env.alice.delete("/api/buckets/alice-empty", headers=H)
@@ -427,6 +438,7 @@ def test_bucket_delete_revokes_its_keys(env):
 
 
 def test_bucket_delete_with_a_stuck_key_user_still_deletes_and_warns(env):
+    croit_only("deletes a bucket through croit (Phase 5 A4)")
     mk(env.alice, bucket="alice-empty")
     fail_when(env, "DELETE", "/s3/users/alice%2Bbackup")
     r = env.alice.delete("/api/buckets/alice-empty", headers=H)

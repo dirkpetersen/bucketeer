@@ -56,7 +56,7 @@ from .admin import croit_http_error
 from .auth import SessionUser, require_admin
 from .credentials import _key_locks, generate_key_pair
 from .croit import CroitClient, CroitClientError, CroitError
-from .rgw_user import RgwAccount, require_active_rgw_user, same_uid, split_uid
+from .rgw_user import RgwAccount, is_service_uid, require_active_rgw_user, same_uid, split_uid
 
 log = logging.getLogger("bucketeer.bucket_keys")
 
@@ -267,6 +267,9 @@ async def create_key(name: str, body: CreateBody, request: Request, response: Re
             raise taken
         try:
             names = await croit.list_user_names()
+            # the Admin Ops identity is hidden from the list but must never become a key user
+            if await is_service_uid(croit, uid):
+                raise taken
         except CroitClientError as e:
             raise croit_http_error(e) from None
         if any(same_uid(n, uid) for n in names or []):

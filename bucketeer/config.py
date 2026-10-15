@@ -5,12 +5,15 @@ REQUIRED: the app refuses to start while it is unset or empty. Field defaults
 must equal the values in `.env.default` (tests/test_config.py enforces this).
 """
 
+import ipaddress
+import os
 import re
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
-from pydantic import Field, SecretStr, ValidationError, field_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 LOG_LEVELS = ("debug", "info", "warning", "error")
@@ -22,6 +25,29 @@ REGION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}\Z")
 ENDPOINT_URL_RE = re.compile(
     r"^https?://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~%/-]*)?\Z"
 )
+
+
+RGW_KEY_RE = re.compile(r"^[A-Za-z0-9._+-]{1,128}\Z")
+
+
+def _check_rgw_admin_url(v: str) -> str:
+    """https://host[:port][/prefix]; plain http only for a loopback host (the secret key
+    never signs a request that travels in the clear). No user info, query or fragment."""
+    v = v.strip().rstrip("/")
+    if not ENDPOINT_URL_RE.match(v):
+        raise ValueError("RGW_ADMIN_URL: must look like https://host[:port] (no spaces or quotes)")
+    u = urlsplit(v)
+    if u.scheme == "http":
+        host = (u.hostname or "").lower()
+        loopback = host == "localhost"
+        if not loopback:
+            try:
+                loopback = ipaddress.ip_address(host).is_loopback
+            except ValueError:
+                loopback = False
+        if not loopback:
+            raise ValueError("RGW_ADMIN_URL: plain http is only allowed for a loopback host")
+    return v
 
 
 class Settings(BaseSettings):
@@ -61,12 +87,22 @@ class Settings(BaseSettings):
     ldap_tls_verify: bool = True
     ldap_timeout: int = Field(5, gt=0)
 
-    # croit API
-    croit_url: str = Field(min_length=1)
-    croit_api_token: SecretStr = Field(min_length=1)
+    # Admin backend: `croit` (croit API) or `rgw` (RGW Admin Ops). The settings of the
+    # other backend are ignored. Required-ness is checked in `_backend_settings`.
+    admin_backend: Literal["croit", "rgw"] = "croit"
+
+    # croit API (REQUIRED when admin_backend=croit)
+    croit_url: str = ""
+    croit_api_token: SecretStr = SecretStr("")
     croit_ca_cert_file: str = ""
     croit_tls_verify: bool = True
     croit_timeout: int = Field(15, gt=0)
+
+    # RGW Admin Ops (REQUIRED when admin_backend=rgw)
+    rgw_admin_url: str = ""
+    rgw_admin_access_key: str = ""
+    rgw_admin_secret_key: SecretStr = SecretStr("")
+    rgw_admin_timeout: int = Field(15, gt=0)
 
     # S3
     s3_endpoint_url: str = ""
@@ -100,6 +136,36 @@ class Settings(BaseSettings):
         if v and not ENDPOINT_URL_RE.match(v):
             raise ValueError("must look like https://host[:port] (no spaces, quotes or newlines)")
         return v
+
+    @model_validator(mode="after")
+    def _backend_settings(self):
+        problems = []
+        if self.admin_backend == "croit":
+            if not self.croit_url:
+                problems.append("CROIT_URL")
+            if not self.croit_api_token.get_secret_value():
+                problems.append("CROIT_API_TOKEN")
+            if problems:
+                raise ValueError(
+                    f"{', '.join(problems)}: REQUIRED when ADMIN_BACKEND=croit, not set"
+                )
+        else:
+            if not self.rgw_admin_url:
+                problems.append("RGW_ADMIN_URL")
+            if not self.rgw_admin_access_key:
+                problems.append("RGW_ADMIN_ACCESS_KEY")
+            if not self.rgw_admin_secret_key.get_secret_value():
+                problems.append("RGW_ADMIN_SECRET_KEY")
+            if problems:
+                raise ValueError(
+                    f"{', '.join(problems)}: REQUIRED when ADMIN_BACKEND=rgw, not set"
+                )
+            self.rgw_admin_url = _check_rgw_admin_url(self.rgw_admin_url)
+            if not RGW_KEY_RE.match(self.rgw_admin_access_key):
+                raise ValueError(
+                    "RGW_ADMIN_ACCESS_KEY: must be letters, digits, '.', '_', '-' or '+' only"
+                )
+        return self
 
     @field_validator("ldap_url", mode="before")
     @classmethod
@@ -140,6 +206,17 @@ class Settings(BaseSettings):
         return v
 
 
+def _backend_problems() -> list[str]:
+    """The missing settings of the chosen admin backend, read from the environment, so one
+    startup message lists them together with any other missing setting."""
+    env = os.environ
+    backend = (env.get("ADMIN_BACKEND") or "croit").strip().lower()
+    names = {"croit": ("CROIT_URL", "CROIT_API_TOKEN"),
+             "rgw": ("RGW_ADMIN_URL", "RGW_ADMIN_ACCESS_KEY", "RGW_ADMIN_SECRET_KEY")}.get(backend)
+    return [f"  {n}: REQUIRED when ADMIN_BACKEND={backend}, not set"
+            for n in names or () if not env.get(n)]
+
+
 def load_settings() -> Settings:
     """Load ./.env (cwd only, never searched upward; never overriding the environment).
 
@@ -149,9 +226,14 @@ def load_settings() -> Settings:
     try:
         return Settings()
     except ValidationError as e:
-        lines = []
+        lines = _backend_problems()  # pydantic skips the cross-field check after field errors
+        listed = bool(lines)
         for err in e.errors():
-            name = str(err["loc"][0]).upper() if err["loc"] else "?"
+            if not err["loc"]:  # the cross-field check; _backend_problems() listed these
+                if not listed:
+                    lines.append("  " + err["msg"].removeprefix("Value error, "))
+                continue
+            name = str(err["loc"][0]).upper()
             missing = err["type"] in ("missing", "string_too_short", "too_short")
             lines.append(f"  {name}: {'REQUIRED, not set' if missing else err['msg']}")
         raise SystemExit(

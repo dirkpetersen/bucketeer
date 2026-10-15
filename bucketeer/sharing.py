@@ -56,6 +56,7 @@ from .rgw_user import (
     SUSPENDED,
     UNAVAILABLE,
     RgwAccount,
+    is_service_uid,
     require_active_rgw_user,
     same_uid,
     split_uid,
@@ -141,7 +142,11 @@ async def resolve_recipient(request: Request, acct: RgwAccount, login: str):
         raise HTTPException(409, "That person's S3 account is suspended, so the bucket cannot "
                                  "be shared with them now.")
     uid = rcpt.uid
-    if split_uid(uid)[1].lower() in RESERVED_UIDS:
+    try:
+        service = await is_service_uid(request.app.state.croit, uid)
+    except CroitClientError:
+        raise HTTPException(503, MSG_UNAVAILABLE) from None
+    if split_uid(uid)[1].lower() in RESERVED_UIDS or service:
         raise HTTPException(409, "That account name is reserved and cannot be used.")
     if same_uid(uid, acct.uid):
         raise HTTPException(409, "That person uses the same S3 account as you.")

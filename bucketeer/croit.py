@@ -263,6 +263,11 @@ class CroitClient:
 
     # -- session --
 
+    async def service_uid(self) -> str | None:
+        """The RGW uid of the portal's own service identity. croit uses an API token, not an
+        RGW user, so there is none; `RgwAdminClient` answers with its Admin Ops user."""
+        return None
+
     async def token_info(self) -> dict:
         """Who the API token belongs to (`username`, `roles`, `expiry`)."""
         return await self._request("GET", "/auth/token-info")

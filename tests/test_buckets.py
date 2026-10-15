@@ -10,7 +10,6 @@ import pytest
 from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 
-from bucketeer.croit import CroitClient
 from bucketeer.db import Database
 from bucketeer.ldapauth import AdAuthenticator
 from bucketeer.main import create_app
@@ -18,6 +17,7 @@ from mock.croit_mock import SEED_USERS, MockHooks
 from mock.croit_mock import create_app as create_mock
 from mock.s3_bridge import S3Bridge
 
+from .backends import admin_client
 from .conftest import REQUIRED
 from .test_admin import Transport
 from .test_auth import SECRET_PW, TEAM_GROUP, USERS_GROUP, FakeLdap, make_settings
@@ -40,7 +40,7 @@ class Env:
         self.bridge.seed_objects(self.croit_state)
         self.transport = Transport(self.mock)
         self.settings = make_settings(tmp_path, s3_endpoint_url=s3_endpoint, **over)
-        croit = CroitClient(self.settings, poll_interval=0.01, transport=self.transport)
+        croit = admin_client(self.settings, self.mock, self.transport)
         self.db = Database(":memory:")
         self.fake = FakeLdap()
         self.fake.add("carol", groups={USERS_GROUP, TEAM_GROUP}, display="Carol C",

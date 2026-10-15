@@ -27,10 +27,20 @@ def test_env_default_values_match_code_defaults(monkeypatch):
 
 def test_required_are_exactly_the_empty_keys_without_empty_default():
     required = {n for n, f in Settings.model_fields.items() if f.is_required()}
-    assert required == set(REQUIRED)
+    # the croit_* settings are required only with ADMIN_BACKEND=croit (a model validator)
+    conditional = {"croit_url", "croit_api_token"}
+    assert required | conditional == set(REQUIRED)
     values = dotenv_values(ENV_DEFAULT)
-    for name in required:
+    for name in required | conditional | {
+        "rgw_admin_url", "rgw_admin_access_key", "rgw_admin_secret_key"
+    }:
         assert values[name.upper()] == ""
+    text = ENV_DEFAULT.read_text()
+    for name, backend in (("CROIT_URL", "croit"), ("CROIT_API_TOKEN", "croit"),
+                          ("RGW_ADMIN_URL", "rgw"), ("RGW_ADMIN_ACCESS_KEY", "rgw"),
+                          ("RGW_ADMIN_SECRET_KEY", "rgw")):
+        block = text[: text.index(f"\n{name}=")].rsplit("\n\n", 1)[-1]
+        assert f"REQUIRED when ADMIN_BACKEND={backend}" in block, name
 
 
 def write_env(path, extra=""):

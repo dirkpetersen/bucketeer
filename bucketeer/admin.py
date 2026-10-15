@@ -21,7 +21,8 @@ from .auth import SessionUser, require_admin
 from .budget import budget_matches, load_budget_rules
 from .croit import CroitClient, CroitClientError, CroitError, CroitUnavailable, get_croit
 from .db import Database, get_db
-from .rgw_user import RgwResolver, ad_names_for_uid, get_resolver
+from .rgw_admin import RgwAdminUnsupported
+from .rgw_user import RgwResolver, ad_names_for_uid, get_resolver, is_service_uid
 
 log = logging.getLogger("bucketeer.admin")
 
@@ -66,6 +67,9 @@ def croit_http_error(e: CroitClientError) -> HTTPException:
     scrubbed of the token by the client; no URLs or headers are passed on)."""
     if isinstance(e, CroitUnavailable):
         return HTTPException(503, "The storage backend (croit) is unreachable.")
+    if isinstance(e, RgwAdminUnsupported):
+        return HTTPException(
+            501, "This operation isn't available with the RGW Admin Ops backend yet.")
     if isinstance(e, CroitError):
         if e.status == 404:
             return HTTPException(404, f"Not found: {e.message}")
@@ -312,9 +316,22 @@ async def export_chargeback(admin: Admin, croit: Croit, db: Db):
 # -- quotas ----------------------------------------------------------------------
 
 
+async def _refuse_service_user(croit: CroitClient, uid: str) -> None:
+    """The Admin Ops service user is the portal itself: suspending it or changing its quota
+    would break Bucketeer. (An unknown service uid also refuses: fail closed.)"""
+    try:
+        service = await is_service_uid(croit, uid)
+    except CroitClientError as e:
+        raise croit_http_error(e) from e
+    if service:
+        raise HTTPException(409, "That is the portal's own service account and cannot be "
+                                 "changed here.")
+
+
 @router.put("/users/{uid}/quota")
 async def set_user_quota(uid: str, body: QuotaBody, admin: Admin, croit: Croit, db: Db):
     uid = _uid(uid)
+    await _refuse_service_user(croit, uid)
     args = _quota_args(body)
     before = _quota((await _fetch_user(croit, uid)).get("userQuota"))
     try:
@@ -398,6 +415,7 @@ async def _set_suspended_locked(
     rgw: RgwResolver,
 ):
     uid = _uid(uid)
+    await _refuse_service_user(croit, uid)
     # Bucket-key owners are AD usernames, and the uid is not always one (mapping,
     # tenant prefix): go through the same resolution rules as login.
     owners = await db.run(ad_names_for_uid, db, uid, rgw.tenant)

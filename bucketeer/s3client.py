@@ -43,6 +43,13 @@ def make_config(settings: Settings) -> Config:
     )
 
 
+def tls_verify(settings: Settings) -> bool | str:
+    """boto3's `verify=`: False, a CA bundle path (`S3_CA_CERT_FILE`) or True (system store)."""
+    if not settings.s3_tls_verify:
+        return False
+    return settings.s3_ca_cert_file or True
+
+
 def default_factory(endpoint: str, access_key: str, secret_key: str, settings: Settings) -> Any:
     return boto3.client(
         "s3",
@@ -51,6 +58,7 @@ def default_factory(endpoint: str, access_key: str, secret_key: str, settings: S
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         config=make_config(settings),
+        verify=tls_verify(settings),
     )
 
 
@@ -65,6 +73,7 @@ def default_sns_factory(endpoint: str, access_key: str, secret_key: str,
         aws_secret_access_key=secret_key,
         config=Config(retries={"max_attempts": 2, "mode": "standard"},
                       connect_timeout=5, read_timeout=30),
+        verify=tls_verify(settings),
     )
 
 

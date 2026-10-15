@@ -36,6 +36,7 @@ from .config import Settings
 from .croit import CroitClient
 from .db import DB_FILENAME, Database
 from .ldapauth import AdAuthenticator
+from .rgw_admin import RgwAdminClient
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -57,12 +58,13 @@ ASSET_CACHE = "public, max-age=86400"  # fonts and images: stable, not fingerpri
 
 def create_app(
     settings: Settings,
-    croit: CroitClient | None = None,
+    croit: CroitClient | RgwAdminClient | None = None,
     db: Database | None = None,
     authenticator: AdAuthenticator | None = None,
     clock: Callable[[], float] = time.time,
 ) -> FastAPI:
-    """`croit` lets tests inject a client (e.g. on an ASGI transport); `db` an
+    """`croit` (the admin-plane client: `CroitClient`, or `RgwAdminClient` when
+    `ADMIN_BACKEND=rgw`) lets tests inject a client (e.g. on an ASGI transport); `db` an
     already-open database (e.g. in-memory), which the caller then closes;
     `authenticator` a fake-LDAP one; `clock` drives session expiry and the
     login throttle."""
@@ -70,7 +72,9 @@ def create_app(
         level=settings.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    client = croit or CroitClient(settings)
+    client = croit or (
+        RgwAdminClient(settings) if settings.admin_backend == "rgw" else CroitClient(settings)
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:

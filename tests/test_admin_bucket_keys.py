@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from .backends import admin_backend  # noqa: F401  (fixture: both admin backends)
 from .test_bucket_keys import break_policy_writes, mk, put_foreign, sids
 from .test_bucket_keys import env as env  # noqa: F401  (fixture)
 from .test_buckets import H

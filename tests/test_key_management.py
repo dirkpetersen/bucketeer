@@ -8,6 +8,12 @@ import pytest
 
 from bucketeer.credentials import MAX_KEYS, generate_key_pair
 
+from .backends import (
+    admin_backend,  # noqa: F401  (fixture: both admin backends)
+    croit_only,
+    error_response,
+    on_rgw,
+)
 from .test_credentials import ALICE, BOB, Env, H
 
 
@@ -78,12 +84,20 @@ def test_rotate_order_new_exists_before_old_removed(env):
     new = r.json()["accessKey"]
     assert r.json()["oldKeyRemoved"] is True and new != old
     assert set(alice_keys(env)) == {new}
-    calls = [(m, p.split("?")[0].split("/keys")[-1]) for m, p in env.transport.calls
-             if m in ("PUT", "DELETE", "GET") and "/users/alice/keys" in p]
-    seq = calls
-    put = next(i for i, c in enumerate(seq) if c == ("PUT", f"/{new}"))
-    delete = next(i for i, c in enumerate(seq) if c == ("DELETE", f"/{old}"))
-    gets_between = [c for c in seq[put + 1:delete] if c[0] == "GET"]
+    if on_rgw():  # the real Admin Ops requests: PUT ?key, a confirming read, DELETE ?key
+        seq = [(m, "PUT" if m == "PUT" and f"access-key={new}" in p else
+                "DELETE" if m == "DELETE" and f"access-key={old}" in p else "GET")
+               for m, p in env.transport.raw_calls if "uid=alice" in p]
+        assert [c for c in seq if c[0] == "PUT"] == [("PUT", "PUT")]
+        put = seq.index(("PUT", "PUT"))
+        delete = seq.index(("DELETE", "DELETE"))
+        gets_between = [c for c in seq[put + 1:delete] if c[0] == "GET"]
+    else:
+        seq = [(m, p.split("?")[0].split("/keys")[-1]) for m, p in env.transport.calls
+               if m in ("PUT", "DELETE", "GET") and "/users/alice/keys" in p]
+        put = next(i for i, c in enumerate(seq) if c == ("PUT", f"/{new}"))
+        delete = next(i for i, c in enumerate(seq) if c == ("DELETE", f"/{old}"))
+        gets_between = [c for c in seq[put + 1:delete] if c[0] == "GET"]
     assert put < delete and gets_between  # confirmed via a list between put and delete
     (entry,) = key_audit(env)
     assert entry["action"] == "credentials.key.rotate"
@@ -141,6 +155,7 @@ def test_refuse_deleting_last_key(env):
 
 
 def test_other_users_and_subuser_keys_are_404(env):
+    croit_only("the Admin Ops mock models no subuser keys")
     croit = env.mock.state.croit
     user = croit.users["alice"]
     user.keys.append({"access_key": "SUBKEY0000000000000X", "secret_key": "x" * 40,
@@ -216,13 +231,13 @@ def test_never_whole_set_put_and_race_lock(env):
 
 
 def test_rotate_confirmation_read_fails_is_audited_and_keeps_old(env):
-    gets = {"n": 0}
+    state = {"put": False}
 
-    def fail(req):
-        if req.method == "GET" and req.url.path.endswith("/users/alice/keys"):
-            gets["n"] += 1
-            if gets["n"] == 2:
-                return httpx.Response(500, json={"message": "boom"})
+    def fail(req):  # every read after the new key was written fails (either backend)
+        if req.method == "PUT" and "/keys/" in req.url.path:
+            state["put"] = True
+        elif req.method == "GET" and state["put"]:
+            return error_response(500, "boom")
         return None
 
     env.transport.fail = fail

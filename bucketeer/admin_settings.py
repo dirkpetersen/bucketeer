@@ -286,9 +286,16 @@ async def put_mapping(ad_username: str, body: Body_, admin: Admin, croit: Croit,
     except SettingsError as e:
         raise _bad(e) from e
     from .bucket_keys import KEY_BARE
-    from .rgw_user import RESERVED_UIDS, same_uid, split_uid
+    from .rgw_user import RESERVED_UIDS, is_service_uid, same_uid, split_uid
     if split_uid(uid)[1].lower() in RESERVED_UIDS:
         raise HTTPException(422, f"{uid} is reserved by RGW and cannot be a mapping target.")
+    try:
+        service = await is_service_uid(croit, uid)
+    except CroitClientError as e:
+        raise HTTPException(503, "Cannot tell whether that is the service account now.") from e
+    if service:
+        raise HTTPException(422, f"{uid} is the portal's own service account and cannot be "
+                                 "a mapping target.")
     if KEY_BARE.match(split_uid(uid)[1].lower()) or any(
             same_uid(k["rgw_uid"], uid)
             for k in await db.run(db.bucket_keys.list, include_revoked=True)):
