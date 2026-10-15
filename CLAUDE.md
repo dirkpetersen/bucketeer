@@ -143,6 +143,8 @@ Formats in the two files differ, so keep them straight:
 - Keep it idempotent and keep its exit codes stable (0 ok/unchanged, 1 error, 3 `--verify` mismatch), since it is meant to run from cron or a certbot hook.
 - Never call `/auth/logout`. croit allows one session per user, so logging out also ends that user's browser sessions.
 
+`tools/croit-gate` is an allowlisting gateway that holds the real croit token (Bucketeer's `CROIT_URL` points at it, its `CROIT_API_TOKEN` is the gateway's client token). It installs itself outside the repo for its own Unix user (`croit-gate install`: `~/.local/bin`, a systemd user unit, `~/.config/croit-gate/env` 0600, never overwritten), so Bucketeer deploys don't touch it. **A new croit call in `bucketeer/croit.py` must also be added to the gateway's `ROUTES` table**; `tests/test_croit_gate.py` (AST drift test) fails until it is. Never log tokens or query strings in it (`put_key` carries a secret key in the query).
+
 ## Product design (decided by the owner)
 
 ### Two API planes

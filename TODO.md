@@ -132,7 +132,7 @@ skips them too.
   anything. Safeguards per CLAUDE.md (Q10): known accounts only, auto-unsuspend
   on login for job suspensions, abort thresholds, report-only until an admin
   enables enforce, 03:00 daily plus run-now.
-- [ ] croit allowlisting gateway `tools/croit-gate` (limits the croit admin
+- [x] croit allowlisting gateway `tools/croit-gate` (limits the croit admin
   token's blast radius; croit support called it a reasonable hardening
   measure). A standalone tool under the `tools/` rules (single file, stdlib
   only, never imports Bucketeer):
@@ -155,10 +155,21 @@ skips them too.
     `CROIT_API_TOKEN` holds the client token. If `Settings` refuses
     `http://` for `CROIT_URL`, allow plain http for 127.0.0.1/localhost
     only.
-  - Document it in `tools/README.md`: a systemd user unit, running it as a
-    separate Unix user from Bucketeer so a compromised portal can't read the
-    real token, and token rotation. Tests run it in-process against the mock
-    croit.
+  - **Design goal (owner): independent of Bucketeer's deployments.** The
+    gateway runs under its own Unix user as that user's own systemd user
+    service (with lingering enabled), installed outside the Bucketeer repo:
+    the script is copied to that user's `~/.local/bin`, and its config lives
+    in its own `~/.config/croit-gate/env` (0600). appmotel deploys, updates
+    and `git reset --hard` of Bucketeer never touch it, and Bucketeer's user
+    can't read the real token. Offer `croit-gate install` (copies itself,
+    writes the unit and an env template without overwriting an existing one,
+    and prints the `loginctl enable-linger` and `systemctl --user enable
+    --now` steps). Updating the gateway is a deliberate re-install by its own
+    user.
+  - Document it in `tools/README.md`: the dedicated user, the install and
+    update steps, the systemd user unit, and token rotation. Tests run it
+    in-process against the mock croit.
+
 ## Phase 4: Advanced (behind the global Advanced toggle)
 
 - [x] Advanced toggle, remembered per user.

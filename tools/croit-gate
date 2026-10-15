@@ -1,0 +1,779 @@
+#!/usr/bin/env python3
+"""Allowlisting gateway in front of the croit API.
+
+croit's admin token can do far more than a portal needs (certificates, servers,
+API tokens, ...). This gateway holds the real token and forwards only the
+(method, path) pairs that Bucketeer's CroitClient uses; everything else gets
+403. Clients authenticate to the gateway with a separate client token, so a
+compromised client never learns the real one.
+
+Standard library only; needs Python 3.9+ (checked at startup). It is not part of Bucketeer: it never
+imports it, and Bucketeer never imports it.
+
+Run it as a different Unix user than the client, and keep its environment file
+readable only by that user. Point the client's CROIT_URL at
+http://127.0.0.1:18089/api and its CROIT_API_TOKEN at the client token.
+
+Environment:
+  CROIT_URL               croit API base URL, e.g. https://croit.example.org/api
+  CROIT_API_TOKEN         the real croit token (required); never leaves the gateway
+  CROIT_CA_CERT_FILE      CA bundle for the croit endpoint
+  CROIT_TLS_VERIFY        set to false to skip croit TLS verification
+  CROIT_GATE_LISTEN       host:port to listen on (default 127.0.0.1:18089)
+  CROIT_GATE_CLIENT_TOKEN token clients must send as a Bearer token (required,
+                          at least 32 characters, different from CROIT_API_TOKEN)
+  CROIT_GATE_TIMEOUT      seconds per upstream request, and the total time a client
+                          has to send its request (default 30)
+  CROIT_GATE_MAX_CONNECTIONS
+                          concurrent client connections; more get 503 (default 64)
+
+Install (as the gateway's own Unix user, no root needed):
+  croit-gate install [--enable]
+    Copies this script to ~/.local/bin/croit-gate (0755), writes the systemd
+    user unit ~/.config/systemd/user/croit-gate.service, and writes an env
+    template ~/.config/croit-gate/env (0600) ONLY if none exists (an existing
+    env file and its tokens are never touched). Re-running it updates the
+    script and the unit. It then prints the remaining steps. With --enable it
+    also runs `systemctl --user daemon-reload` and `enable --now`; without it,
+    it runs no systemctl at all.
+
+Options:
+  --check          validate the configuration, call GET /auth/token-info
+                   upstream, and exit (0 ok, 1 error)
+  --allow-remote   allow a non-loopback CROIT_GATE_LISTEN address. The
+                   gateway speaks plain HTTP: anyone who can sniff or reach
+                   that address can use the client token. Only do this on a
+                   trusted, isolated network.
+
+Exit codes: 0 success, 1 error, 2 usage error.
+"""
+
+import argparse
+import hmac
+import http.client
+import ipaddress
+import json
+import logging
+import os
+import re
+import signal
+import socket
+import ssl
+import sys
+import threading
+import time
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+log = logging.getLogger("croit-gate")
+
+MIN_CLIENT_TOKEN = 32
+DEFAULT_LISTEN = "127.0.0.1:18089"
+DEFAULT_TIMEOUT = 30.0
+MAX_REQUEST_BODY = 1024 * 1024
+MAX_RESPONSE_BODY = 32 * 1024 * 1024
+MAX_HEADER_LINES = 32
+MAX_LINE = 8192
+DEFAULT_MAX_CONNECTIONS = 64
+MIN_PYTHON = (3, 9)
+
+# (method, path template relative to the API base, query string allowed).
+# Must match the calls in bucketeer/croit.py exactly; tests/test_croit_gate.py
+# fails when the two drift apart.
+ROUTES = [
+    ("GET", "/auth/token-info", False),
+    ("GET", "/tasks/{id}", False),
+    ("GET", "/s3/users", True),  # ?uid=
+    ("GET", "/s3/user-names", False),
+    ("POST", "/s3/users", False),
+    ("PATCH", "/s3/users/{uid}", False),
+    ("DELETE", "/s3/users/{uid}", False),
+    ("GET", "/s3/users/{uid}/buckets", False),
+    ("PUT", "/s3/users/{uid}/quota", False),
+    ("PUT", "/s3/users/{uid}/bucket-quota", False),
+    ("GET", "/s3/users/{uid}/cfg-file/download", False),
+    ("GET", "/s3/users/{uid}/keys", False),
+    ("GET", "/s3/users/{uid}/key", False),
+    ("PUT", "/s3/users/{uid}/keys/{access_key}", True),  # ?secretKey= (a secret!)
+    ("DELETE", "/s3/users/{uid}/keys/{access_key}", False),
+    ("GET", "/s3/placements", False),
+    ("GET", "/s3/buckets", False),
+    ("GET", "/s3/buckets/{name}", True),  # ?owner=
+    ("PUT", "/s3/buckets/{name}", False),
+    ("PATCH", "/s3/buckets/{name}", False),
+    ("DELETE", "/s3/buckets/{name}", True),  # ?ignoreWarning=
+    ("PUT", "/s3/buckets/{name}/quota", False),
+    ("GET", "/s3/buckets/{name}/policy", True),  # ?owner=
+    ("POST", "/s3/buckets/{name}/policy", True),  # ?owner=
+    ("DELETE", "/s3/buckets/{name}/policy", True),  # ?owner=
+    ("GET", "/s3/usage/by-user/{uid}", True),  # ?hours=
+    ("GET", "/s3/usage/by-bucket/{name}", True),  # ?hours=
+]
+
+# Raw form of a parameter (percent-escapes allowed), and what it must decode to,
+# exactly once and as strict UTF-8.
+PARAM_RE = re.compile(r"[A-Za-z0-9%._~@+$-]+\Z")
+DECODED_PARAM_RE = re.compile(r"[A-Za-z0-9._~@+$:-]+\Z")
+TOKEN_RE = re.compile(r"[\x21-\x7e]+\Z")
+BAD_PATH_RE = re.compile(r"(?i:%2f|%5c|%00|%2e%2e)|\.\.|//|\\|[\x00-\x20\x7f-\uffff#]")
+BAD_ESCAPE_RE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+BAD_QUERY_RE = re.compile(r"[\x00-\x20\x7f-\uffff#\\]")
+HOP_BY_HOP = {
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
+    "trailer", "transfer-encoding", "upgrade",
+}
+
+
+def exc_name(e):
+    """Exceptions are only ever logged by type: their text can hold a token."""
+    return type(e).__name__
+
+
+def die(msg, code=1):
+    print(f"croit-gate: error: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def env_bool(name, default=True):
+    value = os.environ.get(name, "").strip().lower()
+    return default if not value else value not in ("0", "false", "no", "off")
+
+
+# --- allowlist ------------------------------------------------------------------
+
+
+def valid_param(raw):
+    """A path parameter must decode (once, strictly) to a plain identifier."""
+    if not PARAM_RE.match(raw):
+        return False
+    try:
+        value = urllib.parse.unquote(raw, encoding="utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return False
+    return bool(DECODED_PARAM_RE.match(value)) and value not in (".", "..")
+
+
+class Route:
+    def __init__(self, method, template, query):
+        self.method = method
+        self.template = template
+        self.query = query
+        self.parts = template.strip("/").split("/")
+
+    def matches(self, method, segments):
+        if method != self.method or len(segments) != len(self.parts):
+            return False
+        for i, want in enumerate(self.parts):
+            got = segments[i]
+            if want.startswith("{"):
+                if not valid_param(got):
+                    return False
+            elif want != got:
+                return False
+        return True
+
+
+ALLOWED = [Route(*r) for r in ROUTES]
+
+
+def check_request(method, rel_path, query):
+    """Return None when the request may be forwarded, else a reason string.
+
+    `rel_path` is the raw path below the API base ("/s3/users/alice"), `query` the
+    raw query string without the "?".
+    """
+    if not rel_path.startswith("/") or BAD_PATH_RE.search(rel_path) \
+            or BAD_ESCAPE_RE.search(rel_path):
+        return "malformed path"
+    segments = rel_path.strip("/").split("/")
+    if any(s == "" for s in segments):
+        return "malformed path"
+    for route in ALLOWED:
+        if route.matches(method, segments):
+            if query and not route.query:
+                return "query string not allowed"
+            if query and (BAD_QUERY_RE.search(query) or BAD_ESCAPE_RE.search(query)):
+                return "malformed query"
+            return None
+    return "not allowed"
+
+
+# --- configuration --------------------------------------------------------------
+
+
+class Config:
+    def __init__(self, env, allow_remote=False):
+        url = (env.get("CROIT_URL") or "").strip()
+        token = env.get("CROIT_API_TOKEN") or ""
+        client = env.get("CROIT_GATE_CLIENT_TOKEN") or ""
+        if not url:
+            raise ValueError("CROIT_URL is not set")
+        if not token:
+            raise ValueError("CROIT_API_TOKEN is not set")
+        if not client:
+            raise ValueError("CROIT_GATE_CLIENT_TOKEN is not set")
+        for name, value in (("CROIT_API_TOKEN", token), ("CROIT_GATE_CLIENT_TOKEN", client)):
+            if not TOKEN_RE.match(value):
+                raise ValueError(
+                    f"{name} may only contain printable ASCII characters without spaces "
+                    "(a stray carriage return from a CRLF env file?)"
+                )
+        if len(client) < MIN_CLIENT_TOKEN:
+            raise ValueError(
+                f"CROIT_GATE_CLIENT_TOKEN must be at least {MIN_CLIENT_TOKEN} characters"
+            )
+        if hmac.compare_digest(client.encode(), token.encode()):
+            raise ValueError("CROIT_GATE_CLIENT_TOKEN must differ from CROIT_API_TOKEN")
+        u = urllib.parse.urlsplit(url)
+        if u.scheme not in ("http", "https") or not u.hostname or u.query or u.fragment \
+                or u.username or u.password:
+            raise ValueError("CROIT_URL must look like https://host[:port]/api")
+        try:
+            self.upstream_port = u.port or (443 if u.scheme == "https" else 80)
+        except ValueError:
+            raise ValueError("CROIT_URL has an invalid port") from None
+        loopback = u.hostname.lower() == "localhost"
+        if not loopback:
+            try:
+                loopback = ipaddress.ip_address(u.hostname).is_loopback
+            except ValueError:
+                pass
+        if u.scheme == "http" and not loopback:
+            raise ValueError(
+                "CROIT_URL uses plain http, which is only allowed for a loopback host "
+                "(the real token would cross the network unencrypted)"
+            )
+        self.scheme = u.scheme
+        self.upstream_host = u.hostname
+        self.base = u.path.rstrip("/")
+        if BAD_PATH_RE.search(self.base) or BAD_ESCAPE_RE.search(self.base):
+            raise ValueError("CROIT_URL has an unsupported path")
+        self.token = token
+        self.client_token = client
+        try:
+            self.timeout = float(env.get("CROIT_GATE_TIMEOUT") or DEFAULT_TIMEOUT)
+        except ValueError:
+            raise ValueError("CROIT_GATE_TIMEOUT must be a number of seconds") from None
+        if self.timeout <= 0:
+            raise ValueError("CROIT_GATE_TIMEOUT must be positive")
+        try:
+            self.max_connections = int(
+                env.get("CROIT_GATE_MAX_CONNECTIONS") or DEFAULT_MAX_CONNECTIONS
+            )
+        except ValueError:
+            raise ValueError("CROIT_GATE_MAX_CONNECTIONS must be a whole number") from None
+        if self.max_connections < 1:
+            raise ValueError("CROIT_GATE_MAX_CONNECTIONS must be at least 1")
+        self.listen = parse_listen(env.get("CROIT_GATE_LISTEN") or DEFAULT_LISTEN, allow_remote)
+        verify = env_bool_from(env, "CROIT_TLS_VERIFY")
+        self.ctx = None
+        if self.scheme == "https":
+            ca = env.get("CROIT_CA_CERT_FILE") or None
+            if not verify:
+                self.ctx = ssl._create_unverified_context()
+            else:
+                try:
+                    self.ctx = ssl.create_default_context(cafile=ca)
+                except (OSError, ssl.SSLError) as e:
+                    raise ValueError(f"cannot load CROIT_CA_CERT_FILE: {e}") from None
+
+
+def env_bool_from(env, name, default=True):
+    value = (env.get(name) or "").strip().lower()
+    return default if not value else value not in ("0", "false", "no", "off")
+
+
+def parse_listen(value, allow_remote):
+    value = value.strip()
+    m = re.match(r"^\[([^\]]+)\]:(\d{1,5})\Z", value) or re.match(
+        r"^([^:\[\]]+):(\d{1,5})\Z", value
+    )
+    if not m:
+        raise ValueError("CROIT_GATE_LISTEN must look like 127.0.0.1:18089 or [::1]:18089")
+    host, port = m.group(1), int(m.group(2))
+    if not 0 <= port <= 65535:
+        raise ValueError("CROIT_GATE_LISTEN has an invalid port")
+    try:
+        loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = host.lower() == "localhost"
+    if not loopback and not allow_remote:
+        raise ValueError(
+            f"CROIT_GATE_LISTEN {host} is not a loopback address; the gateway speaks plain "
+            "HTTP, so this exposes the client token. Pass --allow-remote to accept that"
+        )
+    return host, port
+
+
+# --- upstream ---------------------------------------------------------------------
+
+
+class UpstreamError(Exception):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+def upstream_request(cfg, method, target, headers, body):
+    """One request to croit. Returns (status, content_type, body). No redirects."""
+    if cfg.scheme == "https":
+        conn = http.client.HTTPSConnection(
+            cfg.upstream_host, cfg.upstream_port, timeout=cfg.timeout, context=cfg.ctx
+        )
+    else:
+        conn = http.client.HTTPConnection(cfg.upstream_host, cfg.upstream_port, timeout=cfg.timeout)
+    try:
+        try:
+            conn.request(method, target, body=body, headers=headers)
+            resp = conn.getresponse()
+            length = resp.getheader("Content-Length")
+            if length and length.isascii() and length.isdigit() and int(length) > MAX_RESPONSE_BODY:
+                raise UpstreamError(502, "croit answer too large")
+            data = resp.read(MAX_RESPONSE_BODY + 1)
+        except (socket.timeout, TimeoutError):  # noqa: UP041  (distinct before 3.10)
+            raise UpstreamError(504, "croit timed out") from None
+        except ValueError:
+            # http.client rejects a bad header value and puts it, token included, in
+            # the message: never let that text out.
+            raise UpstreamError(502, "croit request failed") from None
+        except (OSError, http.client.HTTPException, ssl.SSLError):
+            raise UpstreamError(502, "croit unreachable") from None
+        if len(data) > MAX_RESPONSE_BODY:
+            raise UpstreamError(502, "croit answer too large")
+        if 300 <= resp.status < 400:
+            raise UpstreamError(502, "croit sent a redirect")
+        return resp.status, resp.getheader("Content-Type"), data
+    finally:
+        conn.close()
+
+
+# --- server -----------------------------------------------------------------------
+
+
+class LimitedReader:
+    """rfile wrapper that bounds header lines. A longer line, or more header lines
+    than MAX_HEADER_LINES, is answered with a line the stdlib turns into 414/431."""
+
+    def __init__(self, f):
+        self.f = f
+        self.lines = 0
+
+    def readline(self, size=-1):
+        self.lines += 1
+        if self.lines > MAX_HEADER_LINES + 2:  # request line, headers, blank line
+            return b"A" * 65537
+        line = self.f.readline(MAX_LINE + 1)
+        if len(line) > MAX_LINE:
+            return b"A" * 65537
+        return line
+
+    def __getattr__(self, name):
+        return getattr(self.f, name)
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "croit-gate"
+    sys_version = ""
+    protocol_version = "HTTP/1.0"  # one request per connection
+
+    def setup(self):
+        cfg = self.server.cfg
+        self.timeout = cfg.timeout
+        super().setup()
+        self.rfile = LimitedReader(self.rfile)
+        # Total time the client has to send its request; a client dribbling bytes
+        # defeats the per-recv timeout. Cancelled once the body has been read.
+        self.deadline = threading.Timer(cfg.timeout, self.expire)
+        self.deadline.daemon = True
+        self.deadline.start()
+
+    def expire(self):
+        log.warning("client %s too slow, closing", self.client_address[0])
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def finish(self):
+        self.deadline.cancel()
+        super().finish()
+
+    # The stdlib logs the request line (with the query string, which can hold a
+    # secret key) to stderr; replace all of it with our own access line.
+    def log_message(self, *args):
+        pass
+
+    def reply(self, status, body=b"", content_type=None):
+        self.status = status
+        self.send_response(status)
+        if content_type:
+            self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        if body and self.command != "HEAD":
+            self.wfile.write(body)
+
+    def fail(self, status, message):
+        body = json.dumps({"code": status, "message": message}).encode()
+        self.reply(status, body, "application/json")
+
+    def authorized(self):
+        header = self.headers.get("Authorization") or ""
+        scheme, _, value = header.partition(" ")
+        if scheme.lower() != "bearer" or not value:
+            return False
+        return hmac.compare_digest(
+            value.strip().encode("utf-8", "replace"),
+            self.server.cfg.client_token.encode("utf-8"),
+        )
+
+    def handle_any(self):
+        cfg = self.server.cfg
+        started = time.monotonic()
+        self.status = 0
+        raw = self.path
+        path, _, query = raw.partition("?")
+        try:
+            self.process(cfg, raw, path, query)
+        except (  # noqa: UP041
+            BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout
+        ):
+            self.status = self.status or 499
+        except Exception as e:  # never leak details: only the type is logged
+            log.error("internal error: %s", exc_name(e))
+            if not self.status:
+                try:
+                    self.fail(500, "internal error")
+                except OSError:
+                    pass
+        finally:
+            shown = ascii(path)[1:-1][:200]
+            log.info("%s %s %s %d %dms", self.client_address[0], self.command, shown,
+                     self.status, (time.monotonic() - started) * 1000)
+
+    def process(self, cfg, raw, path, query):
+        # The stdlib keeps obs-fold continuation lines inside the previous header's
+        # value; such a value could smuggle a header upstream. Refuse them outright.
+        for _name, value in self.headers.raw_items():
+            if "\r" in value or "\n" in value:
+                self.fail(400, "folded headers are not supported")
+                return
+        if not self.authorized():
+            self.fail(401, "unauthorized")
+            return
+        base = cfg.base
+        if not (path == base or path.startswith(base + "/")) or "#" in raw:
+            self.fail(403, "not allowed")
+            return
+        reason = check_request(self.command, path[len(base):], query)
+        if reason:
+            log.warning("denied %s %s from %s: %s", self.command, ascii(path)[1:-1][:200],
+                        self.client_address[0], reason)
+            self.fail(403, "this request is not allowed by the gateway")
+            return
+
+        if self.headers.get("Transfer-Encoding"):
+            self.fail(411, "Content-Length required")
+            return
+        length_text = self.headers.get("Content-Length")
+        length = 0
+        if length_text is not None:
+            if not (length_text.isascii() and length_text.isdigit()):
+                self.fail(400, "bad Content-Length")
+                return
+            length = int(length_text)
+        if length > MAX_REQUEST_BODY:
+            self.fail(413, "request body too large")
+            return
+        body = None
+        if length:
+            body = self.rfile.read(length)
+            if len(body) != length:
+                self.fail(400, "incomplete request body")
+                return
+        self.deadline.cancel()
+
+        headers = {
+            "Authorization": "Bearer " + cfg.token,
+            "Accept": "application/json",
+            "Connection": "close",
+            "User-Agent": "croit-gate",
+        }
+        if body is not None:
+            # Bucketeer only sends JSON: never forward a client-chosen type.
+            headers["Content-Type"] = "application/json"
+        target = cfg.base + path[len(base):] + (("?" + query) if query else "")
+        try:
+            status, ctype, data = upstream_request(cfg, self.command, target, headers, body)
+        except UpstreamError as e:
+            self.fail(e.status, str(e))
+            return
+        self.reply(status, data if status not in (204, 304) else b"", ctype)
+
+    do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = handle_any
+    do_HEAD = do_OPTIONS = handle_any
+
+
+class Gate(ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 32
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.slots = threading.BoundedSemaphore(cfg.max_connections)
+        if ":" in cfg.listen[0]:
+            self.address_family = socket.AF_INET6
+        super().__init__(cfg.listen, Handler)
+
+    def process_request(self, request, client_address):
+        if not self.slots.acquire(blocking=False):
+            log.warning("too many connections, refusing %s", client_address[0])
+            try:
+                request.settimeout(1)
+                request.sendall(b"HTTP/1.0 503 Service Unavailable\r\nContent-Length: 0\r\n"
+                                b"Connection: close\r\n\r\n")
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
+
+    def handle_error(self, request, client_address):
+        # The default prints a traceback, whose text may hold a token.
+        log.error("connection error: %s", exc_name(sys.exc_info()[1]))
+
+
+def upstream_check(cfg):
+    """GET /auth/token-info with the real token. Returns (ok, message)."""
+    try:
+        status, _, data = upstream_request(
+            cfg, "GET", cfg.base + "/auth/token-info",
+            {"Authorization": "Bearer " + cfg.token, "Accept": "application/json",
+             "Connection": "close", "User-Agent": "croit-gate"}, None)
+    except UpstreamError as e:
+        return False, f"croit: {e}"
+    if status != 200:
+        return False, f"croit answered {status} to GET /auth/token-info (is the token valid?)"
+    try:
+        info = json.loads(data)
+        who = info.get("username") if isinstance(info, dict) else None
+    except ValueError:
+        who = None
+    return True, "croit accepts the token" + (f" (user {who})" if who else "")
+
+
+UNIT_TEMPLATE = """\
+[Unit]
+Description=croit allowlisting gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%(exe)s
+EnvironmentFile=%(env)s
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+MemoryMax=256M
+TasksMax=256
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+UMask=0077
+
+[Install]
+WantedBy=default.target
+"""
+
+ENV_TEMPLATE = """\
+# croit-gate configuration. Keep this file mode 0600: it holds the real croit token.
+# Put comments on their own lines (systemd keeps a trailing # as part of the value).
+
+# croit API base URL. REQUIRED.
+CROIT_URL=
+
+# The real croit API token. REQUIRED. It never leaves the gateway.
+CROIT_API_TOKEN=
+
+# Token that clients (Bucketeer's CROIT_API_TOKEN) must present. REQUIRED, at
+# least 32 characters, different from CROIT_API_TOKEN. Generate one with:
+#   python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+CROIT_GATE_CLIENT_TOKEN=
+
+# Address to listen on. Default: 127.0.0.1:18089
+CROIT_GATE_LISTEN=127.0.0.1:18089
+
+# Seconds per croit request, and the total time a client has to send its
+# request. Default: 30
+CROIT_GATE_TIMEOUT=30
+
+# Concurrent client connections; more get 503. Default: 64
+# Each one uses two threads: raise TasksMax= in the unit above 2 x this + 16.
+CROIT_GATE_MAX_CONNECTIONS=64
+
+# CA bundle for croit's TLS certificate. Default: empty (system trust store).
+CROIT_CA_CERT_FILE=
+
+# Verify croit's TLS certificate. Default: true.
+CROIT_TLS_VERIFY=true
+"""
+
+
+def write_file(path, data, mode, overwrite=True):
+    """Write `data` atomically with `mode`. Returns False if left alone."""
+    if not overwrite and os.path.lexists(path):
+        return False
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.new.{os.getpid()}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(tmp, mode)
+        if overwrite:
+            os.replace(tmp, path)
+        else:
+            try:
+                os.link(tmp, path)  # fails if the path appeared meanwhile: race-free
+            except FileExistsError:
+                return False
+    finally:
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
+    return True
+
+
+def install(enable=False, home=None, script=None):
+    """Install the gateway for the current user. Returns the printed lines."""
+    home = home or os.path.expanduser("~")
+    if os.geteuid() == 0:
+        raise ValueError("run install as the gateway's own unprivileged user, not root")
+    script = script or os.path.abspath(__file__)
+    exe = os.path.join(home, ".local", "bin", "croit-gate")
+    env = os.path.join(home, ".config", "croit-gate", "env")
+    unit = os.path.join(home, ".config", "systemd", "user", "croit-gate.service")
+    for value in (exe, env):
+        if re.search(r"[\s%$\\\"']", value):
+            raise ValueError(f"unsupported character in path {value!r}")
+    with open(script, "rb") as f:
+        code = f.read()
+    write_file(exe, code, 0o755)
+    write_file(unit, (UNIT_TEMPLATE % {"exe": exe, "env": env}).encode(), 0o644)
+    created = write_file(env, ENV_TEMPLATE.encode(), 0o600, overwrite=False)
+    lines = [
+        f"Installed {exe}",
+        f"Wrote {unit}",
+        f"Created {env} (mode 0600): fill in the tokens" if created
+        else f"Kept the existing {env} (not modified)",
+    ]
+    if enable:
+        import subprocess
+        for cmd in (["systemctl", "--user", "daemon-reload"],
+                    ["systemctl", "--user", "enable", "--now", "croit-gate"]):
+            subprocess.run(cmd, check=True)
+        lines.append("Enabled and started croit-gate.service")
+    else:
+        lines += [
+            "Next steps:",
+            f"  1. edit {env}",
+            f"  2. {exe} --check   (after loading the env file)",
+            "  3. loginctl enable-linger $USER   (may need an administrator)",
+            "  4. systemctl --user daemon-reload && systemctl --user enable --now croit-gate",
+        ]
+    return lines
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(
+        prog="croit-gate",
+        description="Allowlisting gateway in front of the croit API. Forwards only the "
+        "calls Bucketeer needs, with the real croit token, to clients that present "
+        "the client token.",
+        epilog="Configuration comes from environment variables; see the script header.",
+    )
+    p.add_argument("command", nargs="?", choices=["install"],
+                   help="install: copy this script and a systemd user unit to the current "
+                   "user's home (see the script header)")
+    p.add_argument("--enable", action="store_true",
+                   help="with install: also run systemctl --user daemon-reload and enable --now")
+    p.add_argument("--check", action="store_true",
+                   help="validate the configuration, test the croit token, and exit")
+    p.add_argument("--allow-remote", action="store_true",
+                   help="allow CROIT_GATE_LISTEN on a non-loopback address (plain HTTP: "
+                   "the client token is exposed to that network)")
+    return p.parse_args(argv)
+
+
+def main(argv=None):
+    if sys.version_info < MIN_PYTHON:
+        die("needs Python {}.{} or newer".format(*MIN_PYTHON))
+    args = parse_args(argv)
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr,
+                        format="%(asctime)s croit-gate %(levelname)s %(message)s")
+    if args.command == "install":
+        try:
+            print("\n".join(install(enable=args.enable)))
+        except (ValueError, OSError) as e:
+            die(str(e))
+        except Exception as e:  # systemctl failure
+            die(f"systemctl failed: {e}")
+        return
+    try:
+        cfg = Config(os.environ, allow_remote=args.allow_remote)
+    except ValueError as e:
+        die(str(e))
+    try:
+        ok, message = upstream_check(cfg)
+    except Exception as e:  # only the type: the text could hold the token
+        ok, message = False, f"croit check failed ({exc_name(e)})"
+    if args.check:
+        print(f"croit-gate: {'ok' if ok else 'error'}: {message}")
+        if ok:
+            print(f"croit-gate: would listen on {cfg.listen[0]}:{cfg.listen[1]}, "
+                  f"forwarding to {cfg.scheme}://{cfg.upstream_host}:{cfg.upstream_port}{cfg.base}")
+        sys.exit(0 if ok else 1)
+    if not ok:
+        log.warning("%s (continuing; requests will fail until croit is reachable)", message)
+    try:
+        server = Gate(cfg)
+    except OSError as e:
+        die(f"cannot listen on {cfg.listen[0]}:{cfg.listen[1]}: {e}")
+    log.info("listening on %s:%d, forwarding %d routes to %s://%s:%d%s", cfg.listen[0],
+             server.server_address[1], len(ROUTES), cfg.scheme, cfg.upstream_host,
+             cfg.upstream_port, cfg.base)
+
+    def stop(*_):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)
