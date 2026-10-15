@@ -17,7 +17,6 @@ from bucketeer.bucket_keys import key_uid
 
 from .backends import (
     admin_backend,  # noqa: F401  (fixture: both admin backends)
-    croit_only,
     on_rgw,
 )
 from .test_auth import TEAM_GROUP, USERS_GROUP

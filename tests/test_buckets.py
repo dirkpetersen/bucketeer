@@ -166,10 +166,9 @@ def test_tenant_user_sees_short_names(tmp_path, s3_endpoint):
         assert e.db.buckets.get("acme:carol-new")["owner_uid"] == "acme$carol"
         assert e.tags("carol-new") == {"bucketeer-budget": "WT-123"}
         assert set(e.used) == {CAROL_KEY}
-        if not on_rgw():  # delete on rgw is Phase 5 A4
-            assert carol.delete("/api/buckets/carol-new", headers=H).status_code == 200
-            assert "acme:carol-new" not in e.croit_state.buckets
-            assert e.db.buckets.get("acme:carol-new") is None
+        assert carol.delete("/api/buckets/carol-new", headers=H).status_code == 200
+        assert "acme:carol-new" not in e.croit_state.buckets
+        assert e.db.buckets.get("acme:carol-new") is None
     finally:
         e.db.close()
 
@@ -453,7 +452,6 @@ def test_no_access_key_means_clear_error_for_tag(env):
 
 
 def test_delete_empty_bucket(env):
-    croit_only("bucket delete is Phase 5 A4")
     r = env.alice.request("DELETE", "/api/buckets/alice-empty", headers=H)
     assert r.status_code == 200 and r.json() == {"name": "alice-empty"}
     assert "alice-empty" not in env.moto_buckets()
@@ -464,14 +462,13 @@ def test_delete_empty_bucket(env):
 
 
 def test_delete_removes_sqlite_row(env):
-    croit_only("bucket delete is Phase 5 A4")
     assert create(env.alice).status_code == 201
     assert env.alice.delete("/api/buckets/alice-new", headers=H).status_code == 200
     assert env.db.buckets.get("alice-new") is None
 
 
 def test_delete_non_empty_requires_confirmation(env):
-    croit_only("bucket delete is Phase 5 A4")
+    croit_only("rgw deletes non-empty buckets as a background job (202), see test_bucket_delete")
     r = env.alice.request("DELETE", "/api/buckets/alice-data", headers=H)
     assert r.status_code == 409
     assert r.json()["requiresConfirmation"] is True
@@ -493,7 +490,6 @@ def test_delete_non_empty_requires_confirmation(env):
 
 
 def test_delete_with_confirmation_name_works_for_empty_bucket_too(env):
-    croit_only("bucket delete is Phase 5 A4")
     r = env.alice.request("DELETE", "/api/buckets/alice-empty",
                           json={"confirmName": "alice-empty"}, headers=H)
     assert r.status_code == 200 and "alice-empty" not in env.moto_buckets()
