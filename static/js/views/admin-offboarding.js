@@ -63,7 +63,8 @@ function people(run) {
 }
 
 function limitsText(th) {
-  return `more than ${th.maxPercent}% of known people (and at least ${th.minPeopleForPercent}), or more than ${th.maxPeople} people`;
+  const n = th.minPeopleForPercent;
+  return `more than ${th.maxPercent}% of known people and at least ${n} ${n === 1 ? "person" : "people"}, or more than ${th.maxPeople} people`;
 }
 
 function limitsLine(run) {
@@ -74,7 +75,7 @@ function limitsLine(run) {
 
 const LIMIT_FIELDS = [
   { key: "maxPercent", label: "Largest share of people", unit: "%", min: 1, max: 100,
-    help: "Abort when more than this share of known people would be suspended, provided the minimum below is also reached." },
+    help: "Abort when more than this share of known people would be suspended, provided the minimum below is also reached. 100 turns the share check off." },
   { key: "minPeopleForPercent", label: "Minimum people for that share", unit: "people", min: 1, max: 1000,
     help: "The share only counts from this many people on, so one or two genuine leavers on a small installation go through." },
   { key: "maxPeople", label: "Largest number of people", unit: "people", min: 1, max: 100000,
@@ -215,6 +216,8 @@ export function renderOffboarding() {
       }
     }
     if (bad.length) return showLimitErrors(bad, inputs, errBox);
+    for (const f of LIMIT_FIELDS) inputs[f.key].value = String(Number(inputs[f.key].value.trim()));
+    if (!Object.keys(body).length) return;
     button.disabled = true;
     try {
       const res = await saveOffboardingSettings(body);

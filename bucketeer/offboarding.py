@@ -106,6 +106,12 @@ def should_abort(candidates: int, known: int, th: dict[str, Any]) -> bool:
     return over_pct or candidates > th["maxPeople"]
 
 
+def limits_text(th: dict[str, Any]) -> str:
+    n = th["minPeopleForPercent"]
+    return (f"more than {th['maxPercent']}% of known people and at least "
+            f"{n} {'person' if n == 1 else 'people'}, or more than {th['maxPeople']} people")
+
+
 def load_settings(store) -> dict[str, Any]:
     saved = store.get("offboarding", None) or {}
     out = dict(DEFAULT_SETTINGS)
@@ -171,10 +177,12 @@ class OffboardingService:
             raise AlreadyRunning
         self.running = True
         try:
-            mode = (await self.db.run(load_settings, self.db.settings))["mode"]
+            cfg = await self.db.run(load_settings, self.db.settings)  # one snapshot
+            mode = cfg["mode"]
+            th = {k: cfg[k] for k in THRESHOLD_KEYS}
             run_id = await self.db.run(self.db.offboarding_runs.start, mode, trigger, actor)
             task = asyncio.get_running_loop().create_task(
-                self._execute(run_id, mode, trigger, actor))
+                self._execute(run_id, mode, trigger, actor, th))
         except BaseException:
             self.running = False
             raise
@@ -194,10 +202,9 @@ class OffboardingService:
             t.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
-    async def _execute(self, run_id: int, mode: str, trigger: str, actor: str) -> None:
+    async def _execute(self, run_id: int, mode: str, trigger: str, actor: str,
+                       th: dict[str, Any]) -> None:
         outcome, reason, counts, results = "failed", None, {}, []
-        cfg = await self.db.run(load_settings, self.db.settings)
-        th = {k: cfg[k] for k in THRESHOLD_KEYS}
         try:
             outcome, reason, counts, results = await self._run(run_id, mode, actor, th)
         except (LdapUnavailable, InvalidCredentials) as e:
@@ -310,8 +317,7 @@ class OffboardingService:
         ]
         if should_abort(len(candidates), len(people), th):
             what = (f"{len(candidates)} of {len(people)} known people would be suspended "
-                    f"(limits: more than {th['maxPercent']}% of known people and at least "
-                    f"{th['minPeopleForPercent']} people, or more than {th['maxPeople']} people)")
+                    f"(limits: {limits_text(th)})")
             for r in results:
                 r["action"] = "not_suspended"
             return "aborted", f"{what}. AD may be misconfigured; nobody was suspended.", \

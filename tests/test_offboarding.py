@@ -1022,7 +1022,7 @@ def test_changed_thresholds_apply_and_are_stored_in_the_run(env):
     env.db.known_accounts.clear_offboarding_for_uid("alice")
     run = go(env)
     assert run["outcome"] == "aborted"
-    assert "more than 30% of known people and at least 1 people, or more than 7 people" \
+    assert "more than 30% of known people and at least 1 person, or more than 7 people" \
         in run["reason"]
     assert run["counts"]["thresholds"]["maxPercent"] == 30
     (a,) = acts(env, "offboarding.aborted")
@@ -1064,3 +1064,24 @@ def test_bad_stored_thresholds_fall_back(env):
     env.db.settings.set("offboarding", {"maxPercent": 0, "minPeopleForPercent": "4",
                                         "maxPeople": True})
     assert env.svc.settings() == offboarding.DEFAULT_SETTINGS
+
+
+def test_settings_read_failure_leaves_the_service_usable(env, monkeypatch):
+    real = offboarding.load_settings
+
+    def boom(store):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(offboarding, "load_settings", boom)
+    with pytest.raises(RuntimeError):
+        asyncio.run(env.svc.start("manual", "bob"))
+    assert env.svc.running is False
+    assert env.db.offboarding_runs.list(10) == []  # not started at all
+    monkeypatch.setattr(offboarding, "load_settings", real)
+    assert go(env)["outcome"] == "ok"  # later runs still possible
+
+
+def test_limits_text_singular():
+    th = {"maxPercent": 10, "minPeopleForPercent": 1, "maxPeople": 20}
+    assert "at least 1 person," in offboarding.limits_text(th)
+    assert "at least 2 people," in offboarding.limits_text({**th, "minPeopleForPercent": 2})
