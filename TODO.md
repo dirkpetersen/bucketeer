@@ -210,7 +210,7 @@ order, except that A3 to A6 can run in parallel once A2 is done.
   Ops counterpart (tasks, `.s3cfg`, placements) raise a clear error until
   A3 to A5 replace their callers. `create_app` builds the chosen client. A
   contract test suite runs the same client tests against both backends.
-- [ ] A3. Bucket create and versioning on the S3 data plane with the user's
+- [x] A3. Bucket create and versioning on the S3 data plane with the user's
   own key when `ADMIN_BACKEND=rgw`: CreateBucket with the placement as
   `LocationConstraint`, object lock at create, PutBucketVersioning (object-lock
   guard kept). Idempotent adoption, budget tag and noncurrent rule unchanged.

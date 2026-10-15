@@ -1,6 +1,7 @@
 """How a bucket is created and its versioning changed, per admin backend (Phase 5 A3).
 
-`buckets.py` calls `ops_for(settings)` and never branches on the backend itself:
+`buckets.py` calls `ops_for(client, settings)` (by `client.backend`) and never branches on the
+backend itself:
 
 - `CroitBucketOps` (`ADMIN_BACKEND=croit`): the croit API (`PUT /s3/buckets/{name}` returns a
   task that is awaited, `PATCH /s3/buckets/{name}` for versioning). Exactly the behaviour
