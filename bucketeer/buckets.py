@@ -43,6 +43,8 @@ or capitals never matches anything, so a user cannot address another tenant's bu
   user's own key; null = unknown).
 A successful delete also revokes the bucket's bucket keys (`bucket_keys.py`): the answer
 may carry `keysRevoked: n` and, if a key user could not be deleted, a `warning`.
+With `ADMIN_BACKEND=rgw`, create and the versioning toggle use the S3 data plane with the
+user's own key (`bucket_ops.py`).
 Audited: `bucket.create`, `bucket.delete`, `bucket.tag_sync`, `bucket.versioning`
 (before/after).
 """
@@ -60,6 +62,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from . import bucket_delete, s3docs
 from .admin import croit_http_error
 from .auth import SessionUser, require_user
+from .bucket_ops import S3OpError, http_error, ops_for
 from .budget import BudgetNumberError, budget_example, validate_budget_number
 from .croit import (
     CroitClient,
@@ -159,6 +162,11 @@ def _quota(q: dict | None) -> dict[str, Any]:
             "maxObjects": bound(q.get("maxObjects"))}
 
 
+def _api_error(e: CroitClientError) -> HTTPException:
+    """The HTTP answer for a failed admin or S3 operation (S3 ones carry their own text)."""
+    return (http_error(e) if isinstance(e, S3OpError) else None) or croit_http_error(e)
+
+
 async def _own_buckets(croit: CroitClient, uid: str) -> list[dict]:
     """The buckets croit says the user owns (the ownership source of truth)."""
     try:
@@ -190,6 +198,7 @@ async def _audit_unsure(request: Request, actor: str, action: str, target: str, 
     nothing and is not audited. Never raises."""
     if isinstance(exc, RgwAdminUnsupported):
         return  # the backend cannot do this at all: a definite no-op
+    request.app.state.croit.invalidate_lists()  # the change may have happened
     if isinstance(exc, CroitError) and exc.status < 500:
         return
     try:
@@ -284,6 +293,8 @@ async def list_buckets(request: Request, acct: Account):
     sem = asyncio.Semaphore(8)
 
     async def versioning(b: dict) -> str | None:
+        if b.get("versioning") in _STATES:  # the rgw listing carries it: no extra call
+            return _STATES[b["versioning"]]
         async with sem:
             try:
                 state = (await croit.get_bucket(b["bucket"], owner=acct.uid)).get("versioning")
@@ -294,6 +305,8 @@ async def list_buckets(request: Request, acct: Account):
     async def locked(b: dict, state: str | None) -> bool | None:
         if state not in ("enabled", "suspended"):
             return False  # object lock requires versioning
+        if isinstance(b.get("objectLock"), bool):  # carried by the rgw listing
+            return b["objectLock"]
         async with sem:
             try:
                 return await request.app.state.s3.call(
@@ -391,6 +404,7 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
              "Bucket names are unique across the whole storage system.")
 
     async def existing() -> dict | None:
+        croit.invalidate_lists()  # never judge ownership by a cached listing
         return next((b for b in await croit.list_buckets() or [] if b.get("bucket") == full), None)
 
     async def own_unrecorded() -> bool:
@@ -401,7 +415,10 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
         return await db.run(db.buckets.get, full) is None
 
     adopted = False
+    ops = ops_for(croit, request.app.state.settings)
+    versioned = body.versioning or body.objectLock
     async with _user_lock(request, acct.uid):
+        created = None
         try:
             found = await existing()
             if found is not None:
@@ -413,13 +430,10 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
                 adopted = True
             else:
                 try:
-                    task = await croit.create_bucket(
-                        name, acct.uid,
-                        versioning="ENABLED" if (body.versioning or body.objectLock) else None,
-                        object_lock=True if body.objectLock else None,
-                        placement=placement,
-                    )
-                    await croit.wait_for_task(task)
+                    created = await ops.create(
+                        request, acct, name, versioned=body.versioning or body.objectLock,
+                        object_lock=body.objectLock, placement=placement)
+                    versioned = created.versioned
                 except CroitError as e:
                     if e.status != 409 or not await own_unrecorded():
                         raise
@@ -428,16 +442,20 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
             raise
         except CroitError as e:
             if e.status == 409:
+                row = await db.run(db.buckets.get, full)
+                if row is not None and row.get("owner_uid") == acct.uid:
+                    raise HTTPException(409, "You already own this bucket.") from None
                 raise HTTPException(409, taken) from None
             await _audit_unsure(request, user.username, "bucket.create_failed", full, acct, e)
-            raise croit_http_error(e) from None
+            raise _api_error(e) from None
         except CroitTaskError as e:
             await _audit_unsure(request, user.username, "bucket.create_failed", full, acct, e)
             raise _task_failure(e, "create the bucket") from None
         except CroitClientError as e:
             await _audit_unsure(request, user.username, "bucket.create_failed", full, acct, e)
-            raise croit_http_error(e) from None
+            raise _api_error(e) from None
 
+        croit.invalidate_lists()  # the bucket now exists (S3-side creates bypass Admin Ops)
         recorded = True
         try:
             await db.run(db.buckets.delete, full)  # a leftover row of an earlier bucket
@@ -455,7 +473,6 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
                 except Exception:
                     log.exception("could not mark the tag of %s as synced", full)
                     tag_ok = False
-        versioned = body.versioning or body.objectLock
         # Adopted buckets keep whatever lifecycle they have: we did not create them, so
         # we neither enable versioning nor add a rule.
         rule_days = body.noncurrentDays if (versioned and not adopted) else None
@@ -467,6 +484,8 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
                          budget=budget, versioning=versioned,
                          noncurrentDays=rule_days, noncurrentRuleApplied=rule_ok,
                          objectLock=body.objectLock, tagSynced=tag_ok,
+                         versioningApplied=None if (created is None or adopted)
+                         else created.applied,
                          placement=None if adopted else placement,
                          recorded=recorded, adopted=adopted)
         except Exception:
@@ -482,6 +501,8 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
                        "recorded now. Versioning and object lock were not changed.")
         out["versioning"] = None
         out["objectLock"] = None
+    elif created is not None and created.applied is None and versioned is False:
+        out["versioning"] = None  # unknown: the warning says so
     warnings = []
     if not recorded:
         warnings.append("The bucket was created, but Bucketeer could not record it. "
@@ -489,6 +510,8 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
     elif not tag_ok:
         warnings.append("The bucket was created, but its budget number could not be saved "
                         "as a bucket tag yet. It will be retried automatically.")
+    if created is not None and created.warning:
+        warnings.append(created.warning)
     if rule_ok is False:
         warnings.append("Versioning is on but the old-version cleanup rule could not be set. "
                         "Set it under Lifecycle.")
@@ -606,11 +629,13 @@ async def set_versioning(name: str, body: VersioningBody, request: Request, acct
                 raise HTTPException(409, "This bucket has object lock, so versioning cannot be "
                                          "paused.")
         try:
-            await croit.update_bucket(full, owner=None, versioning=target.upper())
+            await ops_for(croit, request.app.state.settings).set_versioning(
+                request, acct, full, short, target)
         except CroitClientError as e:
             await _audit_unsure(request, user.username, "bucket.versioning_failed", full, acct,
                                 e, before=before, wanted=target)
-            raise croit_http_error(e) from None
+            raise _api_error(e) from None
+        croit.invalidate_lists()  # the S3-side change bypassed Admin Ops
         try:
             after = _STATES.get((await croit.get_bucket(full, owner=acct.uid)).get("versioning"))
         except Exception:

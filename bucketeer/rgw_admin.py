@@ -176,6 +176,11 @@ def _bucket_view(stats: dict) -> dict:
         "zonegroup": stats.get("zonegroup"),
         "mtime": stats.get("mtime"),
         "bucket_quota": _quota_view(stats.get("bucket_quota")),
+        # carried by the stats, so the bucket list needs no extra call per bucket
+        "versioning": ("OFF" if not stats["versioned"] else "ENABLED" if stats.get(
+            "versioning_enabled") else "SUSPENDED") if "versioned" in stats else None,
+        "objectLock": (bool(stats["object_lock_enabled"])
+                       if "object_lock_enabled" in stats else None),
         "usage": {"default": usage},
         "usageSum": usage,
     }

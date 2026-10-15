@@ -17,7 +17,7 @@ from mock.croit_mock import SEED_USERS, MockHooks
 from mock.croit_mock import create_app as create_mock
 from mock.s3_bridge import S3Bridge
 
-from .backends import admin_client
+from .backends import admin_backend, admin_client, croit_only, on_rgw  # noqa: F401
 from .conftest import REQUIRED
 from .s3_forget import forgetting
 from .test_admin import Transport
@@ -90,12 +90,21 @@ class Env:
         return [c for c in self.transport.mutations() if path_part in c[1]]
 
     def break_tagging(self):
-        broken = MagicMock()
         err = ClientError({"Error": {"Code": "InternalError", "Message": "boom"}},
                           "GetBucketTagging")
-        broken.get_bucket_tagging.side_effect = err
-        broken.put_bucket_tagging.side_effect = err
-        self.app.state.s3.factory = lambda *a: broken
+
+        class NoTagging:
+            """The real client, except that tagging fails (create still reaches S3)."""
+
+            def __init__(self, real):
+                self.real = real
+                self.get_bucket_tagging = MagicMock(side_effect=err)
+                self.put_bucket_tagging = MagicMock(side_effect=err)
+
+            def __getattr__(self, name):
+                return getattr(self.real, name)
+
+        self.app.state.s3.factory = lambda *a: NoTagging(self.real_factory(*a))
 
     def fix_tagging(self):
         self.app.state.s3.factory = self.real_factory
@@ -157,9 +166,10 @@ def test_tenant_user_sees_short_names(tmp_path, s3_endpoint):
         assert e.db.buckets.get("acme:carol-new")["owner_uid"] == "acme$carol"
         assert e.tags("carol-new") == {"bucketeer-budget": "WT-123"}
         assert set(e.used) == {CAROL_KEY}
-        assert carol.delete("/api/buckets/carol-new", headers=H).status_code == 200
-        assert "acme:carol-new" not in e.croit_state.buckets
-        assert e.db.buckets.get("acme:carol-new") is None
+        if not on_rgw():  # delete on rgw is Phase 5 A4
+            assert carol.delete("/api/buckets/carol-new", headers=H).status_code == 200
+            assert "acme:carol-new" not in e.croit_state.buckets
+            assert e.db.buckets.get("acme:carol-new") is None
     finally:
         e.db.close()
 
@@ -173,7 +183,8 @@ def test_options_for_user_and_admin(env):
     o = env.alice.get("/api/buckets/options").json()
     assert o["naming"]["prefix"] == "alice-" and o["naming"]["hasPattern"] is False
     assert "alice-" in o["naming"]["hint"]
-    assert o["placements"] == [] and o["defaultPlacement"] == "default-placement"
+    assert o["placements"] == []
+    assert o["defaultPlacement"] == (None if on_rgw() else "default-placement")
     assert o["defaultBudgetNumber"] == "WT-9" and o["budgetRequired"] is True
     assert env.bob.get("/api/buckets/options").json()["budgetRequired"] is False
 
@@ -183,9 +194,10 @@ def test_options_offer_placements_only_when_more_than_one(env):
                         {"default": "default-placement", "allowed": ["nvme-placement"]})
     o = env.alice.get("/api/buckets/options").json()
     assert o["placements"] == ["default-placement", "nvme-placement"]
-    env.db.settings.set("placement", {"default": None, "allowed": ["nvme-placement"]})
-    assert env.alice.get("/api/buckets/options").json()["placements"] == [
-        "default-placement", "nvme-placement"]
+    if not on_rgw():  # croit supplies its own default; with rgw only the stored one exists
+        env.db.settings.set("placement", {"default": None, "allowed": ["nvme-placement"]})
+        assert env.alice.get("/api/buckets/options").json()["placements"] == [
+            "default-placement", "nvme-placement"]
     env.db.settings.set("placement", {"default": None, "allowed": []})
     assert env.alice.get("/api/buckets/options").json()["placements"] == []
 
@@ -321,7 +333,9 @@ def test_create_enforces_naming_prefix_and_pattern(env):
     r = create(env.alice, name="alice-new1")
     assert r.status_code == 422 and "format" in r.json()["detail"]
     assert create(env.alice, name="alice-new").status_code == 201
-    assert env.mutations() == [("PUT", "/api/s3/buckets/alice-new")]
+    # croit makes the bucket through its API; on rgw the user's own S3 call does
+    assert env.mutations() == ([] if on_rgw() else [("PUT", "/api/s3/buckets/alice-new")])
+    assert "alice-new" in env.croit_state.buckets
 
 
 def test_budget_required_for_users_optional_for_admins(env):
@@ -360,7 +374,8 @@ def test_budget_admin_pattern_is_applied(env):
 def test_placement_must_be_allowed(env):
     r = create(env.alice, placement="nvme-placement")
     assert r.status_code == 422 and "placement" in r.json()["detail"]
-    env.db.settings.set("placement", {"default": None, "allowed": ["nvme-placement"]})
+    env.db.settings.set("placement", {"default": "default-placement",
+                                      "allowed": ["nvme-placement"]})
     assert create(env.alice, placement="mystery").status_code == 422
     assert env.mutations() == []
     r = create(env.alice, placement="nvme-placement")
@@ -426,6 +441,10 @@ def test_tag_keeps_foreign_tags(env):
 def test_no_access_key_means_clear_error_for_tag(env):
     env.croit_state.users["alice"].keys.clear()
     r = create(env.alice)
+    if on_rgw():  # the bucket is created with the user's own key, and they have none
+        assert r.status_code == 409 and "access key" in r.json()["detail"]
+        assert "alice-new" not in env.croit_state.buckets and env.audit("bucket.create") == []
+        return
     # the bucket is created (croit is the admin plane); only the tag is deferred
     assert r.status_code == 201 and r.json()["tagSynced"] is False
 
@@ -434,6 +453,7 @@ def test_no_access_key_means_clear_error_for_tag(env):
 
 
 def test_delete_empty_bucket(env):
+    croit_only("bucket delete is Phase 5 A4")
     r = env.alice.request("DELETE", "/api/buckets/alice-empty", headers=H)
     assert r.status_code == 200 and r.json() == {"name": "alice-empty"}
     assert "alice-empty" not in env.moto_buckets()
@@ -444,12 +464,14 @@ def test_delete_empty_bucket(env):
 
 
 def test_delete_removes_sqlite_row(env):
+    croit_only("bucket delete is Phase 5 A4")
     assert create(env.alice).status_code == 201
     assert env.alice.delete("/api/buckets/alice-new", headers=H).status_code == 200
     assert env.db.buckets.get("alice-new") is None
 
 
 def test_delete_non_empty_requires_confirmation(env):
+    croit_only("bucket delete is Phase 5 A4")
     r = env.alice.request("DELETE", "/api/buckets/alice-data", headers=H)
     assert r.status_code == 409
     assert r.json()["requiresConfirmation"] is True
@@ -471,6 +493,7 @@ def test_delete_non_empty_requires_confirmation(env):
 
 
 def test_delete_with_confirmation_name_works_for_empty_bucket_too(env):
+    croit_only("bucket delete is Phase 5 A4")
     r = env.alice.request("DELETE", "/api/buckets/alice-empty",
                           json={"confirmName": "alice-empty"}, headers=H)
     assert r.status_code == 200 and "alice-empty" not in env.moto_buckets()
@@ -563,6 +586,7 @@ def test_s3_client_config(env):
 
 
 def test_failing_task_output_never_reaches_the_response(env, caplog):
+    croit_only("croit tasks exist only on the croit backend")
     marker = "SECRET-HOST-radosgw-admin-acme:private"
     real_view = env.croit_state.task_view
 
@@ -619,6 +643,7 @@ def test_set_tag_synced_failure_leaves_it_pending(env, monkeypatch):
 
 
 def test_admin_default_placement_used_when_croit_placements_unreadable(env):
+    croit_only("croit placement-list failures exist only on the croit backend")
     import httpx
 
     env.db.settings.set("placement", {"default": "nvme-placement", "allowed": []})

@@ -191,7 +191,6 @@ def test_other_users_and_unknown_buckets_are_404(env):
 
 
 def test_limits_per_bucket_and_per_user(env):
-    croit_only("creates a bucket through croit (Phase 5 A3)")
     for i in range(5):
         assert mk(env.alice, label=f"k{i}").status_code == 201
     r = mk(env.alice, label="k5")

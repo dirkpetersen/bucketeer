@@ -135,16 +135,19 @@ def test_when_the_service_user_cannot_be_identified_nobody_resolves(env):
     assert env.alice.get("/api/account").json()["status"] == "ready"
 
 
-# -- the Admin Ops gaps answer 501 and are not "outcome unknown" ------------------------
+# -- bucket operations that have no Admin Ops counterpart still work -----------------
 
 
-def test_bucket_create_and_versioning_answer_501_without_failure_audits(env):
-    r = create(env.alice, name="alice-new")
-    assert r.status_code == 501 and "isn't available" in r.json()["detail"]
+def test_bucket_create_versioning_and_delete_work_without_failure_audits(env):
+    # nothing answers 501 on rgw any more: A3 (S3 create, versioning), A4 (delete job)
+    assert create(env.alice, name="alice-new").status_code == 201
     r = env.alice.put("/api/buckets/alice-data/versioning", json={"enabled": True}, headers=H)
-    assert r.status_code == 501
+    assert r.status_code == 200
+    r = env.alice.request("DELETE", "/api/buckets/alice-empty", headers=H)
+    assert r.status_code == 200, r.text
     assert [a["action"] for a in env.audit("bucket.") if a["action"].endswith("_failed")] == []
-    assert "alice-new" not in {b["name"] for b in env.alice.get("/api/buckets").json()["buckets"]}
+    names = {b["name"] for b in env.alice.get("/api/buckets").json()["buckets"]}
+    assert "alice-new" in names and "alice-empty" not in names
 
 
 def test_a_bucket_key_uid_never_equals_the_service_uid(env, monkeypatch):

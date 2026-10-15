@@ -2,6 +2,7 @@
 
 import pytest
 
+from .backends import admin_backend, on_rgw  # noqa: F401
 from .test_buckets import ALICE_KEY, Env, H, create
 
 

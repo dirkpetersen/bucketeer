@@ -547,6 +547,31 @@ class CroitState:
         return bucket
 
     @locked
+    def mirror_s3_bucket(self, name: str, owner: str, *, versioning: str = "OFF",
+                         object_lock: bool = False, placement: str | None = None):
+        """Record a bucket that a user created over the S3 API (the S3 bridge calls this
+        after moto accepted it), WITHOUT firing the bucket_created hook: the S3 backend
+        already has it. `name` is the short name; the owner's tenant qualifies it."""
+        user = self.get_user(owner)
+        full = f"{user.tenant}:{name}" if user.tenant else name
+        if full in self.buckets:
+            return self.buckets[full]
+        bucket = Bucket(full, owner, versioning=versioning, object_lock=object_lock,
+                        placement=placement or "default-placement")
+        self.buckets[full] = bucket
+        return bucket
+
+    @locked
+    def mirror_s3_versioning(self, name: str, owner: str, status: str):
+        """A user's PutBucketVersioning (`Enabled|Suspended`) reached the S3 backend."""
+        user = self.get_user(owner)
+        full = f"{user.tenant}:{name}" if user.tenant else name
+        bucket = self.buckets.get(full)
+        if bucket is not None and bucket.owner == owner:
+            bucket.versioning = {"Enabled": "ENABLED", "Suspended": "SUSPENDED"}.get(
+                status, bucket.versioning)
+
+    @locked
     def update_bucket(self, name: str, body: dict):
         bucket = self.get_bucket(name)
         old = bucket.name

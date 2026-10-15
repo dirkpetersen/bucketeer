@@ -233,8 +233,16 @@ order, except that A3 to A6 can run in parallel once A2 is done.
   operator guide for creating the Admin Ops service user with its caps on a
   croit cluster.
 - [ ] (needs cluster) Admin Ops on the real Reef cluster: caps, tenant uids,
-  key add and remove, quotas, suspend, bucket stats, purge, placement in
-  `LocationConstraint`, and whether croit's UI shows the changes at once.
+  key add and remove, quotas, suspend, bucket stats, purge, and whether
+  croit's UI shows the changes at once. Bucket create with the user's own key
+  (A3): RGW accepts `:<placement>` (empty api name, which Reef's parser
+  does not check against the zonegroup) as `LocationConstraint` and uses the
+  default placement when none is sent. If it rejects the empty prefix, the
+  fallback is to set `S3_REGION` to the zonegroup api name and send
+  `<api>:<placement>`. On Reef a repeat CreateBucket of an own bucket
+  answers 200 (not `BucketAlreadyOwnedByYou`), so Bucketeer sends HeadBucket
+  first; check that HeadBucket gives 200 for an owned bucket and 403/404
+  otherwise, and that `ObjectLockEnabledForBucket` also enables versioning.
   Also every shape the mock marks as uncertain (module docstring of
   `mock/rgw_admin_mock.py`): repeat create without `exclusive`, key-delete
   errors, quota body forms, `?list`, tenant bucket forms, and whether
