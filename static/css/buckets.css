@@ -444,7 +444,6 @@
 .bk-job { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); margin-top: var(--sp-1);
   font-size: var(--fs-sm); color: var(--text); font-variant-numeric: tabular-nums; }
 .bk-job .spinner { color: var(--accent-text); }
-.bk-job-meter { flex: 1 1 8rem; max-width: 16rem; margin-top: 0; }
 .bk-job-stopped { align-items: flex-start; flex-wrap: nowrap; padding: var(--sp-3); border-radius: var(--r-md);
   border: 1px solid var(--border); background: var(--surface-2); }
 .bk-job-stopped[data-kind="failed"] { background: var(--danger-bg); border-color: var(--danger); }

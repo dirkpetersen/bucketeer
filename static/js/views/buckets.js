@@ -78,17 +78,11 @@ function usageBlock(b) {
 function jobBlock(job, onRetry) {
   if (job.state === "queued" || job.state === "running") {
     const done = job.deletedObjects || 0;
-    const total = job.objectsHint || 0;
+    // Versions and delete markers are counted, so the number can exceed the object count.
     const text = job.state === "queued" ? "Waiting to start deleting…"
-      : `Deleting… ${formatCount(done)} ${done === 1 ? "object" : "objects"} removed${total > done ? ` of about ${formatCount(total)}` : ""}`;
-    const out = h("div", { class: "bk-job", role: "status" },
+      : `Deleting… ${formatCount(done)} object ${done === 1 ? "version" : "versions"} removed`;
+    return h("div", { class: "bk-job", role: "status" },
       h("span", { class: "spinner", "aria-hidden": "true" }), h("span", { class: "bk-job-t", text }));
-    if (total > 0) {
-      const fill = h("span", { class: "meter-fill" });
-      fill.style.width = `${Math.min(100, (done / total) * 100)}%`;
-      out.append(h("span", { class: "meter bk-job-meter", "data-level": "ok", role: "img", "aria-label": `${Math.min(100, Math.round((done / total) * 100))}% deleted` }, fill));
-    }
-    return out;
   }
   const blocked = job.state === "blocked";
   return h("div", { class: "bk-job bk-job-stopped", "data-kind": job.state, role: "status" },
@@ -292,6 +286,13 @@ export function bucketsCard() {
       else toast.show(`Bucket ${b.name} deleted.`);
     } catch (err) {
       deleting.delete(b.name);
+      if (err.status === 409 && err.body?.job) {
+        // Already being deleted: show that job's progress.
+        jobs.set(err.body.job.bucket, err.body.job);
+        paint();
+        schedulePoll();
+        return;
+      }
       if (err.status === 409 && err.body?.requiresConfirmation) {
         // The statistics said "empty" but the bucket holds data: ask again with the real numbers.
         paint();

@@ -52,6 +52,7 @@ log = logging.getLogger("bucketeer.bucket_delete")
 AUTOSTART = True  # request handlers start the job task (tests switch it off and drive it)
 RESUME_ON_START = True  # the lifespan resumes unfinished jobs (tests switch it off)
 BATCH = 1000  # ListObjectVersions page and DeleteObjects batch (S3 maximum)
+MAX_BATCHES = 200_000  # hard cap on batches per pass (200 million entries)
 MAX_ROUNDS = 5  # empty passes before giving up on a bucket that keeps receiving objects
 MAX_PARALLEL = 3  # jobs running at the same time
 SAMPLE = 10  # refused versions looked at to describe the lock
@@ -118,11 +119,13 @@ def _code(e: ClientError) -> str:
     return str(e.response.get("Error", {}).get("Code", ""))
 
 
-def _batch(s3, bucket: str, key_marker: str | None) -> dict:
+def _batch(s3, bucket: str, marker: tuple[str, str | None] | None) -> dict:
     """One page of versions and delete markers, removed with one DeleteObjects."""
     kw: dict[str, Any] = {"Bucket": bucket, "MaxKeys": BATCH}
-    if key_marker:
-        kw["KeyMarker"] = key_marker
+    if marker:
+        kw["KeyMarker"] = marker[0]
+        if marker[1]:
+            kw["VersionIdMarker"] = marker[1]
     try:
         page = s3.list_object_versions(**kw)
     except ClientError as e:
@@ -144,11 +147,15 @@ def _batch(s3, bucket: str, key_marker: str | None) -> dict:
                   if (k, v) in by_pair or k in by_key]
     refused = {(k, v) for _, k, v in errors}
     removed = [(k, v, size) for k, v, size in items if (k, v) not in refused]
-    # Deleted entries vanish from the listing, so the next page is the same request again;
-    # only entries RGW refused to remove (object lock) are stepped over, by key.
+    # Deleted entries vanish from the listing, so the next page is the same request again,
+    # unless nothing on it could be removed: then the caller steps past it with `next`, the
+    # last entry of the page (a refused one, so the marker still exists).
+    nxt = None
+    if page.get("IsTruncated") and page.get("NextKeyMarker"):
+        nxt = (page["NextKeyMarker"], page.get("NextVersionIdMarker") or None)
     return {"deleted": len(removed), "bytes": sum(size for _, _, size in removed),
-            "errors": errors, "more": bool(page.get("IsTruncated")),
-            "marker": max((k for _, k, _ in errors), default=None)}
+            "errors": errors, "more": bool(page.get("IsTruncated")), "next": nxt,
+            "items": len(items)}
 
 
 def _abort_uploads(s3, bucket: str) -> int:
@@ -250,7 +257,14 @@ async def run_job(app, job_id: int) -> None:
                 log.exception("bucket delete job %s crashed", job_id)
             await _end(app, job_id, "failed", _failure_text(e), error=type(e).__name__)
         finally:
-            _state(app).tasks.pop(job_id, None)
+            _forget_task(app, job_id)
+
+
+def _forget_task(app, job_id: int) -> None:
+    """Drop this job's task entry (only if it is the current task, never a newer one)."""
+    tasks = _state(app).tasks
+    if tasks.get(job_id) is asyncio.current_task():
+        del tasks[job_id]
 
 
 async def _end(app, job_id: int, state: str, message: str | None, **details) -> None:
@@ -258,11 +272,35 @@ async def _end(app, job_id: int, state: str, message: str | None, **details) -> 
     job = await db.run(db.delete_jobs.get, job_id)
     if job is None or job["state"] not in ("queued", "running"):
         return
+    # Before the new state is visible: a retry right after must be able to start a new task.
+    _forget_task(app, job_id)
     await db.run(db.delete_jobs.finish, job_id, state, message)
     action = {"failed": "bucket.delete_failed", "blocked": "bucket.delete_blocked"}[state]
     await _audit(app, job["owner_ad"], action, job["bucket"], uid=job["owner_uid"], job=job_id,
                  reason=message, deleted=job["deleted_objects"],
                  remaining=job["remaining_objects"], **details)
+
+
+class _Moved(Exception):
+    """The job was ended by someone else (e.g. superseded): stop quietly."""
+
+
+async def _check_owner(app, job: dict) -> None:
+    """Refuse to touch a bucket that is listed with another owner (no S3 call is made)."""
+    croit, uid, full = app.state.croit, job["owner_uid"], job["bucket"]
+    try:
+        mine = [b for b in await croit.list_user_buckets(uid) or []
+                if isinstance(b, dict) and b.get("bucket") == full]
+        if mine and mine[0].get("owner") == uid:
+            return
+        everyone = [b for b in await croit.list_buckets() or []
+                    if isinstance(b, dict) and b.get("bucket") == full]
+    except Exception:
+        raise _Stop("The storage admin API could not be reached. Try again in a minute.") \
+            from None
+    if everyone and everyone[0].get("owner") != uid:
+        raise _Stop("This bucket now belongs to someone else, so it was not emptied.")
+    # not listed at all: it may be gone already; S3 NoSuchBucket takes the gone path
 
 
 async def _run(app, job_id: int) -> None:
@@ -284,36 +322,41 @@ async def _run(app, job_id: int) -> None:
     if owner.get("suspended"):
         raise _Stop("The owner's account is suspended, so the bucket cannot be emptied. "
                     "Ask an administrator, then retry.")
+    await _check_owner(app, job)
 
-    for _ in range(MAX_ROUNDS):
-        remaining, codes, samples, removed = 0, set(), [], 0
-        key_marker = None
+    for _ in range(MAX_ROUNDS):  # a round ends in BucketNotEmpty only when objects arrive
+        refused: dict[tuple[str, str], str] = {}
+        removed = 0
+        marker = None
         gone = False
         await db.run(db.delete_jobs.progress, job_id, 0, 0, 0)
-        while True:
-            res = await s3.call(uid, _batch, short, key_marker)
+        for _batch_no in range(MAX_BATCHES):
+            res = await s3.call(uid, _batch, short, marker)
             if res.get("gone"):
                 gone = True
                 break
-            remaining += len(res["errors"])
+            for code, k, v in res["errors"]:
+                refused[(k, v)] = code
             removed += res["deleted"]
-            codes.update(c for c, _, _ in res["errors"])
-            samples.extend((k, v) for _, k, v in res["errors"][: SAMPLE - len(samples)])
             await db.run(db.delete_jobs.progress, job_id, res["deleted"], res["bytes"],
-                         remaining)
+                         len(refused))
+            if (await db.run(db.delete_jobs.get, job_id))["state"] != "running":
+                return  # superseded or ended elsewhere
             if not res["more"]:
                 break
-            if res["marker"]:
-                key_marker = res["marker"]
-            elif not res["deleted"]:
-                raise _Stop("The storage system did not remove any object versions, so the "
-                            "bucket could not be emptied. Try again later.")
-        if remaining and not removed:
-            await _stuck(app, job, short, remaining, codes, samples)
+            if not res["deleted"]:
+                # a whole page was refused: step past it, or stop if that is not possible
+                if not res["next"] or res["next"] == marker:
+                    break
+                marker = res["next"]
+        else:
+            raise _Stop("This bucket is too large to empty in one go. Retry to continue.")
+        if refused:
+            samples = [kv for kv in refused][:SAMPLE]
+            await _stuck(app, job, short, len(refused), set(refused.values()), samples)
             return
-        if remaining:
-            continue  # progress was made: one more pass picks up what a marker skipped
         if not gone:
+            await _check_owner(app, job)
             await s3.call(uid, _abort_uploads, short)
             outcome = await s3.call(uid, _delete_bucket, short)
             if outcome == "notempty":
@@ -343,9 +386,17 @@ async def _finish(app, job_id: int) -> None:
     db = app.state.db
     job = await db.run(db.delete_jobs.get, job_id)
     full, owner = job["bucket"], SimpleNamespace(uid=job["owner_uid"], username=job["owner_ad"])
-    await db.run(db.buckets.delete, full)
-    keys = await revoke_for_deleted_bucket(_Shim(app), owner, full)
-    await revoke_shares(_Shim(app), owner.username, full)
+    # Only records of the job's owner: after an ownership change they are someone else's.
+    row = await db.run(db.buckets.get, full)
+    if row is None or row["owner_uid"] == owner.uid:
+        await db.run(db.buckets.delete, full)
+    key_rows = await db.run(db.bucket_keys.list, None, full)
+    share_rows = await db.run(db.shares.list_live, full)
+    keys = {"revoked": 0, "failed": []}
+    if all(k["owner_ad_username"].lower() == owner.username.lower() for k in key_rows):
+        keys = await revoke_for_deleted_bucket(_Shim(app), owner, full)
+    if all(r["owner_uid"] == owner.uid for r in share_rows):
+        await revoke_shares(_Shim(app), owner.username, full)
     warning = None
     if keys["failed"]:
         warning = ("The bucket was deleted, but some of its keys could not be removed yet. "
@@ -443,6 +494,11 @@ async def delete_on_rgw(request: Request, acct, user, full: str, short: str, obj
     """The rgw side of `DELETE /api/buckets/{name}` (ownership is already verified)."""
     app, db = request.app, request.app.state.db
     prior = await db.run(db.delete_jobs.latest_for, full)
+    if prior and prior["owner_uid"] != acct.uid:
+        # another owner's old job: the bucket changed hands, so end it for good
+        if prior["state"] != "done":
+            await db.run(db.delete_jobs.supersede, prior["id"])
+        prior = None
     if prior and prior["state"] in ("queued", "running"):
         return JSONResponse(status_code=409, content={
             "detail": "This bucket is already being deleted.", "job": job_view(prior)})

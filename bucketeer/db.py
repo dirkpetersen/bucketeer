@@ -812,6 +812,14 @@ class BucketDeleteJobs(_Repo):
                 "finished_at = NULL, updated_at = ? WHERE id = ? AND state IN "
                 "('blocked', 'failed')", (now(), job_id)).rowcount > 0
 
+    def supersede(self, job_id: int) -> None:
+        """End another owner's job for good (the bucket changed hands)."""
+        with self.db.tx() as c:
+            t = now()
+            c.execute("UPDATE bucket_delete_jobs SET state = 'failed', finished_at = ?, "
+                      "updated_at = ?, last_error = 'The bucket now belongs to someone else.' "
+                      "WHERE id = ? AND state != 'done'", (t, t, job_id))
+
     def progress(self, job_id: int, deleted: int, size: int, remaining: int | None) -> None:
         with self.db.tx() as c:
             c.execute(
