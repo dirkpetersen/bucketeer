@@ -12,6 +12,40 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 ## Open
 
+### Q10: Offboarding: how careful should the daily suspension job be?
+
+- **Blocks:** TODO "Offboarding job"
+- **Context:** CLAUDE.md says that, once a day, Bucketeer suspends the S3
+  account (and its bucket keys) of anyone whose AD account is disabled or
+  who has left the AD group, and never deletes anything. Before it does that
+  automatically, four details need settling:
+  1. **Which S3 accounts are in scope?** The cluster may hold S3 users that
+     don't belong to people, such as service accounts or legacy users that
+     Bucketeer never linked to AD.
+  2. **What if a person comes back,** for example rejoining the group or
+     getting their AD account re-enabled?
+  3. **What if AD looks wrong,** for example unreachable, or a
+     misconfiguration that makes everyone look like they left?
+  4. **Trial run first?** Should it report what it would do before it
+     actually suspends anyone?
+- **Recommendations:**
+  1. Only accounts Bucketeer knows belong to a person: those it created or
+     linked at login, and admin mappings. Anything else is never touched.
+  2. Unsuspend automatically on that person's next successful login, but
+     only for suspensions the job itself made. Suspensions an admin made by
+     hand are never undone automatically.
+  3. Abort the whole run, suspending nobody, if AD can't be read, or if more
+     than 10% of known users (or more than 20 people) would be suspended in
+     one run. Show the reason on the admin page and audit it.
+  4. Yes. The job starts in report-only mode, showing on the admin page who
+     would be suspended. An admin switches it to "enforce" in Settings.
+     It runs at 03:00 local time by default, and an admin can also start it
+     by hand.
+
+**Answer:**
+
+## Resolved
+
 ### Q11: Group shares: which groups, and how big?
 
 - **Blocks:** TODO "Group shares". Sharing with individual people is being
@@ -29,7 +63,9 @@ Each question has a recommendation. Answering "ok" accepts it.
   3. No group shares; people share with individuals only.
 - **Recommendation:** 1.
 
-**Answer:**
+**Answer:** 3, deferred feature
+
+**Decision:** option 3, no group shares; people share with individuals only. Group shares are a deferred feature, listed under "Roadmap" in TODO.md. Recorded in CLAUDE.md.
 
 ### Q12: Public buckets and self-lockout in the raw policy editor
 
@@ -54,7 +90,9 @@ Each question has a recommendation. Answering "ok" accepts it.
   give admins a "public buckets" list, since refusing in the UI alone gives a
   false sense of safety.
 
-**Answer:**
+**Answer:** 2, deferred feature, add to phase 2
+
+**Decision:** option 2, the raw policy editor refuses new or changed public (`Principal: "*"`) and self-lockout statements; existing ones can only be kept as stored or removed. Added as a Phase 2 TODO item. Public buckets as a feature (options 1 and 3) are deferred to the roadmap. Recorded in CLAUDE.md.
 
 ### Q13: May lifecycle rules move data to another storage class?
 
@@ -73,9 +111,9 @@ Each question has a recommendation. Answering "ok" accepts it.
 - **Recommendation:** 2. Admins decide which tiers are open for automatic
   moves, and users can use them without seeing the rest.
 
-**Answer:**
+**Answer:** 1, move to roadmap future
 
-## Resolved
+**Decision:** option 1, no lifecycle transitions in Bucketeer; admins handle tiering. Moved to "Roadmap" in TODO.md. Recorded in CLAUDE.md.
 
 ### Q1: How does a user choose the object for a presigned share link?
 
