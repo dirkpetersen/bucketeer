@@ -6,6 +6,7 @@ import re
 
 import pytest
 
+from .backends import admin_backend  # noqa: F401  (fixture: both admin backends)
 from .test_admin import Env, H
 
 URL = "/api/admin/export/chargeback.csv"

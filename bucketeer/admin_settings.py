@@ -123,7 +123,7 @@ def _mapping_view(m: dict, exists: bool | None) -> dict[str, Any]:
 
 async def _known_uids(croit) -> set[str] | None:
     try:
-        return {str(u["uid"]) for u in await croit.list_users()}
+        return {str(u) for u in await croit.list_user_names()}
     except CroitClientError:
         return None  # a warning, never an error
 

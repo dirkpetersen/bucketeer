@@ -29,11 +29,19 @@ Mapping (croit method -> Admin Ops call; the returned dicts have croit's keys):
   `bucket` (`tenant:name` for a tenant bucket), `id`, `owner`, `tenant`, `placement_rule`,
   `mtime`, `bucket_quota`, `usage`, `usageSum {numObjects, size, ...}` (the `rgw.main`
   category). Tenant caveat: on Reef `GET /admin/bucket?stats=true` WITHOUT `uid` may omit
-  tenant buckets (the mock lists them); `list_buckets` is one call by design (A6 may query per
-  user), verify on the cluster.
+  tenant buckets (the mock lists them). `list_buckets` therefore makes the one global call and,
+  only when users with a tenant exist, one `uid=` call per tenant user (bounded concurrency) and
+  adds the buckets the global call missed. Cluster check: whether the extra calls are needed.
 - `get_bucket`: `GET /admin/bucket?uid=<owner>&bucket=<bare>&stats=true` (the owner is known
   to callers; without it `bucket=tenant/name`); only `versioning` (OFF|ENABLED|SUSPENDED) is
   supplied, not croit's `acl` and `cors`.
+
+Caching (A6): `list_users()` without a filter (the per-user fan-out) is reused for
+`USERS_TTL` seconds per client; concurrent callers, for users and for `list_buckets()`, share
+one in-flight fetch. Every non-GET request (user create/modify/delete, quotas, key put/delete,
+so also the resolver's creates and the admin actions) drops both caches before and after it is
+sent, and detaches a running fetch so its older result is never stored. A failed fetch is never
+cached. `get_user`, `list_keys`, `list_user_buckets` and `list_user_names` are never cached.
 
 Service user: the identity behind `RGW_ADMIN_ACCESS_KEY` is an ordinary RGW user. `service_uid()`
 (`GET /admin/user?access-key=`, cached after the first success, raises when the lookup fails)
@@ -64,9 +72,11 @@ exception text or repr; request URLs are never put into an exception.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import ssl
+import time
 import weakref
 from typing import Any
 from urllib.parse import quote
@@ -83,6 +93,7 @@ log = logging.getLogger(__name__)
 
 CONCURRENCY = 8  # parallel user reads in list_users
 PAGE = 1000  # uids per metadata page
+USERS_TTL = 45.0  # seconds the full user list (the per-user fan-out) is reused
 UNSUPPORTED = "not_supported_by_backend"
 
 
@@ -173,6 +184,50 @@ def _bucket_ref(name: str) -> str:
     return name.replace(":", "/", 1)
 
 
+class _Shared:
+    """One in-flight fetch shared by concurrent callers, plus an optional short result cache.
+
+    `invalidate()` (called by every mutation, on success or failure) drops the cached value AND
+    detaches the running fetch, so later callers start a fresh one and the old result, which
+    may predate the change, is never stored. A failed fetch is never stored: every waiter of
+    that fetch gets the error, the next caller tries again. Results are handed out as copies.
+    """
+
+    def __init__(self, ttl: float):
+        self.ttl = ttl
+        self._gen = 0
+        self._value: Any = None
+        self._at = 0.0
+        self._task: asyncio.Task | None = None
+
+    def invalidate(self) -> None:
+        self._gen += 1
+        self._value = None
+        self._task = None
+
+    async def get(self, fetch):
+        loop = asyncio.get_running_loop()
+        if self._value is not None and time.monotonic() - self._at < self.ttl:
+            return copy.deepcopy(self._value)
+        task = self._task
+        if task is None or task.get_loop() is not loop:
+            gen = self._gen
+            task = loop.create_task(fetch())
+            self._task = task
+
+            def done(t: asyncio.Task, gen: int = gen) -> None:
+                if t.cancelled() or t.exception() is not None:
+                    pass  # never cache a failure (the exception is re-raised to waiters)
+                elif gen == self._gen and self.ttl > 0:
+                    self._value, self._at = copy.deepcopy(t.result()), time.monotonic()
+                if self._task is t:
+                    self._task = None
+
+            task.add_done_callback(done)
+        # shield: one caller's cancellation must not cancel the fetch the others wait on
+        return copy.deepcopy(await asyncio.shield(task))
+
+
 class RgwAdminClient:
     backend = "rgw"  # callers branch on this (placements, endpoint discovery), not on Settings
 
@@ -189,6 +244,8 @@ class RgwAdminClient:
         self._region = settings.s3_region
         self._secrets = {settings.rgw_admin_secret_key.get_secret_value()}
         self._service_uid: str | None = None
+        self._users = _Shared(USERS_TTL)  # full list_users(), the per-user fan-out
+        self._bucket_list = _Shared(0.0)  # list_buckets(): concurrent calls share one fetch
         self._sems: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()  # one per loop
         # httpx logs every request URL at INFO and put_key carries a secret in its query;
         # botocore logs the canonical request (that query) and signatures at DEBUG.
@@ -242,7 +299,32 @@ class RgwAdminClient:
         err.rgw_code = rgw_code
         return err
 
+    def _changed(self) -> None:
+        """Forget cached admin lists: something is about to change or just did."""
+        self._users.invalidate()
+        self._bucket_list.invalidate()
+
     async def _request(
+        self,
+        method: str,
+        path: str,
+        pairs: list[tuple[str, str | None]] | None = None,
+        *,
+        body: Any = None,
+        secrets: tuple[str, ...] = (),
+    ) -> Any:
+        """Every non-GET (create/modify/delete user, quota, key) drops the cached lists before
+        it is sent and again when it ends, success or failure (an unknown outcome may have
+        changed RGW), so a fetch that overlapped the write is never stored."""
+        if method == "GET":
+            return await self._send(method, path, pairs, body=body, secrets=secrets)
+        self._changed()
+        try:
+            return await self._send(method, path, pairs, body=body, secrets=secrets)
+        finally:
+            self._changed()
+
+    async def _send(
         self,
         method: str,
         path: str,
@@ -344,7 +426,14 @@ class RgwAdminClient:
         """All users except the Admin Ops service user, or only `uids` (as croit does, an
         unknown uid in the filter is a 404). Reads run concurrently (bounded); the first
         failure cancels the rest, so nothing keeps hitting RGW after the caller has an error."""
-        wanted = list(uids) if uids else await self._all_uids()
+        if not uids:
+            return await self._users.get(self._fetch_all_users)
+        return await self._read_users(list(uids), strict=True)
+
+    async def _fetch_all_users(self) -> list[dict]:
+        return await self._read_users(await self._all_uids(), strict=False)
+
+    async def _read_users(self, wanted: list[str], *, strict: bool) -> list[dict]:
         sem = self._semaphore()
 
         async def one(uid: str) -> dict | None:
@@ -364,7 +453,7 @@ class RgwAdminClient:
             if not t.cancelled() and t.exception() is not None:
                 raise t.exception()
         found = [t.result() for t in tasks]
-        if uids:
+        if strict:
             for uid, user in zip(wanted, found, strict=True):
                 if user is None:
                     raise CroitError(404, None, f"User {uid} not found")
@@ -535,8 +624,42 @@ class RgwAdminClient:
         return await self._stats_list([("uid", uid)])
 
     async def list_buckets(self) -> list[dict]:
+        """Every bucket with usage, except the service user's. Concurrent calls share one
+        fetch. One `stats=true` call, plus, only when tenant users exist, one call per tenant
+        user for the buckets the global call may have dropped (see `_fetch_buckets`)."""
+        return await self._bucket_list.get(self._fetch_buckets)
+
+    async def _fetch_buckets(self) -> list[dict]:
         mine = await self.service_uid()
-        return [b for b in await self._stats_list([]) if b["owner"] != mine]
+        rows = [b for b in await self._stats_list([]) if b["owner"] != mine]
+        # Reef caveat: `stats=true` without `uid` may omit tenant buckets. Ask per tenant user
+        # (bounded by the shared semaphore) and add what is missing; a failure fails the call.
+        tenant_uids = [u for u in await self._all_uids() if "$" in u]
+        if tenant_uids:
+            have = {b["bucket"] for b in rows}
+            sem = self._semaphore()
+
+            async def one(uid: str) -> list[dict]:
+                async with sem:
+                    return await self.list_user_buckets(uid)
+
+            tasks = [asyncio.ensure_future(one(u)) for u in tenant_uids]
+            try:
+                await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+            finally:
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+            for t in tasks:
+                if not t.cancelled() and t.exception() is not None:
+                    raise t.exception()
+            for t in tasks:
+                for b in t.result():
+                    if b["bucket"] not in have and b["owner"] != mine:
+                        have.add(b["bucket"])
+                        rows.append(b)
+        return rows
 
     async def get_bucket(self, name: str, owner: str | None = None) -> dict:
         stats = await self._bucket_stats(name, owner)

@@ -238,7 +238,10 @@ order, except that A3 to A6 can run in parallel once A2 is done.
   Also every shape the mock marks as uncertain (module docstring of
   `mock/rgw_admin_mock.py`): repeat create without `exclusive`, key-delete
   errors, quota body forms, `?list`, tenant bucket forms, and whether
-  `bucket?stats=true` without `uid` drops tenant buckets. Fix the mock where
+  `bucket?stats=true` without `uid` drops tenant buckets (A6 already adds them with
+  one `uid=` call per tenant user, bounded; if the global call turns out to be
+  complete, drop that loop in `RgwAdminClient._fetch_buckets`), and that
+  concurrent admin page loads stay fast with the 45 s user-list cache. Fix the mock where
   reality differs.
 - [ ] (needs cluster) Remove the croit backend after that check (owner
   decides).
