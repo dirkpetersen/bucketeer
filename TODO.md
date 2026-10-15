@@ -193,7 +193,7 @@ skips them too.
 - [x] Bucket notifications, with endpoints from the admin allowlist only
   (no broker credentials, Q6).
 - [x] Multipart upload cleanup (list and abort).
-- [ ] Subusers (read/write/readwrite/full) and their keys (Q15 rules in CLAUDE.md), on both admin backends.
+- [x] Subusers (read/write/readwrite/full) and their keys (Q15 rules in CLAUDE.md), on both admin backends.
 
 ## Phase 5: RGW Admin Ops instead of the croit API (owner decision)
 
