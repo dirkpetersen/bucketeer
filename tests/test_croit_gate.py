@@ -12,6 +12,7 @@ import re
 import socket
 import stat
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -358,7 +359,15 @@ def test_logs_have_no_tokens_or_queries(gw, caplog, capfd):
     call(gw, "GET", "/api/servers")
     call(gw, "GET", "/api/s3/user-names", token="wrong-" + CLIENT)
     call(gw, "GET", "/api/s3/user-names")
-    text = caplog.text + capfd.readouterr().err
+    deadline = time.monotonic() + 2.0  # the gate logs after the response has gone out
+    text = ""
+    while time.monotonic() < deadline:
+        text += capfd.readouterr().err
+        full = caplog.text + text
+        if all(x in full for x in ("AKLOGTEST0000000001", " 403 ", " 401 ", " 200 ")):
+            break
+        time.sleep(0.02)
+    text = caplog.text + text
     assert "AKLOGTEST0000000001" in text
     assert " 403 " in text and " 401 " in text and " 200 " in text
     for forbidden in (secret, "secretKey", REAL, CLIENT, "wrong-", "?"):

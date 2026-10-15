@@ -3,6 +3,7 @@
 
     .venv/bin/python3 mock/demo.py [--port 8000] [--croit-port 18080] [--moto-port 18081]
                                    [--keep-data] [--password demo]
+                                   [--admin-ops] [--admin-ops-port 18082]
 
 Starts, all on 127.0.0.1 and in this one process: a moto S3 server, the mock croit
 API (mock/croit_mock.py, mirrored into moto by mock/s3_bridge.py) and Bucketeer
@@ -15,6 +16,10 @@ finished app object.
 
 The developer's real `.env` and Settings environment variables are ignored on
 purpose, so the demo can never reach a real AD or croit.
+
+`--admin-ops` also serves the RGW Admin Ops mock (mock/rgw_admin_mock.py) over the same
+state as the mock croit, so users, keys and buckets line up whichever API made them. It
+only prints its URL and admin keys; Bucketeer itself still talks to the mock croit.
 """
 
 from __future__ import annotations
@@ -171,6 +176,10 @@ def parse_args(argv=None):
     p.add_argument("--port", type=int, default=8000, help="Bucketeer port (default 8000)")
     p.add_argument("--croit-port", type=int, default=18080, help="mock croit port (default 18080)")
     p.add_argument("--moto-port", type=int, default=18081, help="moto S3 port (default 18081)")
+    p.add_argument("--admin-ops", action="store_true",
+                   help="also serve the RGW Admin Ops mock (shares state with the mock croit)")
+    p.add_argument("--admin-ops-port", type=int, default=18082,
+                   help="Admin Ops mock port (default 18082)")
     p.add_argument("--keep-data", action="store_true", help="keep the temporary DATA_DIR on exit")
     p.add_argument("--password", default=DEMO_PASSWORD, 
                    help=f"demo password (default {DEMO_PASSWORD})")
@@ -183,12 +192,14 @@ def parse_args(argv=None):
 def main(argv=None) -> int:
     args = parse_args(argv)
     ports = {"Bucketeer": args.port, "mock croit": args.croit_port, "moto": args.moto_port}
-    if len(set(ports.values())) != 3:
-        sys.exit("error: the three ports must differ")
+    if args.admin_ops:
+        ports["Admin Ops mock"] = args.admin_ops_port
+    if len(set(ports.values())) != len(ports):
+        sys.exit("error: the ports must differ")
     for name, port in ports.items():
         if not port_free(port):
             sys.exit(f"error: port {port} ({name}) is already in use; pick another with "
-                     f"--port / --croit-port / --moto-port")
+                     f"--port / --croit-port / --moto-port / --admin-ops-port")
 
     scrub_environment()
     import logging
@@ -203,7 +214,7 @@ def main(argv=None) -> int:
     data_dir = tempfile.mkdtemp(prefix="bucketeer-demo-")
     aws_dir = Path(data_dir) / "aws"
     aws_dir.mkdir()
-    moto = croit_server = None
+    moto = croit_server = ops_server = None
     try:
         moto = start_moto("127.0.0.1", args.moto_port)
         bridge = S3Bridge(endpoint_url(moto))
@@ -221,6 +232,17 @@ def main(argv=None) -> int:
             if time.time() > deadline:
                 sys.exit("error: mock croit did not start")
             time.sleep(0.05)
+
+        ops_note = ""
+        if args.admin_ops:
+            from mock.rgw_admin_mock import create_app as create_ops
+            from mock.rgw_admin_mock import describe_admins, start_server
+
+            ops_app = create_ops(croit_app.state.croit)
+            ops_server = start_server(ops_app, "127.0.0.1", args.admin_ops_port)
+            ops_note = (f"  Admin Ops mock: RGW_ADMIN_URL=http://127.0.0.1:{args.admin_ops_port}\n"
+                        f"{describe_admins(ops_app)}\n"
+                        "                  (shares users, keys and buckets with the mock croit)\n")
 
         croit_url = f"http://127.0.0.1:{args.croit_port}/api"
         settings = demo_settings(port=args.port, croit_url=croit_url, croit_token=ADMIN_TOKEN,
@@ -243,7 +265,7 @@ Bucketeer DEMO  (fake directory, mock croit, moto S3; nothing here is real)
   croit mock:     CROIT_URL={croit_url}
                   admin API token: {ADMIN_TOKEN}
   S3 endpoint:    {bridge.endpoint}  (moto)
-  Data dir:       {data_dir} ({'kept' if args.keep_data else 'deleted on exit'})
+{ops_note}  Data dir:       {data_dir} ({'kept' if args.keep_data else 'deleted on exit'})
 
   Use the keys without touching your real ~/.aws: reveal them in the UI, download
   the files (named config and credentials) into {aws_dir}/ and run:
@@ -260,6 +282,8 @@ Ctrl+C stops everything.
     finally:
         if croit_server:
             croit_server.should_exit = True
+        if ops_server:
+            ops_server.should_exit = True
         if moto:
             moto.stop()
         if args.keep_data:

@@ -196,7 +196,7 @@ skips them too.
 Design in CLAUDE.md, "Two API planes". Items build on each other in this
 order, except that A3 to A6 can run in parallel once A2 is done.
 
-- [ ] A1. Admin Ops mock: `/admin/...` routes for every Admin Ops call the
+- [x] A1. Admin Ops mock: `/admin/...` routes for every Admin Ops call the
   client will make, with SigV4 checked against a configured admin key and
   caps enforced. State is shared with the mock croit and the moto bridge, so
   users, keys and buckets line up whichever backend created them. Responses
@@ -235,6 +235,11 @@ order, except that A3 to A6 can run in parallel once A2 is done.
 - [ ] (needs cluster) Admin Ops on the real Reef cluster: caps, tenant uids,
   key add and remove, quotas, suspend, bucket stats, purge, placement in
   `LocationConstraint`, and whether croit's UI shows the changes at once.
+  Also every shape the mock marks as uncertain (module docstring of
+  `mock/rgw_admin_mock.py`): repeat create without `exclusive`, key-delete
+  errors, quota body forms, `?list`, tenant bucket forms, and whether
+  `bucket?stats=true` without `uid` drops tenant buckets. Fix the mock where
+  reality differs.
 - [ ] (needs cluster) Remove the croit backend after that check (owner
   decides).
 

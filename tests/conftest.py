@@ -94,3 +94,21 @@ def no_offboarding_schedule(monkeypatch):
     from bucketeer import offboarding
 
     monkeypatch.setattr(offboarding, "SCHEDULE_ON_START", False)
+
+
+@pytest.fixture
+def admin_ops():
+    """The RGW Admin Ops mock in-process, over the same state as a mock croit app
+    (no network, no moto). `.app` is the Admin Ops ASGI app (`httpx.ASGITransport(app=...)`),
+    `.croit_app` the mock croit app (prefix ""), `.state` their shared `CroitState`,
+    `.admin` / `.readonly` the signing principals (`access_key`, `secret_key`, `caps`)."""
+    from types import SimpleNamespace
+
+    from mock.croit_mock import create_app as create_croit
+    from mock.rgw_admin_mock import create_app as create_ops
+
+    croit_app = create_croit(seed=True, task_seconds=0)
+    app = create_ops(croit_app.state.croit)
+    admins = {p.name: p for p in app.state.admin_ops.admins}
+    return SimpleNamespace(app=app, croit_app=croit_app, state=croit_app.state.croit,
+                           admin=admins["admin"], readonly=admins["readonly"])

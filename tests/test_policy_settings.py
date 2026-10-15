@@ -290,9 +290,19 @@ def test_subprocess_backstop_limits_memory_and_time(monkeypatch):
     with pytest.raises(SettingsError):
         ps.approve_pattern("a{100000000}")
     assert time.monotonic() - t < 5
-    monkeypatch.setattr(ps, "PROBE_TIMEOUT", 0.001)  # wall-clock kill path
+    monkeypatch.setattr(ps, "PROBE_KILL_TIMEOUT", 0.001)  # wall-clock kill path
     with pytest.raises(SettingsError, match="too slow or too complex"):
         ps.approve_pattern("never-seen-pattern-[a-z]+")
+    monkeypatch.setattr(ps, "PROBE_KILL_TIMEOUT", 10.0)
+    monkeypatch.setattr(ps, "PROBE_TIMEOUT", 0.0)  # in-child budget exceeded
+    with pytest.raises(SettingsError, match="too slow or too complex"):
+        ps.approve_pattern("never-seen-pattern-two-[a-z]+")
+
+
+def test_slow_child_startup_is_not_a_slow_pattern(monkeypatch):
+    # start-up (before the child starts its own clock) may take longer than the budget
+    monkeypatch.setattr(ps, "_PROBE_SCRIPT", "import time\ntime.sleep(1.5)\n" + ps._PROBE_SCRIPT)
+    ps.approve_pattern("slow-startup-[a-z]+")
 
 
 def test_approved_patterns_are_memoized(monkeypatch):

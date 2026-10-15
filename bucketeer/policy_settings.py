@@ -95,7 +95,8 @@ def check_dns_name(name: str) -> list[str]:
 
 MAX_REPEAT = 63  # largest counted repeat bound ({n}, {n,m}, fuzzy {e<=n}) we accept
 MAX_NESTED_PRODUCT = 256  # cap on nested counted repeats multiplied together
-PROBE_TIMEOUT = 1.0  # wall clock for the compile-and-probe subprocess
+PROBE_TIMEOUT = 1.0  # budget for compile + probes, timed INSIDE the subprocess
+PROBE_KILL_TIMEOUT = 10.0  # outer wall-clock kill: covers interpreter start-up and imports
 PROBE_MEMORY = 256 * 2**20  # address-space limit of that subprocess
 PROBE_GROWTH_KB = 16 * 1024  # refuse patterns whose compile grows peak RSS by more than this
 _APPROVED_MAX = 64
@@ -167,8 +168,10 @@ def check_pattern_static(pattern: str) -> None:
 
 # Runs in a throw-away interpreter with a memory cap: compiles the pattern and
 # matches adversarial strings with a timeout. Prints ok | invalid:<msg> | slow.
+# It times its own compile and probes (argv[4] seconds), so a slow interpreter
+# start-up or `import regex` on a loaded machine never counts as a slow pattern.
 _PROBE_SCRIPT = r"""
-import sys
+import sys, time
 try:
     import resource
     resource.setrlimit(resource.RLIMIT_AS, (int(sys.argv[1]), int(sys.argv[1])))
@@ -182,6 +185,7 @@ def peak():
         return 0
 pattern = sys.stdin.read()
 before = peak()
+started = time.monotonic()
 probes = ["a" * 63, "a" * 62 + "!", "a-" * 31 + "a", "a." * 31 + "a",
           "0" * 62 + "-", "ab" * 31 + "_",
           "A" * 63, "A1 " * 21, "0" * 63 + "/", "Z" * 64]  # budget-shaped (64 max)
@@ -191,7 +195,7 @@ try:
         raise MemoryError
     for p in probes:
         rx.fullmatch(p, timeout=float(sys.argv[2]))
-    print("ok")
+    print("slow" if time.monotonic() - started > float(sys.argv[4]) else "ok")
 except TimeoutError:
     print("slow")
 except MemoryError:
@@ -207,7 +211,7 @@ _approved_lock = threading.Lock()
 def approve_pattern(pattern: str) -> None:
     """Accept `pattern` only if it is statically safe and compiles and survives
     the probes inside a memory- and time-limited subprocess. Blocking (up to
-    PROBE_TIMEOUT, and ~0.1 s for a first-time pattern): async callers use
+    PROBE_KILL_TIMEOUT in the worst case, and ~0.1 s for a first-time pattern): async callers use
     `asyncio.to_thread`. Approved patterns are remembered, so later checks cost
     nothing. Raises SettingsError."""
     with _approved_lock:
@@ -217,8 +221,9 @@ def approve_pattern(pattern: str) -> None:
     try:
         out = subprocess.run(  # noqa: S603 - fixed argv, pattern goes through stdin
             [sys.executable, "-I", "-c", _PROBE_SCRIPT, str(PROBE_MEMORY), str(REGEX_TIMEOUT),
-             str(PROBE_GROWTH_KB)],
-            input=pattern, capture_output=True, text=True, timeout=PROBE_TIMEOUT, check=False,
+             str(PROBE_GROWTH_KB), str(PROBE_TIMEOUT)],
+            input=pattern, capture_output=True, text=True, timeout=PROBE_KILL_TIMEOUT,
+            check=False,
         ).stdout.strip()
     except subprocess.TimeoutExpired:
         out = "slow"

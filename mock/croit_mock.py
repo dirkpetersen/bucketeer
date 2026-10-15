@@ -15,6 +15,9 @@ Run standalone:  .venv/bin/python3 mock/croit_mock.py
   CROIT_MOCK_S3=moto       also start a moto S3 server (mock/s3_bridge.py) that mirrors the
                            mock's buckets and keys; point S3_ENDPOINT_URL at the printed URL
   CROIT_MOCK_S3_PORT       moto port (default 18081)
+  CROIT_MOCK_ADMIN_OPS=1   also serve the RGW Admin Ops mock (mock/rgw_admin_mock.py) over the
+                           same state, signed with the admin keys it prints
+  CROIT_MOCK_ADMIN_OPS_PORT   its port (default 18082); see that module for the key/caps variables
 
 In-process (tests): `create_app(seed=True, task_seconds=0)`; the state is
 `app.state.croit` (a `CroitState`). Side effects of a task apply immediately;
@@ -409,7 +412,8 @@ class CroitState:
             default_storage_class=extra.get("defaultStorageClass"),
         )
         self.users[uid] = user
-        for access, secret in keys or [(gen_access_key(), gen_secret_key())]:
+        # keys=None: croit's auto-generated key; keys=[]: a user without any key
+        for access, secret in [(gen_access_key(), gen_secret_key())] if keys is None else keys:
             self.put_key(uid, access, secret)
         return user
 
@@ -589,6 +593,15 @@ class CroitState:
                 self._refuse_delete(name, sentence)
         self._fire("bucket_deleted", bucket)  # may fail (e.g. retained objects): keep state
         self.delete_tokens.pop(ignore_warning, None)
+        del self.buckets[name]
+        return bucket
+
+    @locked
+    def force_delete_bucket(self, name: str) -> Bucket:
+        """Delete a bucket and its contents with no confirmation handshake (what RGW
+        Admin Ops `DELETE /admin/bucket?purge-objects=true` does)."""
+        bucket = self.get_bucket(name)
+        self._fire("bucket_deleted", bucket)
         del self.buckets[name]
         return bucket
 
@@ -1152,9 +1165,24 @@ def main():
         bridge = S3Bridge(endpoint_url(server))
         kwargs = {"hooks": bridge.make_hooks(MockHooks), "rgw_endpoint": bridge.host_port}
     app = create_app(seed=True, task_seconds=seconds, prefix=prefix, **kwargs)
+    ops_note = ""
+    if os.environ.get("CROIT_MOCK_ADMIN_OPS", "").lower() in ("1", "true", "yes", "on"):
+        try:
+            from mock.rgw_admin_mock import create_app as create_ops
+            from mock.rgw_admin_mock import describe_admins, start_server
+        except ImportError:  # run as a script
+            from rgw_admin_mock import create_app as create_ops
+            from rgw_admin_mock import describe_admins, start_server
+        ops_port = int(os.environ.get("CROIT_MOCK_ADMIN_OPS_PORT", "18082"))
+        ops_app = create_ops(app.state.croit)
+        start_server(ops_app, host, ops_port)
+        ops_note = f"RGW Admin Ops mock: RGW_ADMIN_URL=http://{host}:{ops_port}\n" \
+            + describe_admins(ops_app)
     if bridge:
         bridge.seed_objects(app.state.croit)
         print(f"moto S3 endpoint: S3_ENDPOINT_URL={bridge.endpoint}", flush=True)
+    if ops_note:
+        print(ops_note, flush=True)
     print(f"croit mock API: CROIT_URL=http://{host}:{port}{prefix}", flush=True)
     print(f"  admin API token:  {ADMIN_TOKEN}")
     print(f"  viewer API token: {VIEWER_TOKEN}", flush=True)
