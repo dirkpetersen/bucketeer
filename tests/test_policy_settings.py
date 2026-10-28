@@ -12,8 +12,7 @@ NO_RULES = {"prefix": "", "pattern": ""}
 
 
 @pytest.mark.parametrize("name", [
-    "abc", "my-bucket", "a.b.c", "1.2.3", "a" * 63, "bucket-1", "x1y", "a-b.c-d",
-    "999.example", "mybucket.s3",
+    "abc", "my-bucket", "a" * 63, "bucket-1", "x1y", "a-b-c-d", "999-example", "123",
 ])
 def test_valid_dns_names(name):
     assert validate_bucket_name(name, "alice", NO_RULES) == []
@@ -21,7 +20,8 @@ def test_valid_dns_names(name):
 
 @pytest.mark.parametrize("name", [
     "", "ab", "a" * 64, "Abc", "my_bucket", "my bucket", "-abc", "abc-", ".abc", "abc.",
-    "a..b", "a.-b", "a-.b", "192.168.5.4", "xn--abc", "sthree-x", "abc-s3alias",
+    "a..b", "a.-b", "a-.b", "192.168.5.4", "a.b.c", "my.bucket", "mybucket.s3",
+    "xn--abc", "sthree-x", "abc-s3alias",
     "abc--ol-s3", "abc--x-s3", "ünï", "a/b", "abc\n", "ab\x00c",
 ])
 def test_invalid_dns_names(name):
@@ -31,7 +31,7 @@ def test_invalid_dns_names(name):
 def test_prefix_template_and_suggest():
     rules = ps.normalize_naming({"prefix": "{username}-"})
     assert ps.suggest_prefix("Alice", rules) == "alice-"
-    assert ps.suggest_prefix("j_doe.x", rules) == "j-doe.x-"
+    assert ps.suggest_prefix("j_doe.x", rules) == "j-doe-x-"  # no dots
     assert ps.suggest_prefix("alice", NO_RULES) == ""
     assert validate_bucket_name("alice-data", "Alice", rules) == []
     assert any("start with" in e for e in validate_bucket_name("bob-data", "alice", rules))

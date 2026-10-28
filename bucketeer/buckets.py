@@ -346,7 +346,7 @@ async def options(request: Request, acct: Account, user: User):
     naming = await db.run(load_naming, db.settings)
     prefix = suggest_prefix(acct.username, naming)
     pattern = bool(naming.get("pattern"))
-    hint = "3-63 lowercase letters, digits, dots and hyphens."
+    hint = "3-63 lowercase letters, digits and hyphens."
     if prefix:
         hint = f"Starts with \"{prefix}\". " + hint
     if pattern:

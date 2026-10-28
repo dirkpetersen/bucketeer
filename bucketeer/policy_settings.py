@@ -64,11 +64,12 @@ class SettingsError(ValueError):
 
 # -- bucket naming -----------------------------------------------------------------
 
-_DNS_CHARS = re.compile(r"^[a-z0-9.-]+\Z")
-_IPV4 = re.compile(r"^\d{1,3}(\.\d{1,3}){3}\Z")
+# No dots (owner, 2026-10-27): a wildcard TLS certificate covers one label, so a dotted
+# name fails with virtual-host style. Without dots a name cannot look like an IP address.
+_DNS_CHARS = re.compile(r"^[a-z0-9-]+\Z")
 _FORBIDDEN_PREFIXES = ("xn--", "sthree-")
 _FORBIDDEN_SUFFIXES = ("-s3alias", "--ol-s3", "--x-s3", "--table-s3")
-_PREFIX_TEMPLATE = re.compile(r"^(?:[a-z0-9.-]|\{username\})*\Z")
+_PREFIX_TEMPLATE = re.compile(r"^(?:[a-z0-9-]|\{username\})*\Z")
 
 
 def check_dns_name(name: str) -> list[str]:
@@ -79,13 +80,9 @@ def check_dns_name(name: str) -> list[str]:
     if not name:
         return errors
     if not _DNS_CHARS.match(name):
-        errors.append("Use only lowercase letters, digits, hyphens and dots.")
+        errors.append("Use only lowercase letters, digits and hyphens (no dots).")
     if not name[0].isalnum() or not name[-1].isalnum() or not name[0].isascii():
         errors.append("The name must start and end with a lowercase letter or a digit.")
-    if ".." in name or ".-" in name or "-." in name:
-        errors.append("Dots cannot be next to another dot or a hyphen.")
-    if _IPV4.match(name):
-        errors.append("The name cannot look like an IP address.")
     if name.startswith(_FORBIDDEN_PREFIXES):
         errors.append("The name cannot start with xn-- or sthree-.")
     if name.endswith(_FORBIDDEN_SUFFIXES):
@@ -276,8 +273,8 @@ def normalize_naming(raw: Any) -> dict[str, str]:
         raise SettingsError(f"The prefix template can be at most {MAX_PREFIX_LEN} characters.")
     if not _PREFIX_TEMPLATE.match(prefix):
         raise SettingsError(
-            "The prefix template can only contain lowercase letters, digits, hyphens, "
-            "dots and {username}."
+            "The prefix template can only contain lowercase letters, digits, hyphens "
+            "and {username}."
         )
     if prefix:
         # a prefix that can never yield a valid name is a configuration bug
@@ -297,11 +294,9 @@ def load_naming(settings_repo) -> dict[str, str]:
 
 
 def _slug(username: str) -> str:
-    """AD username as a bucket-name fragment: lowercase, `_` and other
+    """AD username as a bucket-name fragment: lowercase, `_`, `.` and other
     unsupported characters become hyphens, edges trimmed."""
-    s = re.sub(r"[^a-z0-9.-]+", "-", username.lower())
-    s = re.sub(r"\.{2,}", ".", s)
-    return s.strip("-.")
+    return re.sub(r"[^a-z0-9-]+", "-", username.lower()).strip("-")
 
 
 def suggest_prefix(username: str, rules: dict[str, str]) -> str:

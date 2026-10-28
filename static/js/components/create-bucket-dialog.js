@@ -11,14 +11,12 @@ import { checkBudget } from "../budget.js";
 // (placement only when the administrators allow more than one).
 let seq = 0;
 
-const DNS = /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/;
+const DNS = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/; // no dots (wildcard TLS, virtual-host style)
 
 export function checkName(name, prefix) {
   if (!name) return "Enter a bucket name.";
   if (name.length < 3 || name.length > 63) return "Use 3 to 63 characters.";
-  if (!DNS.test(name)) return "Use lowercase letters, digits, dots and hyphens; start and end with a letter or digit.";
-  if (name.includes("..") || name.includes(".-") || name.includes("-.")) return "Dots and hyphens cannot sit next to each other.";
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(name)) return "A name cannot look like an IP address.";
+  if (!DNS.test(name)) return "Use lowercase letters, digits and hyphens (no dots); start and end with a letter or digit.";
   if (prefix && !name.startsWith(prefix)) return `The name must start with "${prefix}".`;
   return "";
 }
