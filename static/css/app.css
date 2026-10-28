@@ -81,6 +81,13 @@
 
 .grid { display: grid; gap: var(--sp-5); grid-template-columns: 1fr; }
 @media (min-width: 60em) { .grid { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); } }
+
+/* Workspace: the whole window; credentials left, buckets right (stacked on narrow screens) */
+.shell[data-page="home"] { --content-w: var(--content-w-full); }
+.ws { display: grid; gap: var(--sp-5); grid-template-columns: minmax(0, 1fr); align-items: start; }
+.ws-col { display: grid; gap: var(--sp-5); align-content: start; min-width: 0; }
+@media (min-width: 64em) { .ws { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); } }
+.ws-col:last-child .panel { animation-delay: 80ms; }
 .panel { container-type: inline-size; padding: var(--sp-5); display: grid; gap: var(--sp-5); align-content: start;
   animation: rise var(--dur-slow) var(--ease-out) both; }
 .panel:nth-child(2) { animation-delay: 80ms; }

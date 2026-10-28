@@ -120,6 +120,7 @@
   --r-pill: 999px;
   --header-h: 4rem;
   --content-w: 72rem;
+  --content-w-full: 100%; /* workspace: the whole window, two columns */
 
   /* Layered soft shadows */
   --sh-1: 0 1px 1px rgb(20 12 5 / 0.04), 0 1px 3px rgb(20 12 5 / 0.06);

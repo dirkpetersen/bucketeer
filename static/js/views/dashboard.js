@@ -26,7 +26,7 @@ export function renderDashboard({ me, appName, onLogout, page = "home" }) {
   // Advanced mode: global store (advanced.js), server-persisted per user.
   const sw = h("button", { class: "switch", type: "button", role: "switch", "aria-checked": String(isAdvanced()) },
     h("span", { class: "switch-label", text: "Advanced" }), h("span", { class: "switch-track", "aria-hidden": "true" }));
-  const shell = h("div", { class: "shell", "data-advanced": String(isAdvanced()) });
+  const shell = h("div", { class: "shell", "data-advanced": String(isAdvanced()), "data-page": page });
   const unsub = subscribe((on) => {
     if (!shell.isConnected) { unsub(); return; } // this shell was replaced
     sw.setAttribute("aria-checked", String(on));
@@ -81,10 +81,9 @@ export function renderDashboard({ me, appName, onLogout, page = "home" }) {
       h("h1", { text: `${greeting()}, ${first}.` }),
       h("p", { text: "Your S3 credentials and your buckets, in one place." }),
       h("span", { class: "chip adv-note" }, h("span", { class: "dot" }), "Advanced mode on")),
-    h("div", { class: "grid" },
-      credentialsCard(),
-      bucketsCard(),
-      sharedWithMeCard()));
+    h("div", { class: "ws" },
+      h("div", { class: "ws-col" }, credentialsCard()),
+      h("div", { class: "ws-col" }, bucketsCard(), sharedWithMeCard())));
 
   shell.append(
     h("a", { class: "skip-link", href: "#main", text: "Skip to content" }),
