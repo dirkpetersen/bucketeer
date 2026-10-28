@@ -60,6 +60,10 @@ export const getCredentials = () => api("/credentials");
 // server-side. Keep the result in memory only, for as short a time as possible.
 export const revealSecret = (accessKey) => api("/credentials/reveal", { method: "POST", json: { accessKey } });
 
+// A one-time command that installs the user's key as an AWS profile on a computer:
+// {url, command, expiresAt, expiresIn, os}. The url is a bearer token: keep it in memory only.
+export const createSetupLink = (os) => api("/credentials/setup-link", { method: "POST", json: { os } });
+
 // Key management (the server holds the secrets; none of these returns one).
 // create -> {accessKey}; rotate -> {accessKey, oldKeyRemoved, message?}; delete -> {accessKey}.
 export const createKey = () => api("/credentials/keys", { method: "POST" });

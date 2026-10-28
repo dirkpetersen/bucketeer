@@ -39,6 +39,8 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "POST /api/credentials/keys": ("credentials.key.create",),
     "POST /api/credentials/keys/{access_key}/rotate": ("credentials.key.rotate",),
     "DELETE /api/credentials/keys/{access_key}": ("credentials.key.delete",),
+    "POST /api/credentials/setup-link": ("credentials.setup_link",),
+    "POST /setup/{token}": ("credentials.setup",),
     "POST /api/subusers": ("subuser.create",),
     "PATCH /api/subusers/{name}": ("subuser.update",),
     "DELETE /api/subusers/{name}": ("subuser.delete",),
@@ -105,6 +107,7 @@ EVENTS = {
     "bucket.delete_started": "rgw backend: a non-empty bucket's delete job was queued",
     "bucket.delete_superseded": "rgw backend: a job of the bucket's previous owner was ended",
     "bucket.delete_blocked": "rgw backend: object lock or legal hold stopped a delete job",
+    "credentials.setup_refused": "a valid setup token whose key, account or endpoint is bad",
     "bucket_key.cleanup": "startup clean-up of stale pending bucket keys (actor system)",
     "bucket.unshare": "deleting a bucket marks its shares revoked (reason bucket_deleted)",
     "offboarding.run_failed": "a run whose croit suspension failed",
@@ -211,6 +214,20 @@ def run(tmp_path_factory, moto_server):
     k2 = rot.json()["accessKey"]
     r.step("DELETE /api/credentials/keys/{access_key}", lambda: a.delete(
         f"/api/credentials/keys/{k2}", headers=H))
+
+    # one-time setup command (the seed secret has a "-", which real RGW secrets never have)
+    for k in env.croit_state.users["alice"].keys:
+        k["secret_key"] = "AliceSetupSecret0001"
+    run_link = r.step("POST /api/credentials/setup-link", lambda: a.post(
+        "/api/credentials/setup-link", json={"os": "linux"}, headers=H)).json()["url"]
+    path = run_link.replace("https://testserver", "")
+    r.step("POST /setup/{token}", lambda: env.anon().post(path))
+    bad_link = a.post("/api/credentials/setup-link", json={"os": "linux"}, headers=H).json()["url"]
+    for k in env.croit_state.users["alice"].keys:
+        k["secret_key"] = "bad'secret"
+    r.step("event", lambda: env.anon().post(bad_link.replace("https://testserver", "")))
+    for k in env.croit_state.users["alice"].keys:
+        k["secret_key"] = "AliceSetupSecret0001"
 
     # subusers (subuser.create_failed is covered in tests/test_subusers.py)
     sub = r.step("POST /api/subusers", lambda: a.post(

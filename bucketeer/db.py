@@ -201,6 +201,22 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (rgw_uid, name)
     );
     """,
+    # v11: one-time setup tokens ("Set up this computer"); only the SHA-256 of a token is kept.
+    """
+    CREATE TABLE setup_tokens (
+        id          INTEGER PRIMARY KEY,
+        token_hash  TEXT NOT NULL UNIQUE,
+        ad_username TEXT NOT NULL,
+        rgw_uid     TEXT NOT NULL,
+        access_key  TEXT NOT NULL,         -- public half only
+        os          TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        expires_at  TEXT NOT NULL,
+        used_at     TEXT,
+        used_ip     TEXT
+    );
+    CREATE INDEX setup_tokens_user ON setup_tokens (ad_username, created_at);
+    """,
 ]
 
 _MISSING: Any = object()
@@ -280,6 +296,7 @@ class Database:
         self.known_accounts = KnownAccounts(self)
         self.offboarding_runs = OffboardingRuns(self)
         self.delete_jobs = BucketDeleteJobs(self)
+        self.setup_tokens = SetupTokens(self)
         self.audit = AuditLog(self)
 
     # -- plumbing -----------------------------------------------------------
@@ -879,6 +896,35 @@ class BucketDeleteJobs(_Repo):
             c.execute("UPDATE bucket_delete_jobs SET state = ?, last_error = ?, "
                       "finished_at = ?, updated_at = ? WHERE id = ?",
                       (state, message, t, t, job_id))
+
+
+class SetupTokens(_Repo):
+    """One-time setup links. Times are ISO strings in the `now()` format, so they sort."""
+
+    def create(self, token_hash: str, ad: str, uid: str, access_key: str, os_name: str,
+               created: str, expires: str, purge_before: str) -> int:
+        with self.db.tx() as c:
+            c.execute("DELETE FROM setup_tokens WHERE created_at < ?", (purge_before,))
+            return c.execute(
+                "INSERT INTO setup_tokens (token_hash, ad_username, rgw_uid, access_key, os, "
+                "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (token_hash, ad, uid, access_key, os_name, created, expires)).lastrowid  # type: ignore[return-value]
+
+    def count_since(self, ad: str, since: str) -> int:
+        return self.db.query_one(
+            "SELECT COUNT(*) AS n FROM setup_tokens WHERE ad_username = ? AND created_at >= ?",
+            (ad, since))["n"]  # type: ignore[index]
+
+    def by_hash(self, token_hash: str) -> dict[str, Any] | None:
+        return self.db.query_one("SELECT * FROM setup_tokens WHERE token_hash = ?", (token_hash,))
+
+    def claim(self, row_id: int, now_iso: str, ip: str) -> bool:
+        """Mark used; True for exactly one caller, and only while not expired."""
+        with self.db.tx() as c:
+            return c.execute(
+                "UPDATE setup_tokens SET used_at = ?, used_ip = ? "
+                "WHERE id = ? AND used_at IS NULL AND expires_at > ?",
+                (now_iso, ip, row_id, now_iso)).rowcount == 1
 
 
 class AuditLog(_Repo):

@@ -194,6 +194,8 @@ skips them too.
   (no broker credentials, Q6).
 - [x] Multipart upload cleanup (list and abort).
 - [x] Subusers (read/write/readwrite/full) and their keys (Q15 rules in CLAUDE.md), on both admin backends.
+- [x] "Set up this computer": one-time setup command (15 min, used once) and download fallback; keys, secret and snippets move to Advanced (owner, 2026-10-27).
+- [ ] (needs a real machine) Run the setup command on Windows PowerShell 5.1, macOS and Linux; check the macOS zip keeps the execute bit and SmartScreen wording.
 
 ## Phase 5: RGW Admin Ops instead of the croit API (owner decision)
 

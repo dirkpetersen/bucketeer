@@ -118,6 +118,8 @@ def create_app(
         title=settings.app_name, docs_url=None, redoc_url=None, lifespan=lifespan
     )
     app.state.settings = settings
+    app.state.clock = clock
+    credentials.install_access_log_filter()
     app.state.croit = client  # one client per app, closed on shutdown
     app.state.db = db  # else opened in the lifespan; /health never touches it
 
@@ -194,6 +196,7 @@ def create_app(
     api.include_router(admin_settings.router)
     api.include_router(offboarding.router)
     app.include_router(api)
+    app.include_router(credentials.setup_router)  # POST /setup/{token}: the token is the credential
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app

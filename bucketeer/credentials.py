@@ -16,6 +16,14 @@ generated `~/.aws/config` / `~/.aws/credentials` snippets.
 - `DELETE /api/credentials/keys/{accessKey}` -> `{accessKey}`; the last key is
   refused (409). Never the whole-set `PUT .../keys`.
 Key mutations hold a per-uid lock and are audited (`credentials.key.*`, no secrets).
+- `POST /api/credentials/setup-link` `{os}` -> `{url, command, expiresAt, expiresIn, os}`:
+  a one-time link (15 minutes, 10 per user per 15 minutes) for the user's first own key.
+  `POST /setup/{token}` (outside `/api`: the token is the only credential, no CSRF header)
+  returns a script that installs the key as an AWS profile (`bucketeer/setup_script.py`).
+  This is the second path a secret may leave the server by (besides `/reveal`). Only the
+  SHA-256 of a token is stored; the token is marked used before the secret is read. Audit
+  `credentials.setup_link`, `credentials.setup` and `credentials.setup_refused` never hold
+  the token, the URL or the secret; the uvicorn access log has the token redacted.
 
 The uid comes only from the session (`require_active_rgw_user`), so suspended
 users get no keys. The browser builds the snippets from this data, so a secret
@@ -27,21 +35,25 @@ null and the UI tells the user to contact an administrator.
 """
 
 import asyncio
+import hashlib
 import logging
 import re
 import secrets
 import string
 import time
 from collections.abc import Callable
-from typing import Annotated
+from datetime import UTC, datetime
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from .admin import croit_http_error
 from .config import Settings
 from .croit import CroitClient, CroitClientError, CroitError
 from .rgw_user import RgwAccount, require_active_rgw_user
+from .setup_script import SetupValues, command, error_script, script
 
 log = logging.getLogger("bucketeer.credentials")
 
@@ -283,3 +295,129 @@ async def delete_key(access_key: str, request: Request, response: Response, acct
             raise croit_http_error(e) from None
         await _audit(request, acct, "credentials.key.delete", access_key)
     return {"accessKey": access_key}
+
+
+# -- one-time setup command -------------------------------------------------------
+
+SETUP_TTL = 15 * 60  # seconds a setup link works
+SETUP_LIMIT = 10  # links per user per SETUP_WINDOW
+SETUP_WINDOW = 15 * 60
+SETUP_KEEP = 24 * 3600  # rows older than this are deleted when a link is made
+_SETUP_PATH = re.compile(r"/setup/[^\s?\"]+")
+
+
+class RedactSetupToken(logging.Filter):
+    """The token is in the request path, so the uvicorn access log must not print it."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        redact = lambda v: _SETUP_PATH.sub("/setup/[redacted]", v) if isinstance(v, str) else v  # noqa: E731
+        record.msg = redact(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(redact(a) for a in record.args)
+        return True
+
+
+def install_access_log_filter() -> None:
+    lg = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, RedactSetupToken) for f in lg.filters):
+        lg.addFilter(RedactSetupToken())
+
+
+def _iso(ts: float) -> str:
+    return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+class SetupBody(BaseModel):
+    os: Literal["windows", "macos", "linux"]
+
+
+@router.post("/setup-link")
+async def setup_link(body: SetupBody, request: Request, response: Response, acct: Account):
+    response.headers["Cache-Control"] = "no-store"
+    state = request.app.state
+    db, now = state.db, state.clock()
+    if not await state.endpoints.resolve(acct.uid):
+        raise HTTPException(409, "The S3 endpoint is not configured. Ask an administrator.")
+    keys = [k for k in await _own_keys(request, acct.uid) if k.get("secret_key")]
+    if not keys:
+        raise HTTPException(409, "You have no access key yet.")
+    recent = await db.run(db.setup_tokens.count_since, acct.username, _iso(now - SETUP_WINDOW))
+    if recent >= SETUP_LIMIT:
+        raise HTTPException(429, "Too many setup commands. Wait a few minutes and try again.")
+    token = secrets.token_urlsafe(32)
+    access = keys[0]["access_key"]
+    expires = now + SETUP_TTL
+    row_id = await db.run(db.setup_tokens.create, _hash(token), acct.username, acct.uid, access,
+                          body.os, _iso(now), _iso(expires), _iso(now - SETUP_KEEP))
+    await db.run(db.audit.add, acct.username, "credentials.setup_link", "access_key", access,
+                 {"uid": acct.uid, "os": body.os, "setupId": row_id, "expiresAt": _iso(expires)})
+    url = f"{request.base_url}setup/{token}"
+    return {"url": url, "command": command(body.os, url), "expiresAt": _iso(expires),
+            "expiresIn": SETUP_TTL, "os": body.os}
+
+
+setup_router = APIRouter(tags=["setup"])  # mounted at the app root: no session, no CSRF header
+
+
+def _script_response(text: str) -> PlainTextResponse:
+    # Always 200: `curl -f` drops 4xx bodies and `irm` throws on them, so the user would never
+    # see the message. The real reason is only in the audit log.
+    return PlainTextResponse(text, headers={"Cache-Control": "no-store"})
+
+
+@setup_router.post("/setup/{token}")
+async def run_setup(token: str, request: Request):
+    state = request.app.state
+    db, settings = state.db, state.settings
+    row = await db.run(db.setup_tokens.by_hash, _hash(token))
+    if row is None:
+        return _script_response("echo 'Unknown setup link. Make a new one in Bucketeer.'\n")
+    os_name, uid, ad = row["os"], row["rgw_uid"], row["ad_username"]
+    ip = request.client.host if request.client else "unknown"
+    gone = _script_response(error_script(
+        os_name,
+        "This setup link was already used or has expired. Make a new one in Bucketeer."))
+    now = _iso(state.clock())
+    if not await db.run(db.setup_tokens.claim, row["id"], now, ip):
+        return gone
+    info = {"uid": uid, "os": os_name, "setupId": row["id"]}
+
+    async def refuse(reason: str, message: str):
+        await db.run(db.audit.add, ad, "credentials.setup_refused", "access_key", row["access_key"],
+                     {**info, "reason": reason, "ip": ip})
+        return _script_response(error_script(os_name, message))
+
+    try:
+        user = await state.croit.get_user(uid)
+        keys = [k for k in await state.croit.list_keys(uid) or []
+                if isinstance(k, dict) and k.get("access_key") and k.get("user") == uid
+                ] if user else []
+        endpoint = await state.endpoints.resolve(uid)
+    except Exception:  # any admin trouble: refuse with a script, never a JSON error
+        return await refuse("admin_unavailable", "Bucketeer could not reach the storage "
+                            "service. Make a new setup command in Bucketeer and try again.")
+    if not user:
+        return await refuse("no_account", "Your S3 account was not found.")
+    if user.get("suspended"):
+        return await refuse("suspended",
+                            "Your S3 account is suspended. Contact your administrator.")
+    key = next((k for k in keys
+                if k["access_key"] == row["access_key"] and k.get("secret_key")), None)
+    if key is None:
+        return await refuse("key_gone", "This key was rotated or deleted. Make a new setup "
+                            "command in Bucketeer.")
+    if not endpoint:
+        return await refuse("no_endpoint",
+                            "The S3 endpoint is not configured. Ask an administrator.")
+    values = SetupValues(settings.aws_profile_name, settings.s3_region, endpoint,
+                         settings.s3_addressing_style, key["access_key"], key["secret_key"])
+    if not values.valid():
+        return await refuse("unsafe_value", "This key cannot be installed automatically.")
+    # Audit first: if the log cannot be written, the secret is not handed out.
+    await db.run(db.audit.add, ad, "credentials.setup", "access_key", row["access_key"],
+                 {**info, "ip": ip})
+    return _script_response(script(os_name, values))

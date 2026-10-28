@@ -7,6 +7,8 @@ import { toast } from "../components/toast.js";
 import { confirmDialog } from "../components/confirm-dialog.js";
 import { configSnippet, credentialsSnippet, testCommand } from "../awsconfig.js";
 import { subusersSection } from "./subusers.js";
+import { setupPanel } from "../components/setup-panel.js";
+import { isAdvanced, subscribe } from "../advanced.js";
 
 // The Credentials card: account status first, then (account ready) the access key,
 // the masked secret and the ready-to-paste ~/.aws snippets. The secret exists in
@@ -147,6 +149,22 @@ function keysPanel(data, { select, reload }) {
       h("div", { class: "cred-cmd" }, h("code", { text: cmd }), copyButton(cmd, "Copy test command"))));
 }
 
+// Keys, secret and config snippets are Advanced only; normal users get the setup panel instead.
+// Rebuilding the panel when the toggle flips also drops any revealed secret.
+function advancedKeys(d, select, reload) {
+  const host = h("div", { class: "creds-adv" });
+  let seen = false;
+  const sync = () => {
+    if (host.isConnected) seen = true;
+    else if (seen) return unsub(); // the card was rebuilt
+    host.replaceChildren(isAdvanced() ? keysPanel(d, { select, reload })
+      : h("p", { class: "acct-sub", text: "Turn on Advanced to see your keys and config files." }));
+  };
+  const unsub = subscribe(sync);
+  sync();
+  return host;
+}
+
 // Status states from /api/account: ready / suspended / creation_failed / unavailable.
 function accountStatus() {
   const body = h("div", { class: "acct", "aria-live": "polite" });
@@ -182,7 +200,7 @@ function accountStatus() {
       const show = (d, select) => paint("chip-ok", "Account ready",
         h("p", { class: "acct-line" }, "Signed in to S3 as ", h("code", { class: "acct-uid", text: a.uid }),
           h("span", { class: "acct-sub", text: `Storage limit: ${quotaText(a.quota)}` })),
-        keysPanel(d, { select, reload }), subusersSection(d));
+        setupPanel(d), advancedKeys(d, select, reload), subusersSection(d));
       // Re-read the key list after a change; the old panel (and any revealed secret) is dropped.
       const reload = async (select) => {
         try {
@@ -212,6 +230,6 @@ export function credentialsCard() {
   const { chip, body } = accountStatus();
   return h("section", { class: "card panel panel-wide", "aria-labelledby": "h-Credentials" },
     h("div", { class: "panel-head" }, h("h2", { id: "h-Credentials", text: "Credentials" }), chip),
-    h("p", { class: "panel-note", text: "Your S3 access key, and ready-to-paste AWS config and credentials files." }),
+    h("p", { class: "panel-note", text: "Connect this computer to your storage. Advanced shows your access keys and AWS config files." }),
     body);
 }
