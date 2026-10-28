@@ -80,11 +80,13 @@ shows `subusers: [{id, permissions}]`). Cluster check: how real RGW routes `?key
 whether S3 requests honour a subuser's permission. Not implemented (501/405): caps
 changes, swift keys, user stats, bucket link/unlink/index check, usage trim, `format=xml`.
 Uids are `tenant$uid` in the `uid` parameter; user info reports `"tenant": "acme",
-"user_id": "carol"` and only `keys[].user` stays `acme$carol`. `+` is fine in a uid but, like
-any query value, must be percent-encoded (`%2B`) because a literal `+` is a space.
-Buckets: `GET /admin/bucket?uid=` lists that user's buckets with BARE names; with `bucket=`
-as well it still answers an array (that bucket only, empty if not the user's), holding stats
-objects only with `stats=true`. A bare `bucket` is looked up in the tenant taken from `uid`
+"user_id": "carol"` and only `keys[].user` stays `acme$carol`. Query values are decoded TWICE,
+as on Reef (checked on the cluster, 2026-10-27): `%2B` arrives as a space, a `+` in a uid must
+be sent as `%252B`.
+Buckets: `GET /admin/bucket?uid=` lists that user's buckets with BARE names (stats objects
+with `stats=true`); with `bucket=` as well it answers that bucket's ONE stats object, whoever
+owns it (checked on a Reef cluster, 2026-10-27). A bare `bucket` is looked up in the
+tenant taken from `uid`
 (`uid=acme$carol&bucket=reports`); without `uid` use `tenant/bucket` (`tenant:bucket` is
 accepted too); `bucket=` alone answers one stats object. The global name list is
 `tenant/bucket`. Bucket quota PUT does no ownership check; `uid` only supplies the tenant.
@@ -113,7 +115,7 @@ CLUSTER-CHECK ITEMS (shapes the author was not sure of; verify on the real Reef 
  6. `GET /admin/bucket?bucket=` without `stats` returns the full stats object (mock), the
     exact `usage` content (mock: `{}` for an empty bucket, `rgw.main` with `size`,
     `size_actual`, `size_utilized`, `size_kb*`, `num_objects` otherwise), and the field names
-    `versioned`, `versioning_enabled`, `object_lock_enabled`, `mfa_enabled`, `creation_time`.
+    `versioning` (off|enabled|suspended), `object_lock_enabled`, `mfa_enabled`, `creation_time`.
  7. Tenant bucket handling: `tenant/bucket` in the `bucket` parameter and in the global
     listing; bare names with `uid`. In Reef, `GET /admin/bucket?stats=true` WITHOUT `uid` may
     drop tenant buckets (the mock lists them): query per user.
@@ -139,7 +141,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from urllib.parse import parse_qsl, quote
+from urllib.parse import parse_qsl, quote, unquote_plus
 
 from fastapi import FastAPI, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -252,7 +254,9 @@ class Params:
     Valueless ones (`?quota`, `?key`, `?purge-objects`) are flags with an empty value."""
 
     def __init__(self, raw_query: str):
-        self.pairs = parse_qsl(raw_query, keep_blank_values=True)
+        # decoded twice, like Reef: `%252B` -> `+`, `%2B` -> ` `
+        self.pairs = [(k, unquote_plus(v))
+                      for k, v in parse_qsl(raw_query, keep_blank_values=True)]
         self.values = dict(self.pairs)
 
     def has(self, name: str) -> bool:
@@ -490,7 +494,7 @@ def bucket_view(ops: AdminOps, b) -> dict:
         "placement_rule": b.placement,
         "explicit_placement": {"data_pool": "", "data_extra_pool": "", "index_pool": ""},
         "id": b.id, "marker": b.id, "index_type": "Normal",
-        "versioned": b.versioning != "OFF", "versioning_enabled": b.versioning == "ENABLED",
+        "versioning": b.versioning.lower(),  # off | enabled | suspended
         "object_lock_enabled": b.object_lock, "mfa_enabled": False, "owner": b.owner,
         "ver": "0#1", "master_ver": "0#0", "mtime": b.mtime or ops.created,
         "creation_time": ops.created, "max_marker": "0#", "usage": usage,
@@ -830,13 +834,9 @@ def op_bucket_info(ops, params, body):
     if uid:
         get_user(ops, uid)
     name = params.get("bucket")
-    if name and not uid:
-        return bucket_view(ops, find_bucket(ops, name))  # one bucket: its stats object
-    if name:
-        wanted = find_bucket(ops, name, uid)
-        buckets = [wanted] if wanted.owner == uid else []
-    else:
-        buckets = [b for b in ops.croit.buckets.values() if not uid or b.owner == uid]
+    if name:  # one bucket: its stats object, whoever owns it (`uid` only gives the tenant)
+        return bucket_view(ops, find_bucket(ops, name, uid))
+    buckets = [b for b in ops.croit.buckets.values() if not uid or b.owner == uid]
     if stats:
         return [bucket_view(ops, b) for b in buckets]
     # names: bare for one user's buckets, `tenant/bucket` in the global listing

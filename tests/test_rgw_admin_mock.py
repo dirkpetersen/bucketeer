@@ -105,9 +105,10 @@ def test_signature_covers_query_and_body(admin_ops, ops):
 
 
 def test_valueless_flag_and_plus_in_uid_sign_consistently(admin_ops, ops):
-    r = ops.request("PUT", "/admin/user", [("uid", "alice+backup"), ("display-name", "B")])
+    # values are decoded twice (Tentacle): `+` goes out as %252B, so the helper gets "%2B"
+    r = ops.request("PUT", "/admin/user", [("uid", "alice%2Bbackup"), ("display-name", "B")])
     assert r.status_code == 200 and r.json()["user_id"] == "alice+backup"
-    r = ops.request("GET", "/admin/user", [("quota", None), ("uid", "alice+backup"),
+    r = ops.request("GET", "/admin/user", [("quota", None), ("uid", "alice%2Bbackup"),
                                            ("quota-type", "user")])
     assert r.status_code == 200 and r.json()["enabled"] is False
 
@@ -412,12 +413,15 @@ def test_bucket_names_and_stats(admin_ops, ops):
     assert len(allstats) == 4
     mine = ops.get("/admin/bucket", stats="true", uid="alice").json()
     assert {b["bucket"] for b in mine} == {"alice-data", "alice-empty"}
+    # uid + bucket: ONE stats object, whoever owns it (`uid` only gives the tenant), as on Reef
+    one = ops.get("/admin/bucket", stats="true", uid="alice", bucket="bob-shared").json()
+    assert isinstance(one, dict) and one["owner"] == "bob"
     data = ops.get("/admin/bucket", bucket="alice-data").json()
     assert data["bucket"] == "alice-data" and data["owner"] == "alice" and data["tenant"] == ""
     assert data["usage"]["rgw.main"]["num_objects"] == 42
     assert data["usage"]["rgw.main"]["size_actual"] >= data["usage"]["rgw.main"]["size"] == 1048576
     assert data["placement_rule"] == "default-placement"
-    assert data["bucket_quota"]["max_size"] == -1 and data["versioned"] is False
+    assert data["bucket_quota"]["max_size"] == -1 and data["versioning"] == "off"
     assert data["object_lock_enabled"] is False
     assert ops.get("/admin/bucket", bucket="alice-empty").json()["usage"] == {}
     assert code(ops.get("/admin/bucket", bucket="nope"), 404) == "NoSuchBucket"
@@ -427,11 +431,11 @@ def test_bucket_names_and_stats(admin_ops, ops):
 def test_versioning_and_lock_flags(admin_ops, ops):
     admin_ops.state.create_bucket("locked", "bob", object_lock=True)
     s = ops.get("/admin/bucket", bucket="locked").json()
-    assert s["object_lock_enabled"] is True and s["versioning_enabled"] is True
+    assert s["object_lock_enabled"] is True and s["versioning"] == "enabled"
     admin_ops.state.update_bucket("bob-shared", {"versioning": "ENABLED"})
     admin_ops.state.update_bucket("bob-shared", {"versioning": "SUSPENDED"})
     s = ops.get("/admin/bucket", bucket="bob-shared").json()
-    assert s["versioned"] is True and s["versioning_enabled"] is False
+    assert s["versioning"] == "suspended"
 
 
 def test_tenant_uids_and_buckets(admin_ops, ops):
@@ -456,13 +460,10 @@ def test_tenant_uids_and_buckets(admin_ops, ops):
 def test_bucket_ops_with_uid(admin_ops, ops):
     assert ops.get("/admin/bucket", uid="acme$carol").json() == ["reports"]
     assert sorted(ops.get("/admin/bucket", uid="alice").json()) == ["alice-data", "alice-empty"]
-    # bucket= with uid is still an array: names, or stats objects with stats=true
-    assert ops.get("/admin/bucket", uid="acme$carol", bucket="reports").json() == ["reports"]
+    # bucket= with uid answers that bucket's ONE stats object, whoever owns it (Reef)
     stats = ops.get("/admin/bucket", uid="acme$carol", bucket="reports", stats="true").json()
-    assert isinstance(stats, list) and stats[0]["bucket"] == "reports"
-    assert stats[0]["tenant"] == "acme"
-    assert ops.get("/admin/bucket", uid="alice", bucket="alice-data").json() == ["alice-data"]
-    assert ops.get("/admin/bucket", uid="bob", bucket="alice-data").json() == []
+    assert stats["bucket"] == "reports" and stats["tenant"] == "acme"
+    assert ops.get("/admin/bucket", uid="bob", bucket="alice-data").json()["owner"] == "alice"
     assert code(ops.get("/admin/bucket", uid="alice", bucket="reports"), 404) == "NoSuchBucket"
     # without uid a single bucket answers one stats object
     assert isinstance(ops.get("/admin/bucket", bucket="acme/reports").json(), dict)
@@ -471,19 +472,22 @@ def test_bucket_ops_with_uid(admin_ops, ops):
 
 
 def test_plus_in_uid(admin_ops, ops):
-    uid = "alice+backup-job"
-    r = ops.put("/admin/user", uid=uid, **{"display-name": "alice backup"})
+    # the helper encodes once and the mock decodes twice (Tentacle): "%2B" here is a `+`
+    uid, sent = "alice+backup-job", "alice%2Bbackup-job"
+    r = ops.put("/admin/user", uid=sent, **{"display-name": "alice backup"})
     assert r.json()["user_id"] == uid and uid in admin_ops.state.users
-    k = ops.put("/admin/user", key=None, uid=uid, **{"access-key": "PLUSKEY0000000000001"}).json()
+    k = ops.put("/admin/user", key=None, uid=sent, **{"access-key": "PLUSKEY0000000000001"}).json()
     assert k[-1]["user"] == uid
     ops.put("/admin/user", '{"enabled": true, "max_size": 0, "max_objects": 0}', quota=None,
-            uid=uid, **{"quota-type": "user"})
-    q = ops.get("/admin/user", quota=None, uid=uid, **{"quota-type": "user"}).json()
+            uid=sent, **{"quota-type": "user"})
+    q = ops.get("/admin/user", quota=None, uid=sent, **{"quota-type": "user"}).json()
     assert q["enabled"] is True and q["max_size"] == 0 and q["max_objects"] == 0
-    tenant_uid = "acme$carol+job"
-    ops.put("/admin/user", uid=tenant_uid, **{"display-name": "x"})
-    assert ops.get("/admin/user", uid=tenant_uid).json()["tenant"] == "acme"
-    assert ops.delete("/admin/user", uid=uid).status_code == 200
+    ops.put("/admin/user", uid="acme$carol%2Bjob", **{"display-name": "x"})
+    assert ops.get("/admin/user", uid="acme$carol%2Bjob").json()["tenant"] == "acme"
+    assert ops.delete("/admin/user", uid=sent).status_code == 200
+    # a `+` encoded only once arrives as a space (the mock then refuses the uid)
+    ops.put("/admin/user", uid="bob+once", **{"display-name": "x"})
+    assert "bob+once" not in admin_ops.state.users
 
 
 def test_bucket_delete_without_purge_when_empty(admin_ops, ops):

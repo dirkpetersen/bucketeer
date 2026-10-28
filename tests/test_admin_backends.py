@@ -3,7 +3,6 @@
 RGW-specific behaviour (signing, encoding, gaps, settings, wiring) follows the contract."""
 
 import asyncio
-import json
 import logging
 
 import httpx
@@ -295,10 +294,10 @@ async def test_uids_with_plus_and_dollar_are_encoded_identically_signed_and_sent
     await rgw.delete_key("acme$job+1", "PLUSKEY000000000001")
     await rgw.set_user_quota("acme$job+1", enabled=True, max_size=1, max_objects=1)
     raws = [raw(r) for r in rgw.recorder.requests]
-    assert any("uid=acme%24job%2B1" in r for r in raws)
+    assert any("uid=acme%24job%252B1" in r for r in raws)
     assert all("+" not in r and "$" not in r for r in raws)
     put = next(r for r in raws if "secret-key" in r)
-    assert "secret-key=s3cr3t%2F%2B%3Dvalue" in put  # nothing left to be read as a space
+    assert "secret-key=s3cr3t%2F%252B%3Dvalue" in put  # RGW decodes twice
     # the mock verified every signature over the exact bytes sent (no 403 anywhere)
     assert (await rgw.get_user("acme$job+1"))["uid"] == "acme$job+1"
 
@@ -320,12 +319,13 @@ async def test_create_is_exclusive(rgw):
     assert e.value.status == 409 and "UserAlreadyExists" in e.value.message
 
 
-async def test_quota_bodies_replace_so_the_client_merges(rgw, admin_ops):
+async def test_quota_uses_the_query_form_and_keeps_omitted_limits(rgw, admin_ops):
     await rgw.set_user_quota("alice", enabled=True, max_size=500, max_objects=3)
     rgw.recorder.requests.clear()
     await rgw.set_user_quota("alice", enabled=False)
-    methods = [r.method for r in rgw.recorder.requests]
-    assert methods == ["GET", "PUT"]  # read the old limits, then write the whole quota
+    (put,) = rgw.recorder.requests  # one PUT, no read-back: RGW keeps what is left out
+    assert put.method == "PUT" and put.content == b"" and "enabled=false" in raw(put)
+    assert "max-size" not in raw(put)
     assert admin_ops.state.users["alice"].user_quota == {
         "enabled": False, "maxSize": 500, "maxObjects": 3}
 
@@ -637,22 +637,20 @@ async def test_get_bucket_asks_with_owner_and_bare_name(rgw):
     assert e.value.status == 404
 
 
-async def test_quota_put_carries_check_on_raw_and_always_reads_first(admin_ops):
+async def test_quota_put_sends_no_json_body(admin_ops):
+    # Reef answers a JSON-body user quota PUT with 501 (cluster check, 2026-10-27)
     seen = []
 
     class Quota(httpx.AsyncBaseTransport):
         async def handle_async_request(self, request):
-            seen.append((request.method, request.content))
-            if request.method == "GET":
-                return httpx.Response(200, json={
-                    "enabled": False, "check_on_raw": True, "max_size": 5, "max_objects": 6})
+            seen.append(request)
             return httpx.Response(200)
 
     client = RgwAdminClient(rgw_settings(admin_ops), transport=Quota())
-    await client.set_user_quota("alice", enabled=True, max_size=100, max_objects=200)
-    assert [m for m, _ in seen] == ["GET", "PUT"]  # read even though both limits were given
-    assert json.loads(seen[1][1]) == {
-        "enabled": True, "max_size": 100, "max_objects": 200, "check_on_raw": True}
+    await client.set_user_quota("alice", enabled=True, max_size=100, max_objects=-5)
+    (put,) = seen
+    assert put.method == "PUT" and put.content == b"" and "content-type" not in put.headers
+    assert put.url.query.decode().endswith("enabled=true&max-size=100&max-objects=-1")
     await client.aclose()
 
 

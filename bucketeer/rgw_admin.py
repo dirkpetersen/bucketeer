@@ -17,9 +17,10 @@ Mapping (croit method -> Admin Ops call; the returned dicts have croit's keys):
   uid (`tenant$uid`). RGW generates a key (as croit did).
 - `update_user`: `POST /admin/user` (`display-name`, `email`, `suspended`). `delete_user`:
   `DELETE /admin/user` WITHOUT `purge-data`: a user that owns buckets is refused (409).
-- `set_user_quota` / `set_user_bucket_quota` / `set_bucket_quota`: `PUT ...?quota` with a JSON
-  body. RGW replaces the WHOLE quota from a JSON body, so omitted fields are first read back
-  (read-modify-write) to keep croit's "only the given fields change" meaning.
+- `set_user_quota` / `set_user_bucket_quota` / `set_bucket_quota`: `PUT ...?quota` with the
+  values as query parameters (`enabled`, `max-size`, `max-objects`). RGW changes only the
+  given ones (croit's meaning). Reef refuses a JSON body for a user quota with 501 (checked
+  on the cluster, 2026-10-27), so no body is sent.
 - `list_keys` / `get_key` (`keys[]` of user info), `put_key` (`PUT /admin/user?key` with
   `generate-key=false`; the secret travels as a query value), `delete_key` (`DELETE
   /admin/user?key`). RGW answers 403 `InvalidAccessKeyId` both for a key that is already gone
@@ -53,7 +54,7 @@ app refuses it as a login, mapping target, share/ACL recipient and admin suspend
 those paths fail closed (unavailable/503). `CroitClient.service_uid()` is None.
 `list_users` reads concurrently (bounded per client and loop) and cancels the rest on the
 first failure. Only a 404 with RGW's `NoSuchUser`/`NoSuchBucket` code means "gone"; any other
-404 (wrong `RGW_ADMIN_URL`) is a 502. Quota PUT bodies carry over `check_on_raw`.
+404 (wrong `RGW_ADMIN_URL`) is a 502.
 
 Gaps: no Admin Ops counterpart, so these raise `RgwAdminUnsupported` (a `CroitError`, status
 501, "not_supported_by_backend: ..." naming the Phase 5 item that replaces the caller):
@@ -65,9 +66,10 @@ and `cfg_file` (A5: no caller reaches them; the admin types the placements and
 `token_info`, the bucket policy calls (S3 data plane) and the usage calls (not mapped yet).
 
 Signing: every request is signed with botocore's `S3SigV4Auth` (service `s3`, `S3_REGION`),
-which also sends `x-amz-content-sha256`. The query string is encoded once here
-(`quote(safe="-_.~")`: `+` -> `%2B`, `$` -> `%24`), signed as that exact text and sent as that
-exact text. Secrets (the admin secret key and the secret of `put_key`) never appear in logs,
+which also sends `x-amz-content-sha256`. The query string is encoded here
+(`quote(safe="-_.~")`, `$` -> `%24`; RGW decodes values twice, so `+` -> `%252B` and
+`%` -> `%2525`), signed as that exact text and sent as that exact text. Secrets (the admin
+secret key and the secret of `put_key`) never appear in logs,
 exception text or repr; request URLs are never put into an exception.
 """
 
@@ -109,7 +111,9 @@ class RgwAdminUnsupported(CroitError):
 
 
 def _enc(value: str) -> str:
-    return quote(value, safe="-_.~")
+    # RGW (Reef) decodes query values twice, so a `+` sent as `%2B` arrives as a space
+    # (checked on the cluster, 2026-10-27). `%` and `+` are escaped once more for that.
+    return quote(value.replace("%", "%25").replace("+", "%2B"), safe="-_.~")
 
 
 def _query(pairs: list[tuple[str, str | None]]) -> str:
@@ -159,6 +163,12 @@ def _user_view(info: dict) -> dict:
     }
 
 
+def _versioning(stats: dict) -> str | None:
+    """Reef's `versioning` (`off|enabled|suspended`) as croit's OFF/ENABLED/SUSPENDED."""
+    state = str(stats.get("versioning") or "").upper()
+    return state if state in ("OFF", "ENABLED", "SUSPENDED") else None
+
+
 def _bucket_view(stats: dict) -> dict:
     tenant = str(stats.get("tenant") or "")
     name = str(stats.get("bucket") or "")
@@ -177,8 +187,7 @@ def _bucket_view(stats: dict) -> dict:
         "mtime": stats.get("mtime"),
         "bucket_quota": _quota_view(stats.get("bucket_quota")),
         # carried by the stats, so the bucket list needs no extra call per bucket
-        "versioning": ("OFF" if not stats["versioned"] else "ENABLED" if stats.get(
-            "versioning_enabled") else "SUSPENDED") if "versioned" in stats else None,
+        "versioning": _versioning(stats),
         "objectLock": (bool(stats["object_lock_enabled"])
                        if "object_lock_enabled" in stats else None),
         "usage": {"default": usage},
@@ -532,26 +541,21 @@ class RgwAdminClient:
     # -- quotas --
 
     @staticmethod
-    def _quota_body(raw: dict | None, enabled: bool, max_size: int | None,
-                    max_objects: int | None) -> dict:
-        """The body for a PUT: RGW replaces the WHOLE quota from a JSON body, so everything
-        not given (limits, `check_on_raw`) is carried over from the quota read back first."""
-        current = _quota_view(raw)
-        size = current["maxSize"] if max_size is None else max_size
-        objects = current["maxObjects"] if max_objects is None else max_objects
-        body = {"enabled": enabled, "max_size": -1 if size < 0 else size,
-                "max_objects": -1 if objects < 0 else objects}
-        if isinstance(raw, dict) and "check_on_raw" in raw:
-            body["check_on_raw"] = raw["check_on_raw"]
-        return body
+    def _quota_pairs(enabled: bool, max_size: int | None,
+                     max_objects: int | None) -> list[tuple[str, str | None]]:
+        """Query form: a None limit is left out, and RGW keeps its stored value."""
+        pairs: list[tuple[str, str | None]] = [("enabled", _flag(enabled))]
+        if max_size is not None:
+            pairs.append(("max-size", str(-1 if max_size < 0 else max_size)))
+        if max_objects is not None:
+            pairs.append(("max-objects", str(-1 if max_objects < 0 else max_objects)))
+        return pairs
 
     async def _set_quota_of_user(self, uid: str, kind: str, enabled: bool,
                                  max_size: int | None, max_objects: int | None) -> None:
-        pairs: list[tuple[str, str | None]] = [
-            ("quota", None), ("uid", uid), ("quota-type", kind)]
-        raw = await self._request("GET", "/admin/user", pairs)
-        body = self._quota_body(raw, enabled, max_size, max_objects)
-        await self._request("PUT", "/admin/user", pairs, body=body)
+        await self._request("PUT", "/admin/user", [
+            ("quota", None), ("uid", uid), ("quota-type", kind),
+            *self._quota_pairs(enabled, max_size, max_objects)])
 
     async def set_user_quota(
         self, uid: str, *, enabled: bool, max_size: int | None = None,
@@ -570,12 +574,11 @@ class RgwAdminClient:
         max_objects: int | None = None,
     ) -> None:
         stats = await self._bucket_stats(name)
-        body = self._quota_body(stats.get("bucket_quota"), enabled, max_size, max_objects)
         short = str(stats.get("bucket") or name.partition(":")[2] or name)
         await self._request(
             "PUT", "/admin/bucket",
-            [("quota", None), ("uid", str(stats.get("owner") or "")), ("bucket", short)],
-            body=body,
+            [("quota", None), ("uid", str(stats.get("owner") or "")), ("bucket", short),
+             *self._quota_pairs(enabled, max_size, max_objects)],
         )
 
     # -- keys --
@@ -675,19 +678,17 @@ class RgwAdminClient:
     # -- buckets --
 
     async def _bucket_stats(self, name: str, owner: str | None = None) -> dict:
-        """Stats of one bucket. With the owner: `uid=<owner>&bucket=<bare>&stats=true` (an
-        array; empty when the owner does not own it). Without: `bucket=tenant/name`."""
+        """Stats of one bucket: one object (Reef, checked on the cluster 2026-10-27). With the
+        owner: `uid=<owner>&bucket=<bare>&stats=true`, where `uid` only gives the tenant, so a
+        bucket of someone else is 404 here. Without: `bucket=tenant/name`."""
         if owner is not None:
-            rows = await self._request("GET", "/admin/bucket", [
-                ("uid", owner), ("bucket", name.rpartition(":")[2]), ("stats", "true")])
-            bare = name.rpartition(":")[2]
-            stats = next((r for r in rows if isinstance(r, dict) and r.get("bucket") == bare),
-                         None) if isinstance(rows, list) else None
+            pairs = [("uid", owner), ("bucket", name.rpartition(":")[2]), ("stats", "true")]
         else:
-            stats = await self._request("GET", "/admin/bucket", [("bucket", _bucket_ref(name))])
-            if isinstance(stats, list):
-                stats = stats[0] if stats else None
-        if not isinstance(stats, dict):
+            pairs = [("bucket", _bucket_ref(name))]
+        stats = await self._request("GET", "/admin/bucket", pairs)
+        if isinstance(stats, list):
+            stats = stats[0] if stats else None
+        if not isinstance(stats, dict) or (owner is not None and stats.get("owner") != owner):
             raise CroitError(404, None, f"Bucket {name} not found")
         return stats
 
@@ -745,11 +746,7 @@ class RgwAdminClient:
         stats = await self._bucket_stats(name, owner)
         if owner is not None and stats.get("owner") != owner:
             raise CroitError(404, None, f"Bucket {name} not found")
-        if not stats.get("versioned"):
-            state = "OFF"
-        else:
-            state = "ENABLED" if stats.get("versioning_enabled") else "SUSPENDED"
-        return {"versioning": state}
+        return {"versioning": _versioning(stats)}
 
     async def bucket_owner(self, name: str) -> str | None:
         """Owner uid of one bucket (`tenant:name`) by a direct lookup (`GET /admin/bucket?

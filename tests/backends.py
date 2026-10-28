@@ -13,7 +13,7 @@ shape or on bucket create/delete/versioning/placements (Phase 5 A3 to A5) call `
 """
 
 import json
-from urllib.parse import parse_qsl, quote
+from urllib.parse import parse_qsl, quote, unquote_plus
 
 import httpx
 import pytest
@@ -85,7 +85,9 @@ def croit_view(request: httpx.Request) -> httpx.Request:
     """An Admin Ops request as the croit API call it replaces (method, path, JSON body), so
     the recording `Transport` and tests that inject failures per croit endpoint work on both
     backends. Only the shapes Bucketeer uses are mapped; the real request is what is sent."""
-    q = dict(parse_qsl(request.url.query.decode(), keep_blank_values=True))
+    # decoded twice, like RGW (Tentacle): a `+` is sent as %252B
+    q = {k: unquote_plus(v) for k, v in parse_qsl(request.url.query.decode(),
+                                                   keep_blank_values=True)}
     enc = lambda x: quote(x, safe="")  # noqa: E731
     uid, m, path = q.get("uid", ""), request.method, request.url.path
     body = json.loads(request.content) if request.content else {}
