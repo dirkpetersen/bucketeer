@@ -154,7 +154,7 @@ export function bucketsCard() {
   const count = h("span", { class: "chip", hidden: true });
   const card = h("section", { class: "card panel panel-wide bk", "aria-labelledby": "h-buckets" },
     h("div", { class: "panel-head" },
-      h("div", { class: "bk-title" }, h("h2", { id: "h-buckets", text: "Buckets" }), count),
+      h("div", { class: "bk-title" }, h("h2", { id: "h-buckets", text: "Your buckets" }), count),
       createBtn),
     h("p", { class: "panel-note", text: "Your buckets, with usage against quota and the budget number each is charged to." }),
     body,

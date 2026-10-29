@@ -359,6 +359,10 @@ async def create_share(name: str, body: ShareBody, request: Request, response: R
                "created_at": None}
     out = _view(row)
     out["accountCreated"] = bool(rcpt.created)
+    if not existing:
+        # None = email is switched off, False = could not send (the share itself stands)
+        out["emailed"] = await request.app.state.mailer.send_share_invite(
+            person.email, acct.display_name or user.display_name, short, body.access)
     if existing:
         out["updated"] = True
         response.status_code = 200

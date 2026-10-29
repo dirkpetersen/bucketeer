@@ -545,3 +545,34 @@ def test_shared_with_me_keeps_rows_when_croit_answers_a_non_list(env, body):
     env.transport.fail = real
     assert out.status_code == 200
     assert env.db.shares.get(live["id"])["revoked_at"] is None
+
+
+class FakeMailer:
+    def __init__(self, result=True):
+        self.result, self.sent = result, []
+
+    async def send_share_invite(self, to, owner_name, bucket, access):
+        self.sent.append((to, owner_name, bucket, access))
+        return self.result
+
+
+def test_new_share_sends_invitation_once(env):
+    env.app.state.mailer = FakeMailer(True)
+    r = share(env.alice, "erin", "readwrite")
+    assert r.status_code == 201 and r.json()["emailed"] is True
+    assert env.app.state.mailer.sent == [("erin@example.org", env.app.state.mailer.sent[0][1],
+                                           "alice-data", "readwrite")]
+    again = share(env.alice, "erin", "read")  # a change of access is not a new invitation
+    assert again.status_code == 200 and "emailed" not in again.json()
+    assert len(env.app.state.mailer.sent) == 1
+
+
+def test_failed_invitation_never_fails_the_share(env):
+    env.app.state.mailer = FakeMailer(False)
+    r = share(env.alice, "erin")
+    assert r.status_code == 201 and r.json()["emailed"] is False
+
+
+def test_email_off_by_default(env):
+    r = share(env.alice, "erin")
+    assert r.status_code == 201 and r.json()["emailed"] is None

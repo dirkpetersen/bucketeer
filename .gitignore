@@ -151,6 +151,7 @@ activemq-data/
 
 # Environments
 .env
+.env.osu
 .envrc
 .venv
 env/

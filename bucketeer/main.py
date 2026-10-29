@@ -21,6 +21,7 @@ from . import (
     credentials,
     lifecycle,
     lifecycle_rules,
+    mailer,
     multipart,
     notifications,
     object_lock,
@@ -132,6 +133,7 @@ def create_app(
     app.state.rgw.on_login = app.state.offboarding.on_login
 
     app.state.endpoints = credentials.EndpointResolver(client, settings, clock)
+    app.state.mailer = mailer.Mailer(settings)
     app.state.s3 = s3client.S3Clients(client, settings, app.state.endpoints)
     # Always False here. Only mock/demo.py flips it on the finished app object;
     # no setting or environment variable can (tests/test_demo.py).

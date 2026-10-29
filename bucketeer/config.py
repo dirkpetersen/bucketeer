@@ -105,6 +105,15 @@ class Settings(BaseSettings):
     rgw_admin_secret_key: SecretStr = SecretStr("")
     rgw_admin_timeout: int = Field(15, gt=0)
 
+    # Email (optional): share invitations. Empty smtp_host = no email is sent.
+    smtp_host: str = ""
+    smtp_port: int = Field(587, ge=1, le=65535)
+    smtp_security: Literal["starttls", "ssl", "none"] = "starttls"
+    smtp_username: str = ""
+    smtp_password: SecretStr = SecretStr("")
+    smtp_from: str = ""
+    app_url: str = ""
+
     # S3
     s3_endpoint_url: str = ""
     s3_region: str = "us-east-1"
@@ -137,6 +146,20 @@ class Settings(BaseSettings):
         if v and not ENDPOINT_URL_RE.match(v):
             raise ValueError("must look like https://host[:port] (no spaces, quotes or newlines)")
         return v
+
+    @model_validator(mode="after")
+    def _mail_settings(self):
+        if self.smtp_host or self.smtp_from:
+            need = (("SMTP_FROM", self.smtp_from), ("APP_URL", self.app_url))
+            missing = [n for n, v in need if not v]
+            if missing:
+                raise ValueError("email is on (SMTP_HOST or SMTP_FROM is set), so also set: "
+                                 + ", ".join(missing))
+            if not re.fullmatch(r"[^\s@<>\"]+@[^\s@<>\"]+", self.smtp_from):
+                raise ValueError("SMTP_FROM must be a plain email address")
+            if not re.fullmatch(r"https?://[A-Za-z0-9.-]+(:\d+)?(/\S*)?", self.app_url):
+                raise ValueError("APP_URL must be an http(s) address")
+        return self
 
     @model_validator(mode="after")
     def _backend_settings(self):

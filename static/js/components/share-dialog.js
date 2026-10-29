@@ -158,7 +158,7 @@ export async function shareDialog({ bucket }) {
       const access = confirmBox.querySelector("input[type=radio]:checked").value;
       const res = await createBucketShare(bucket, person.username, access);
       changed = true;
-      toast.show(res.warning ?? `Shared with ${person.displayName || person.username}${res.accountCreated ? " (S3 account created)" : ""}.`, res.warning ? { timeout: 9000 } : undefined);
+      toast.show(res.warning ?? `Shared with ${person.displayName || person.username}${res.accountCreated ? " (S3 account created)" : ""}.${res.emailed === true ? " An email invitation was sent." : res.emailed === false ? " The email invitation could not be sent; tell them yourself." : ""}`, res.warning ? { timeout: 9000 } : undefined);
       clearFound();
       login.value = "";
       await reload();
