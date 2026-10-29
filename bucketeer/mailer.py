@@ -1,4 +1,4 @@
-"""Share invitation email (CLAUDE.md "Sharing"). Optional: with `SMTP_HOST` empty nothing is sent.
+"""Share invitation email (CLAUDE.md "Sharing"). Optional: with `SMTP_FROM` empty nothing is sent.
 
 With `SMTP_HOST` empty and `SMTP_FROM` set, the mail server is the recipient domain's MX record
 (lowest preference first, then the next ones; no MX = the domain's own address), port 25,
@@ -34,7 +34,7 @@ class Mailer:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.s.smtp_host or self.s.smtp_from)
+        return bool(self.s.smtp_from)
 
     def _build(self, to: str, owner_name: str, bucket: str, access: str) -> EmailMessage:
         s = self.s

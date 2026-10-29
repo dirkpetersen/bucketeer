@@ -149,12 +149,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _mail_settings(self):
-        if self.smtp_host or self.smtp_from:
-            need = (("SMTP_FROM", self.smtp_from), ("APP_URL", self.app_url))
-            missing = [n for n, v in need if not v]
-            if missing:
-                raise ValueError("email is on (SMTP_HOST or SMTP_FROM is set), so also set: "
-                                 + ", ".join(missing))
+        if self.smtp_from:  # SMTP_FROM turns email on; SMTP_HOST alone changes nothing
+            if not self.app_url:
+                raise ValueError("SMTP_FROM is set (email is on), so also set: APP_URL")
             if not re.fullmatch(r"[^\s@<>\"]+@[^\s@<>\"]+", self.smtp_from):
                 raise ValueError("SMTP_FROM must be a plain email address")
             if not re.fullmatch(r"https?://[A-Za-z0-9.-]+(:\d+)?(/\S*)?", self.app_url):

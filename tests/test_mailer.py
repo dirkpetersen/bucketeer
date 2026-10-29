@@ -47,11 +47,11 @@ def test_send_failure_returns_false(monkeypatch):
     assert asyncio.run(on.send_share_invite("a@b.c", "A", "d", "read")) is False
 
 
-def test_host_requires_sender_and_url():
-    with pytest.raises(ValidationError, match="SMTP_FROM, APP_URL"):
-        Settings(_env_file=None, **REQUIRED, smtp_host="smtp.example.org")
+def test_sender_turns_email_on_and_needs_url():
     with pytest.raises(ValidationError, match="APP_URL"):
         Settings(_env_file=None, **REQUIRED, smtp_from="a@example.org")
+    relay_only = Settings(_env_file=None, **REQUIRED, smtp_host="smtp.example.org")
+    assert Mailer(relay_only).enabled is False
 
 
 def test_mx_mode_tries_mx_hosts_in_order(monkeypatch):
