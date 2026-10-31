@@ -548,6 +548,8 @@ def test_shared_with_me_keeps_rows_when_croit_answers_a_non_list(env, body):
 
 
 class FakeMailer:
+    enabled = True
+
     def __init__(self, result=True):
         self.result, self.sent = result, []
 
@@ -559,7 +561,7 @@ class FakeMailer:
 def test_new_share_sends_invitation_once(env):
     env.app.state.mailer = FakeMailer(True)
     r = share(env.alice, "erin", "readwrite")
-    assert r.status_code == 201 and r.json()["emailed"] is True
+    assert r.status_code == 201 and r.json()["emailed"] == "queued"
     assert env.app.state.mailer.sent == [("erin@example.org", env.app.state.mailer.sent[0][1],
                                            "alice-data", "readwrite")]
     again = share(env.alice, "erin", "read")  # a change of access is not a new invitation
@@ -567,10 +569,11 @@ def test_new_share_sends_invitation_once(env):
     assert len(env.app.state.mailer.sent) == 1
 
 
-def test_failed_invitation_never_fails_the_share(env):
-    env.app.state.mailer = FakeMailer(False)
+def test_invitation_is_queued_not_awaited(env):
+    env.app.state.mailer = FakeMailer(False)  # a failed send never changes the answer
     r = share(env.alice, "erin")
-    assert r.status_code == 201 and r.json()["emailed"] is False
+    assert r.status_code == 201 and r.json()["emailed"] == "queued"
+    assert len(env.app.state.mailer.sent) == 1
 
 
 def test_email_off_by_default(env):

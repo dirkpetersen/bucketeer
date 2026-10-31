@@ -169,3 +169,11 @@ def test_missing_ca_file_stops_startup_with_a_clear_message(monkeypatch, tmp_pat
     (tmp_path / "ca.pem").write_text(pem)
     monkeypatch.setenv("LDAP_CA_CERT_FILE", str(tmp_path / "ca.pem"))
     assert load_settings().ldap_ca_cert_file.endswith("ca.pem")
+
+
+def test_smtp_login_without_encryption_is_refused():
+    base = {**REQUIRED, "smtp_from": "b@example.org", "app_url": "https://b.example.org"}
+    with pytest.raises(ValueError, match="clear text"):
+        Settings(_env_file=None, **base, smtp_username="u", smtp_security="none")
+    Settings(_env_file=None, **base, smtp_username="u", smtp_security="starttls")
+    Settings(_env_file=None, **base, smtp_security="none")

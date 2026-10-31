@@ -157,6 +157,9 @@ class Settings(BaseSettings):
                 raise ValueError("SMTP_FROM must be a plain email address")
             if not re.fullmatch(r"https?://[A-Za-z0-9.-]+(:\d+)?(/\S*)?", self.app_url):
                 raise ValueError("APP_URL must be an http(s) address")
+            if self.smtp_username and self.smtp_security == "none":
+                raise ValueError("SMTP_USERNAME with SMTP_SECURITY=none would send the "
+                                 "login in clear text; use starttls or ssl")
         return self
 
     @model_validator(mode="after")

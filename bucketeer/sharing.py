@@ -41,7 +41,7 @@ from collections import deque
 from typing import Annotated, Any, Literal
 
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import s3docs
@@ -307,7 +307,7 @@ async def list_shares(name: str, request: Request, response: Response, acct: Acc
 
 @router.post("/buckets/{name}/shares")
 async def create_share(name: str, body: ShareBody, request: Request, response: Response,
-                       acct: Account, user: User):
+                       acct: Account, user: User, background: BackgroundTasks):
     response.headers["Cache-Control"] = "no-store"
     db = request.app.state.db
     short, full = await _owned(request, acct, name, user.username)
@@ -360,9 +360,15 @@ async def create_share(name: str, body: ShareBody, request: Request, response: R
     out = _view(row)
     out["accountCreated"] = bool(rcpt.created)
     if not existing:
-        # None = email is switched off, False = could not send (the share itself stands)
-        out["emailed"] = await request.app.state.mailer.send_share_invite(
-            person.email, acct.display_name or user.display_name, short, body.access)
+        # Sent after the answer, so a slow mail server never holds up the share.
+        # None = email is switched off, "queued" = it will be tried (failures are only logged).
+        mailer = request.app.state.mailer
+        if mailer.enabled:
+            background.add_task(mailer.send_share_invite, person.email,
+                                acct.display_name or user.display_name, short, body.access)
+            out["emailed"] = "queued"
+        else:
+            out["emailed"] = None
     if existing:
         out["updated"] = True
         response.status_code = 200
