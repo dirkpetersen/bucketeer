@@ -69,8 +69,7 @@ bundler and no build step**. FastAPI serves the files as they are.
 
 ## Cluster and directory side
 
-- **Ceph RGW.** The admin plane is the RGW Admin Ops API (default) or the croit API
-  (optional). The data plane is the S3 API, called with the user's own keys.
+- **Ceph RGW.** The admin plane is the RGW Admin Ops API. The data plane is the S3 API, called with the user's own keys.
 - **Active Directory** over LDAPS. The app binds with a read-only service account, then
   verifies the user's password with a second bind.
 - **SMTP** for share invitations. It is off by default.
@@ -82,16 +81,12 @@ bundler and no build step**. FastAPI serves the files as they are.
 | pytest (`>=8`) | about 2,500 tests; a full run takes about 11 minutes |
 | moto[server] (`>=5`) | local S3 and SNS server for tests and the demo |
 | ruff (`>=0.6`) | lint |
-| pyyaml, jsonschema | check the croit mock against the croit OpenAPI file |
 | cryptography | build test certificates for the LDAP CA fetch tests |
 | node | a few tests (the zip writer) |
 
-The `mock/` folder holds a mock croit API, a mock RGW Admin Ops API (with real SigV4
+The `mock/` folder holds a mock RGW Admin Ops API (with real SigV4
 checks), a bridge to moto, and `demo.py`, a local demo with fake users. Run it with
 `python3 mock/demo.py`.
-
-The `tools/` folder holds standalone administrator scripts that use only the standard
-library: `croit-cert` and `croit-gate`.
 
 ## Documentation
 

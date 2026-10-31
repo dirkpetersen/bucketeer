@@ -7,7 +7,7 @@ import { confirmDialog } from "../components/confirm-dialog.js";
 // The "Offboarding" tab of the administration page: the daily job that suspends
 // the S3 accounts (and bucket keys) of people who left AD. It starts in report mode
 // (nobody is suspended; the list shows who would be). Switching to enforce is explicit.
-// Names in results come from AD and croit: shown through h()/text only.
+// Names in results come from AD and the cluster: shown through h()/text only.
 
 const REASONS = {
   disabled: "Account disabled in AD",

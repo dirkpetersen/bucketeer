@@ -11,10 +11,6 @@ nav = [
   { "Security" = "security.md" },
   { "Deployment" = "deployment.md" },
   { "Admin Ops setup" = "admin-ops-setup.md" },
-  { "API notes" = [
-    { "croit API tokens" = "api/README.md" },
-    { "S3 features" = "api/s3-features.md" },
-  ] },
 ]
 
 [project.theme]

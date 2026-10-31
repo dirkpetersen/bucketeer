@@ -404,7 +404,7 @@ function mappingsSection(data, apply) {
     ? h("ul", { class: "set-list" }, rows.map((r) => h("li", { class: "set-item" },
       h("div", { class: "set-item-main" },
         h("span", { class: "set-pair" }, h("b", { text: r.adUsername }), icon("right", "icon set-arrow"), h("code", { text: r.rgwUid })),
-        h("div", { class: "chips" }, r.exists === false ? chip("Not found in croit", "chip-warn") : r.exists === true ? chip("RGW user exists", "chip-ok") : chip("Not checked"))),
+        h("div", { class: "chips" }, r.exists === false ? chip("Not found on the cluster", "chip-warn") : r.exists === true ? chip("RGW user exists", "chip-ok") : chip("Not checked"))),
       h("div", { class: "acts" },
         h("button", { class: "btn btn-sm", type: "button", "aria-label": `Edit mapping of ${r.adUsername}`, on: { click: () => { ad.value = r.adUsername; uid.value = r.rgwUid; clear.hidden = false; add.lastChild.textContent = "Update mapping"; uid.focus(); } } }, icon("edit"), "Edit"),
         h("button", { class: "btn btn-sm btn-quiet-danger", type: "button", "aria-label": `Remove mapping of ${r.adUsername}`, on: { click: async () => {

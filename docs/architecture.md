@@ -3,9 +3,8 @@
 ## Two API planes
 
 - **Admin plane.** Creates and changes S3 users, keys, quotas and suspension, and lists
-  buckets. The default backend is the RGW Admin Ops API (`ADMIN_BACKEND=rgw`), signed with
-  SigV4 using a dedicated service user. The croit API (`ADMIN_BACKEND=croit`) stays
-  selectable. There is never a fallback between the two.
+  buckets. It uses the RGW Admin Ops API, signed with
+  SigV4 using a dedicated service user.
 - **Data plane.** Everything S3 itself offers: bucket create, versioning, lifecycle, CORS,
   tags, object lock, notifications, policies, ACLs and presigned URLs. These calls use
   **the logged-in user's own keys**, so RGW enforces ownership and policy. Bucketeer never
@@ -47,5 +46,4 @@ never stored in it.
 
 ## Mocks
 
-`mock/` lets you run and test the whole app without Ceph, croit or Active Directory. Test
-suites run the same behaviour against both admin backends.
+`mock/` lets you run and test the whole app without Ceph or Active Directory.

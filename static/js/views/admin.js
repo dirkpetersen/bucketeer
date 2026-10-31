@@ -114,7 +114,7 @@ export function renderAdmin() {
         subject: h("span", {}, isUser ? "Applies to all buckets of " : "Applies to ", h("strong", { text: id }), "."),
         hint: isUser ? " Combined size and object count." : " Use 1 or more; to block writes, suspend the owner.",
         quota: row.quota,
-        min: isUser ? 0 : 1, // croit reads a bucket bound of 0 as no bound
+        min: isUser ? 0 : 1, // a bucket bound of 0 means no bound
         onSave: async (body) => {
           const res = await (isUser ? setUserQuota(id, body) : setBucketQuota(id, body));
           row.quota = res.quota;
