@@ -34,6 +34,10 @@ S3 tests use a session-wide `moto_server` (moto `ThreadedMotoServer` on a free p
 
 Settings read `./.env` only (no upward search). Tests never read a real `.env`: the fixture clears the settings variables and tests build settings with `Settings(_env_file=None, **REQUIRED)` (see `tests/conftest.py`).
 
+## Documentation site
+
+User and operator docs are Markdown in `docs/`, built with Zensical (`zensical.toml`; `pip install zensical`, then `zensical serve` or `zensical build`, output `site/`, git-ignored). `docs/stack.md` lists the full software stack with versions: keep it in step with `requirements*.txt` and the frontend layout when either changes. Add new pages to `nav` in `zensical.toml`.
+
 ## Stack constraints (set by the owner)
 
 - **Backend:** Python + FastAPI. It is the only component that talks to the croit API. The browser never calls croit directly and never sees a croit token.

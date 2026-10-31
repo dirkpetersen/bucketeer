@@ -14,6 +14,10 @@ Setup for the default backend (service user and caps, an internal `RGW_ADMIN_URL
 
 **Upgrading an existing deployment:** appmotel never adds new lines to an existing `.env`, so a deployment set up before the Admin Ops switch has no `ADMIN_BACKEND` line and will refuse to start after the update. Before `appmo update`, run `appmo env bucketeer` and add `ADMIN_BACKEND=croit` to keep the old behaviour, or configure the Admin Ops settings first (see section 9 of the guide).
 
+## Documentation
+
+The docs (software stack, architecture, security, deployment) are in `docs/` and build with Zensical: `pip install zensical && zensical serve`.
+
 ## Try it locally
 
 No Active Directory, croit or Ceph needed:

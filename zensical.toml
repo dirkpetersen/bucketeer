@@ -1,0 +1,22 @@
+# Documentation site (Zensical). Preview: zensical serve. Build: zensical build.
+[project]
+site_name = "Bucketeer"
+site_description = "Self-service S3 portal for Ceph clusters"
+docs_dir = "docs"
+site_dir = "site"
+nav = [
+  { "Home" = "index.md" },
+  { "Software stack" = "stack.md" },
+  { "Architecture" = "architecture.md" },
+  { "Security" = "security.md" },
+  { "Deployment" = "deployment.md" },
+  { "Admin Ops setup" = "admin-ops-setup.md" },
+  { "API notes" = [
+    { "croit API tokens" = "api/README.md" },
+    { "S3 features" = "api/s3-features.md" },
+  ] },
+]
+
+[project.theme]
+variant = "modern"
+features = ["navigation.sections", "content.code.copy"]
