@@ -1,3 +1,5 @@
+import sys
+
 import uvicorn
 
 from bucketeer.config import load_settings
@@ -17,4 +19,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if "--fetch-ldap-ca" in sys.argv:
+        from bucketeer.ldapca import main as fetch_ca
+
+        raise SystemExit(fetch_ca(sys.argv[1:]))
     main()

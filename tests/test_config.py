@@ -157,3 +157,15 @@ def test_environment_beats_dotenv(monkeypatch, tmp_path):
     s = load_settings()
     assert s.port == 9555
     assert s.app_name == "Bucket Eer"
+
+
+def test_missing_ca_file_stops_startup_with_a_clear_message(monkeypatch, tmp_path):
+    for k, v in {**REQUIRED, "ldap_ca_cert_file": str(tmp_path / "nope.pem")}.items():
+        monkeypatch.setenv(k.upper(), v)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit, match="LDAP_CA_CERT_FILE.*THIS server"):
+        load_settings()
+    pem = "-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n"
+    (tmp_path / "ca.pem").write_text(pem)
+    monkeypatch.setenv("LDAP_CA_CERT_FILE", str(tmp_path / "ca.pem"))
+    assert load_settings().ldap_ca_cert_file.endswith("ca.pem")

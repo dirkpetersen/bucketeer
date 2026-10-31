@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     ldap_required_group_dn: str = ""
     ldap_admin_group_dn: str = ""
     ldap_ca_cert_file: str = ""
+    ldap_ca_sha256: str = ""
     ldap_tls_verify: bool = True
     ldap_timeout: int = Field(5, gt=0)
 
@@ -213,6 +214,14 @@ class Settings(BaseSettings):
             raise ValueError("must contain the {login} placeholder")
         return v
 
+    @field_validator("ldap_ca_sha256")
+    @classmethod
+    def _check_pin(cls, v: str) -> str:
+        v = v.replace(":", "").replace(" ", "").strip()
+        if v and not re.fullmatch(r"[0-9A-Fa-f]{64}", v):
+            raise ValueError("must be a SHA-256 fingerprint: 64 hex digits (colons allowed)")
+        return v.upper()
+
     @field_validator("log_level")
     @classmethod
     def _check_level(cls, v: str) -> str:
@@ -241,6 +250,24 @@ def _backend_problems() -> list[str]:
             for n in names or () if not env.get(n)]
 
 
+def _ca_file_problems(s: Settings) -> list[str]:
+    """CA bundle settings that point at nothing usable. Without this the first login or
+    request fails with a stack trace instead of a clear message at startup."""
+    out = []
+    for name in ("ldap_ca_cert_file", "croit_ca_cert_file", "s3_ca_cert_file"):
+        path = getattr(s, name)
+        if not path:
+            continue
+        try:
+            ok = "BEGIN CERTIFICATE" in Path(path).read_text(errors="replace")
+        except OSError:
+            ok = False
+        if not ok:
+            out.append(f"  {name.upper()}: {path} is missing, unreadable or not a PEM "
+                       "certificate file (the path must exist on THIS server)")
+    return out
+
+
 def load_settings() -> Settings:
     """Load ./.env (cwd only, never searched upward; never overriding the environment).
 
@@ -248,7 +275,13 @@ def load_settings() -> Settings:
     """
     load_dotenv(Path.cwd() / ".env", override=False)
     try:
-        return Settings()
+        settings = Settings()
+        from .ldapca import ensure_ca_file
+
+        ensure_ca_file(settings)  # fetches a missing LDAP CA file (logged, see ldapca.py)
+        if problems := _ca_file_problems(settings):
+            raise SystemExit("Invalid configuration (see .env.default):\n" + "\n".join(problems))
+        return settings
     except ValidationError as e:
         lines = _backend_problems()  # pydantic skips the cross-field check after field errors
         listed = bool(lines)
