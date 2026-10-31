@@ -1,5 +1,8 @@
-# bucketeer
+# Bucketeer
 Self-service S3 bucket and credential portal for Ceph clusters (croit-managed or plain RGW), powered by the RGW Admin Ops API
+
+<img width="776" height="1104" alt="image" src="https://github.com/user-attachments/assets/2944d1fb-3adc-45b2-b489-0950b50eccbd" />
+
 
 ## Admin backends and setup
 
