@@ -42,31 +42,31 @@ that connect each one to our Ceph cluster.
 ### Cyberduck
 
 Free, Windows and Mac. Drag and drop, easy to set up. The best start for most people.
-[Set up](#cyberduck)
+[Set up](#setup-cyberduck)
 </div>
 <div class="osu-card blue" markdown>
 <span class="osu-tag">Command line</span>
 
-### AWS CLI v2
+### AWS CLI v2 { #setup-aws-cli }
 
 The reference tool. Bucketeer's setup command configures it for you.
-[Examples](#aws-cli-v2)
+[Examples](#setup-aws-cli)
 </div>
 <div class="osu-card pine" markdown>
 <span class="osu-tag">Sync and mount</span>
 
-### rclone
+### rclone { #setup-rclone }
 
 Sync folders, mount a bucket as a drive, check checksums. One tool for everything.
-[Examples](#rclone)
+[Examples](#setup-rclone)
 </div>
 <div class="osu-card gold" markdown>
 <span class="osu-tag">Web app</span>
 
-### Motuz
+### Motuz { #setup-motuz }
 
 Large transfers between file systems and the cloud, from the browser, with checksums.
-[Read more](#motuz)
+[Read more](#setup-motuz)
 </div>
 </div>
 
@@ -241,7 +241,7 @@ setup command again, rclone uses the new key at once.
 `sudo -v ; curl https://rclone.org/install.sh | sudo bash`). Check it with
 `rclone version`.
 
-**Step 2. Make the profile `bucketeer` for the AWS CLI first** ([see above](#aws-cli-v2)).
+**Step 2. Make the profile `bucketeer` for the AWS CLI first** ([see above](#setup-aws-cli)).
 
 **Step 3. Create the rclone remote `bucketeer` from that profile.** This one command
 copies the endpoint from your AWS config, so you do not need to type it:
@@ -354,17 +354,62 @@ signature_v2 = False
 
 ## Desktop apps
 
-### Cyberduck
+### Cyberduck { #setup-cyberduck }
 
-1. Install Cyberduck from [cyberduck.io](https://cyberduck.io/).
-2. Click **Open Connection** and choose **Amazon S3**.
-3. **Server**: the endpoint host, for example `s3.example.edu`, port `443`.
-4. **Access Key ID** and **Secret Access Key**: your keys from Bucketeer.
-5. Click **Connect**. Drag files in and out of the window.
+Cyberduck is free (it asks for a donation) and runs on Windows and macOS.
 
-For many large files, use rclone or s5cmd instead: Cyberduck is slower for bulk transfers.
-**Mountain Duck**, from the same vendor, uses the same settings and shows the bucket as a
-drive.
+**Step 1. Get your keys.** In Bucketeer, turn on **Advanced** at the top. The
+**Credentials** card then shows your **access key**. Click the eye button next to the
+secret key to show it for 60 seconds, and copy it. Also note the **endpoint** shown there,
+for example `https://s3.example.edu`.
+
+**Step 2. Install.** Download Cyberduck from [cyberduck.io](https://cyberduck.io/download/)
+(Windows: the `.exe` installer; macOS: the `.zip`, or the Mac App Store).
+
+**Step 3. Make a bookmark.** A bookmark keeps the settings, so you type them only once.
+
+1. Open **Bookmark, New Bookmark** (++ctrl+shift+b++ on Windows, ++cmd+shift+b++ on macOS).
+2. In the first field choose **Amazon S3**.
+3. Fill in:
+
+    | Field | Value |
+    |---|---|
+    | Nickname | `Bucketeer` |
+    | Server | the endpoint host without `https://`, for example `s3.example.edu` |
+    | Port | `443` |
+    | Access Key ID | your access key |
+    | Path | empty, or a bucket name to open that bucket at once |
+
+4. Close the window. The bookmark is in the bookmark list.
+
+**Step 4. Connect.** Double-click the bookmark. Type the **Secret Access Key** when
+Cyberduck asks, and tick **Save password** (Windows keeps it in the Credential Manager,
+macOS in the Keychain). You see your buckets as folders.
+
+**Step 5. Work with files.**
+
+- Drag files and folders into the window to upload, and out of it to download.
+- Double-click a bucket to open it. **File, New Folder** makes a folder (a key prefix).
+- **File, Info** (++ctrl+i++ or ++cmd+i++) shows the size, the checksum and the metadata.
+- **File, Synchronize** compares a local folder with a folder in the bucket.
+- To share a file for a limited time, use **Share link** in Bucketeer: it makes a link that
+  ends after at most 7 days.
+
+!!! tip "If Cyberduck cannot connect"
+    - **"Bucket name is not DNS compatible"** or a certificate error with the bucket name in
+      it: the server has no wildcard DNS for virtual-host addressing. Ask your admin, or
+      open **Edit, Preferences, Connection** (Windows: **Edit, Preferences, S3**) and
+      untick virtual-host style. On some versions you set the hidden option
+      `s3.bucket.virtualhost.disable=true` instead.
+    - **Access denied** on the bucket list but a bucket opens: enter the bucket name in
+      **Path** in the bookmark.
+    - **Wrong key**: open the bookmark again (++ctrl+shift+b++ selects it for editing) and
+      check the access key. Remove the saved secret in the Credential Manager or Keychain
+      and connect again.
+
+For many large files, rclone or s5cmd are faster: Cyberduck copies few files at a time.
+**Mountain Duck** (paid, same vendor) uses the same bookmark and shows the bucket as a
+drive letter or a volume in Finder.
 
 ### Other desktop apps
 
@@ -386,8 +431,20 @@ checksums and shows each job's progress.
 Screenshot from the <a href="https://github.com/dirkpetersen/motuz">Motuz repository</a>.</figcaption>
 </figure>
 
-Add a **cloud connection** in Motuz with type S3, the Bucketeer endpoint and your keys.
-Ask your admin whether a Motuz server is available for your group.
+Use Motuz when a transfer is too big or too long for your laptop: many terabytes, or
+millions of files, from a cluster file system to a bucket or back.
+
+1. Ask your admin whether a Motuz server is available for your group, and open its address.
+2. Log in with your normal account.
+3. Open **Cloud connections** and add one: type **S3**, the Bucketeer endpoint (for example
+   `https://s3.example.edu`), your access key and your secret key (step 1 under
+   [Cyberduck](#setup-cyberduck) shows where to find them).
+4. Choose the file system on one side and the cloud connection on the other side.
+5. Select the folders, and click **Copy**. The job continues on the server. Its progress
+   and the checksum result show in the job list.
+
+The documentation for Motuz itself is at
+[dirkpetersen.github.io/motuz](https://dirkpetersen.github.io/motuz).
 
 ## Which one should I use?
 
