@@ -43,15 +43,21 @@ to start) or **Default** (the file matches the code default).
 
 ## LDAP CA certificate
 
-If the directory uses a private CA, set `LDAP_CA_CERT_FILE` to a path on the server.
+`LDAP_CA_CERT_FILE` defaults to `data/ldap-ca.pem`. The app keeps this file up to date:
 
 - When the file does not exist, the app fetches the CA certificates from the first
   reachable LDAP server at startup and logs their SHA-256 fingerprints.
+- When the servers in `LDAP_URL` change, the app fetches again. A record file next to the
+  CA file (`ldap-ca.pem.hosts`) remembers which servers the file came from. If the new fetch
+  fails, the old file stays and the log says so. A file you supplied by hand is kept until
+  the servers change.
 - By hand: `python3 app.py --fetch-ldap-ca [--force]`.
-- The first fetch trusts the network. Compare the fingerprints with the directory team,
-  then set `LDAP_CA_SHA256` so only that CA is accepted.
+- The first fetch trusts the network. After it, compare the logged fingerprints with the
+  directory team, then set `LDAP_CA_SHA256` so only that CA is accepted.
 - If the server does not send the root CA, the fetch fails with a clear message. Copy the
   file to the server by hand then.
+- For a directory with a public CA, set `LDAP_CA_CERT_FILE` empty to use the system trust
+  store. With `LDAP_TLS_VERIFY=false` no CA file is used.
 
 ## Email
 

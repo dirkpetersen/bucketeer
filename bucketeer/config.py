@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     ldap_email_attribute: str = "mail"
     ldap_required_group_dn: str = ""
     ldap_admin_group_dn: str = ""
-    ldap_ca_cert_file: str = ""
+    ldap_ca_cert_file: str = "data/ldap-ca.pem"
     ldap_ca_sha256: str = ""
     ldap_tls_verify: bool = True
     ldap_timeout: int = Field(5, gt=0)
@@ -259,7 +259,7 @@ def _ca_file_problems(s: Settings) -> list[str]:
     out = []
     for name in ("ldap_ca_cert_file", "croit_ca_cert_file", "s3_ca_cert_file"):
         path = getattr(s, name)
-        if not path:
+        if not path or (name == "ldap_ca_cert_file" and not s.ldap_tls_verify):
             continue
         try:
             ok = "BEGIN CERTIFICATE" in Path(path).read_text(errors="replace")

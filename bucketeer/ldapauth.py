@@ -109,7 +109,7 @@ def build_server(settings: Settings, url: str) -> ldap3.Server:
     """LDAPS server object with certificate verification per the settings."""
     tls = ldap3.Tls(
         validate=ssl.CERT_REQUIRED if settings.ldap_tls_verify else ssl.CERT_NONE,
-        ca_certs_file=settings.ldap_ca_cert_file or None,
+        ca_certs_file=(settings.ldap_ca_cert_file or None) if settings.ldap_tls_verify else None,
     )
     return ldap3.Server(
         url,

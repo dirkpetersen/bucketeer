@@ -134,7 +134,7 @@ def test_ensure_fetches_a_missing_file_only(pki, tmp_path, caplog):
     url = pki.serve()
     out = tmp_path / "ca.pem"
     s = SimpleNamespace(ldap_ca_cert_file=str(out), ldap_url=[url], ldap_ca_sha256="",
-                        ldap_timeout=3)
+                        ldap_timeout=3, ldap_tls_verify=True)
     ldapca.ensure_ca_file(s)
     assert out.exists()
     assert "NOT pinned" in caplog.text
@@ -143,13 +143,65 @@ def test_ensure_fetches_a_missing_file_only(pki, tmp_path, caplog):
     assert out.read_text() == "keep me"
 
 
+def test_ensure_refetches_when_ldap_url_changes(pki, tmp_path, caplog):
+    first, second = pki.serve(), pki.serve()
+    out = tmp_path / "ca.pem"
+
+    def settings(url):
+        return SimpleNamespace(ldap_ca_cert_file=str(out), ldap_url=[url], ldap_ca_sha256="",
+                               ldap_timeout=3, ldap_tls_verify=True)
+
+    ldapca.ensure_ca_file(settings(first))  # missing: fetched, host list recorded
+    assert (tmp_path / "ca.pem.hosts").read_text() == ldapca.hosts_hash([first])
+    out.write_text("tampered")
+    ldapca.ensure_ca_file(settings(first))  # same servers: left alone
+    assert out.read_text() == "tampered"
+    caplog.clear()
+    ldapca.ensure_ca_file(settings(second))  # servers changed: fetched again
+    assert out.read_bytes() == _pem(pki.root)
+    assert "LDAP_URL changed" in caplog.text
+    assert (tmp_path / "ca.pem.hosts").read_text() == ldapca.hosts_hash([second])
+
+
+def test_changed_servers_that_fail_keep_the_old_file(pki, tmp_path, caplog):
+    good = pki.serve()
+    out = tmp_path / "ca.pem"
+    s = SimpleNamespace(ldap_ca_cert_file=str(out), ldap_url=[good], ldap_ca_sha256="",
+                        ldap_timeout=1, ldap_tls_verify=True)
+    ldapca.ensure_ca_file(s)
+    before = out.read_text()
+    s.ldap_url = ["ldaps://localhost:1"]
+    ldapca.ensure_ca_file(s)
+    assert out.read_text() == before
+    assert "the old file stays" in caplog.text
+
+
+def test_file_supplied_by_hand_is_adopted_not_replaced(pki, tmp_path):
+    out = tmp_path / "ca.pem"
+    out.write_text("mine")
+    s = SimpleNamespace(ldap_ca_cert_file=str(out), ldap_url=[pki.serve()], ldap_ca_sha256="",
+                        ldap_timeout=3, ldap_tls_verify=True)
+    ldapca.ensure_ca_file(s)
+    assert out.read_text() == "mine"
+    assert (tmp_path / "ca.pem.hosts").exists()
+
+
 def test_ensure_failure_only_logs(tmp_path, caplog):
     out = tmp_path / "ca.pem"
     s = SimpleNamespace(ldap_ca_cert_file=str(out), ldap_url=["ldaps://localhost:1"],
-                        ldap_ca_sha256="", ldap_timeout=1)
+                        ldap_ca_sha256="", ldap_timeout=1,
+                        ldap_tls_verify=True)
     ldapca.ensure_ca_file(s)
     assert not out.exists()
-    assert "could not be fetched" in caplog.text
+    assert "the fetch failed" in caplog.text
+
+
+def test_no_verification_needs_no_ca_file(tmp_path):
+    out = tmp_path / "ca.pem"
+    s = SimpleNamespace(ldap_ca_cert_file=str(out), ldap_url=["ldaps://localhost:1"],
+                        ldap_ca_sha256="", ldap_timeout=1, ldap_tls_verify=False)
+    ldapca.ensure_ca_file(s)
+    assert not out.exists()
 
 
 def test_pin_setting_is_validated():

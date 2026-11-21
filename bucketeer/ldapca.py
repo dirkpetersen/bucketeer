@@ -8,12 +8,15 @@ chain (never the server's own certificate), and keeps them only if the server's
 certificate then verifies against them for its host name.
 
 Run by hand: `python3 app.py --fetch-ldap-ca [--force]`. Run by itself at startup
-when LDAP_CA_CERT_FILE is set and the file does not exist (`ensure_ca_file`).
+(`ensure_ca_file`) when LDAP_CA_CERT_FILE is set and the file does not exist, or when
+the servers in LDAP_URL changed since the file was fetched (a record `<file>.hosts`
+keeps a hash of the host list). A fetch that fails leaves the old file in place.
 """
 
 import hashlib
 import logging
 import os
+import re
 import socket
 import ssl
 import tempfile
@@ -34,6 +37,25 @@ def fingerprint(der: bytes) -> str:
 
 def normalize_pin(value: str) -> str:
     return value.replace(":", "").replace(" ", "").strip().upper()
+
+
+def hosts_hash(urls: list[str]) -> str:
+    return hashlib.sha256(
+        "\n".join(sorted(f"{h.lower()}:{p}" for h, p in map(_host_port, urls))).encode()
+    ).hexdigest()
+
+
+def _record(path: str) -> Path:
+    return Path(path + ".hosts")
+
+
+def _file_prints(path: str) -> list[str]:
+    try:
+        text = Path(path).read_text()
+    except OSError:
+        return []
+    return [fingerprint(ssl.PEM_cert_to_DER_cert(m.group(0))) for m in re.finditer(
+        r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", text, re.S)]
 
 
 def _host_port(url: str) -> tuple[str, int]:
@@ -107,6 +129,10 @@ def fetch_ca_file(urls: list[str], path: str, *, pin: str = "", force: bool = Fa
                 raise FetchError(f"{host}: its certificate does not verify against the CA "
                                  f"certificates it sent ({bad}); the root CA may be missing")
             os.replace(tmp, target)
+            try:
+                _record(path).write_text(hosts_hash(urls))
+            except OSError:
+                log.warning("could not write %s", _record(path))
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
@@ -115,22 +141,41 @@ def fetch_ca_file(urls: list[str], path: str, *, pin: str = "", force: bool = Fa
 
 
 def ensure_ca_file(settings) -> None:
-    """Startup: when LDAP_CA_CERT_FILE names a missing file, fetch it. Logs the
-    fingerprints. A failure only logs; the normal startup check then stops the app."""
+    """Startup: fetch the CA file when it is missing or LDAP_URL changed since it was
+    fetched. Logs the fingerprints. A failure only logs (an old file stays in place);
+    the normal startup check then stops the app if the file is still missing."""
     path = settings.ldap_ca_cert_file
-    if not path or Path(path).exists():
+    if not path or not settings.ldap_tls_verify:  # no verification: no CA file needed
         return
-    pin = settings.ldap_ca_sha256
+    urls, pin = settings.ldap_url, settings.ldap_ca_sha256
+    exists, rec = Path(path).exists(), _record(path)
+    if exists:
+        try:
+            old = rec.read_text().strip()
+        except OSError:
+            old = ""
+        if not old:  # a file supplied by hand: adopt it, fetch only on a later change
+            try:
+                rec.write_text(hosts_hash(urls))
+            except OSError:
+                pass
+            return
+        if old == hosts_hash(urls):
+            return
+        why, before = "LDAP_URL changed", _file_prints(path)
+    else:
+        why, before = "it was missing", []
     try:
-        prints = fetch_ca_file(settings.ldap_url, path, pin=pin, timeout=settings.ldap_timeout)
+        prints = fetch_ca_file(urls, path, pin=pin, force=True, timeout=settings.ldap_timeout)
     except FetchError as e:
-        log.error("LDAP_CA_CERT_FILE %s is missing and could not be fetched: %s", path, e)
+        log.error("LDAP_CA_CERT_FILE %s: %s, but the fetch failed (%s)%s", path, why, e,
+                  "; the old file stays" if exists else "")
         return
-    log.warning("LDAP_CA_CERT_FILE %s was missing; fetched it from the directory server. %s "
-                "Fingerprints: %s", path,
+    log.warning("LDAP_CA_CERT_FILE %s: %s, so it was fetched from the directory server. %s "
+                "Before: %s. Now: %s.", path, why,
                 "It matches LDAP_CA_SHA256." if pin else
-                "NOT pinned: set LDAP_CA_SHA256 to one of these to trust only that CA.",
-                ", ".join(prints))
+                "NOT pinned: set LDAP_CA_SHA256 to one of the new fingerprints.",
+                ", ".join(before) or "none", ", ".join(prints))
 
 
 def main(argv: list[str]) -> int:

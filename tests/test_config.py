@@ -154,6 +154,7 @@ def test_environment_beats_dotenv(monkeypatch, tmp_path):
     write_env(tmp_path / ".env", 'PORT=8123\nAPP_NAME="Bucket Eer"\n')
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PORT", "9555")
+    monkeypatch.setenv("LDAP_CA_CERT_FILE", "")  # the default path would be fetched at startup
     s = load_settings()
     assert s.port == 9555
     assert s.app_name == "Bucket Eer"
