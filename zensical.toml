@@ -2,6 +2,7 @@
 [project]
 site_name = "Bucketeer"
 site_description = "Self-service S3 portal for Ceph clusters"
+site_url = "https://dirkpetersen.github.io/bucketeer/"
 docs_dir = "docs"
 site_dir = "site"
 extra_css = ["stylesheets/osu.css"]
