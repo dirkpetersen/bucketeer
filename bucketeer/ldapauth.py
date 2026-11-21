@@ -195,7 +195,7 @@ class Ldap3Connector:
             raise BindRejected from e
         except (LDAPException, OSError) as e:  # socket, TLS, timeout, protocol
             _quiet_close(conn)
-            raise LdapUnavailable(f"{type(e).__name__}") from e
+            raise LdapUnavailable(f"{type(e).__name__}: {e}"[:200]) from e
         return _Ldap3Session(conn)
 
 
