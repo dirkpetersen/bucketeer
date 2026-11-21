@@ -379,4 +379,6 @@ async def logout(request: Request, response: Response, db: Annotated[Database, D
 def me(request: Request, response: Response, user: Annotated[SessionUser, Depends(require_user)]):
     _no_store(response)
     profile = request.app.state.db.profiles.get(user.username)
-    return {**user.public(), "advancedMode": profile["advanced_mode"]}
+    # budgetMissing: the frontend opens the profile first until a default is saved
+    return {**user.public(), "advancedMode": profile["advanced_mode"],
+            "budgetMissing": not profile["default_budget_number"]}

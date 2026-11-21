@@ -51,6 +51,14 @@ def test_save_trim_and_persist(env):
     assert env.db.profiles.get("alice")["default_budget_number"] == "IDX-123/45"
 
 
+def test_me_says_when_the_default_budget_number_is_missing(env):
+    assert env.alice.get("/api/me").json()["budgetMissing"] is True
+    put(env.alice, "DN099999")
+    assert env.alice.get("/api/me").json()["budgetMissing"] is False
+    put(env.alice, None)
+    assert env.alice.get("/api/me").json()["budgetMissing"] is True
+
+
 @pytest.mark.parametrize("value", ["", "   ", None])
 def test_clear(env, value):
     put(env.alice, "X1")

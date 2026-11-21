@@ -38,7 +38,7 @@ export async function createBucketDialog() {
   const nameErr = h("p", { class: "set-err", id: `${id}-ne`, role: "alert", hidden: true });
   const budget = h("input", {
     class: "input mono-input", id: `${id}-b`, value: opts.defaultBudgetNumber ?? "", autocomplete: "off",
-    spellcheck: "false", maxlength: "64", placeholder: opts.budgetExample ? `e.g. ${opts.budgetExample}` : "e.g. 123456 or WT-ABC",
+    spellcheck: "false", maxlength: "64", placeholder: opts.budgetExample ? `e.g. ${opts.budgetExample}` : "e.g. DN099999",
     "aria-describedby": `${id}-bh ${id}-be`, required: opts.budgetRequired,
   });
   const budgetErr = h("p", { class: "set-err", id: `${id}-be`, role: "alert", hidden: true });

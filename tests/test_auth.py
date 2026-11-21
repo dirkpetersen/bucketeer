@@ -406,7 +406,7 @@ def test_me_returns_session_user_or_401(env):
     assert r.status_code == 200
     assert r.json() == {
         "username": "bob", "displayName": "Bob B", "email": "bob@example.org", "isAdmin": True,
-        "advancedMode": False,
+        "advancedMode": False, "budgetMissing": True,
     }
 
 

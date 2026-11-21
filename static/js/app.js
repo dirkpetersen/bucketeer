@@ -26,8 +26,13 @@ function swap(node, name) {
 }
 
 // Load the per-user Advanced setting from /api/me before the first paint.
+// No default budget number yet: open the profile first (once per login or page load;
+// the profile page has a link back to the workspace).
 function showMe(user) {
   initAdvanced(user.advancedMode);
+  if (user.budgetMissing && location.hash !== "#/profile") {
+    history.replaceState(null, "", "#/profile");
+  }
   showDashboard(user);
 }
 const showLogin = () => swap(renderLogin({ appName, onSuccess: async () => {

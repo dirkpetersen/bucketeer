@@ -157,10 +157,10 @@ function namingSection(data, apply) {
 function budgetSection(data, apply) {
   const saved = data.budgetNumber;
   const pattern = textInput({ value: saved.pattern, placeholder: "e.g. [0-9]{6}|WT-[A-Z0-9]+", maxlength: String(data.limits.maxPatternLength), class: "input mono-input" });
-  const example = textInput({ value: saved.example, placeholder: "e.g. 123456", maxlength: "64", class: "input mono-input" });
+  const example = textInput({ value: saved.example, placeholder: "e.g. DN099999", maxlength: "64", class: "input mono-input" });
   const fPattern = field("Format (regular expression)", pattern, { hint: "The whole budget number must match it. Leave empty to accept any number made of letters, digits, spaces and + - = . _ : / @. Slow or invalid patterns are refused." });
   const fExample = field("Example shown to users", example, { hint: "Shown as a hint in the profile and when creating a bucket. It must itself match the format." });
-  const tValue = textInput({ placeholder: "123456", "aria-label": "Budget number to try", class: "input mono-input" });
+  const tValue = textInput({ placeholder: "DN099999", "aria-label": "Budget number to try", class: "input mono-input" });
   const result = h("div", { class: "set-test-out", "aria-live": "polite" });
   const ft = footer();
 

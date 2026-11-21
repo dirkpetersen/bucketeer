@@ -20,7 +20,7 @@ export async function budgetDialog({ bucket, current }) {
 
   const input = h("input", {
     class: "input mono-input", id: `${id}-b`, value: current ?? "", autocomplete: "off", spellcheck: "false",
-    maxlength: "64", placeholder: opts.budgetExample ? `e.g. ${opts.budgetExample}` : "e.g. 123456 or WT-ABC",
+    maxlength: "64", placeholder: opts.budgetExample ? `e.g. ${opts.budgetExample}` : "e.g. DN099999",
     "aria-describedby": `${id}-h ${id}-e`,
   });
   const fieldErr = h("p", { class: "set-err", id: `${id}-e`, role: "alert", hidden: true });

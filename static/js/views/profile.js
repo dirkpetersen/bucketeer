@@ -18,12 +18,35 @@ function identity(me) {
     h("dl", { class: "pf-list" }, row("Name", me.displayName), row("Username", me.username), row("Email", me.email)));
 }
 
-function budgetCard() {
+const FALLBACK_EXAMPLE = "DN099999";
+
+// Shown while the user has no default budget number; after a save it turns into a
+// "you're set" note. The link back to the workspace is always there.
+function setupNotice(me) {
+  const text = h("p", {});
+  const title = h("h2", { id: "pf-need" });
+  const back = h("a", { class: "btn", href: "#/" }, icon("home"), "Go to my workspace");
+  const box = h("section", { class: "pf-notice", role: "status", "aria-labelledby": "pf-need" },
+    h("div", { class: "pf-notice-text" }, title, text), back);
+  const show = (missing) => {
+    box.classList.toggle("pf-notice-done", !missing);
+    back.className = missing ? "btn" : "btn btn-primary";
+    title.textContent = missing ? "Set your default budget number" : "You're all set";
+    text.textContent = missing
+      ? `Every bucket you create needs a budget number (index or worktag) for chargeback, for example ${FALLBACK_EXAMPLE}. Save a default below; you can change it per bucket.`
+      : "Your default budget number is saved. It will be filled in when you create a bucket.";
+  };
+  show(me.budgetMissing);
+  box.hidden = !me.budgetMissing;
+  return { box, update(missing) { me.budgetMissing = missing; box.hidden = false; show(missing); } };
+}
+
+function budgetCard(onSaved) {
   let saved = null;
   let serverErr = ""; // last 422 message, shown until the user edits
   const input = h("input", {
     class: "input mono-input", type: "text", id: "pf-budget", autocomplete: "off", spellcheck: "false",
-    placeholder: "e.g. 123456 or WT-ABC", maxlength: "200", disabled: true,
+    placeholder: "e.g. DN099999", maxlength: "200", disabled: true,
   });
   const hint = h("p", { class: "set-hint", id: "pf-budget-hint" });
   const error = h("p", { class: "set-err", id: "pf-budget-err", role: "alert", hidden: true });
@@ -53,9 +76,10 @@ function budgetCard() {
   function apply(profile) {
     serverErr = "";
     saved = profile.defaultBudgetNumber;
+    const example = profile.budgetExample || FALLBACK_EXAMPLE;
     hint.textContent = "Your index or worktag. Letters (A-Z), digits, spaces and + - = . _ : / @ are allowed, up to 64 characters."
-      + (profile.budgetExample ? ` Example: ${profile.budgetExample}` : "");
-    if (profile.budgetExample) input.placeholder = `e.g. ${profile.budgetExample}`;
+      + ` Example: ${example}`;
+    input.placeholder = `e.g. ${example}`;
     input.value = saved ?? "";
     refresh();
   }
@@ -72,6 +96,7 @@ function budgetCard() {
       const res = await saveProfile({ defaultBudgetNumber: input.value.trim() || null });
       input.disabled = false;
       apply(res);
+      onSaved(!res.defaultBudgetNumber);
       toast.show(res.defaultBudgetNumber ? "Default budget number saved." : "Default budget number cleared.");
     } catch (err) {
       input.disabled = false;
@@ -106,10 +131,13 @@ function budgetCard() {
 }
 
 export function renderProfile({ me }) {
+  const notice = setupNotice(me);
   return h("main", { class: "main", id: "main" },
     h("div", { class: "hero" },
+      h("a", { class: "pf-back", href: "#/" }, icon("home"), "Back to my workspace"),
       h("span", { class: "eyebrow", text: "Your profile" }),
       h("h1", { text: me.displayName || me.username }),
       h("p", { text: "Defaults that save you typing. They only prefill forms; nothing here changes your access." })),
-    h("div", { class: "pf-grid" }, budgetCard(), identity(me)));
+    notice.box,
+    h("div", { class: "pf-grid" }, budgetCard(notice.update), identity(me)));
 }

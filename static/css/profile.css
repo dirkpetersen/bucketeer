@@ -9,3 +9,17 @@
 .pf-row dt { font-size: var(--fs-xs); font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
 .pf-row dd { margin: 0; font-weight: 520; overflow-wrap: anywhere; }
 .pf-card .chip { text-transform: none; letter-spacing: 0; }
+
+.pf-back { justify-self: start; display: inline-flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--fs-sm); font-weight: 600; color: var(--accent-text); text-decoration: none; }
+.pf-back:hover { text-decoration: underline; }
+.pf-back .icon { width: 1em; height: 1em; }
+.pf-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--sp-4); padding: var(--sp-4) var(--sp-5); border-radius: var(--r-md);
+  background: var(--accent-soft); border: 1px solid var(--accent-ring);
+  animation: rise var(--dur-slow) var(--ease-out) both; }
+.pf-notice[hidden] { display: none; }
+.pf-notice-text { display: grid; gap: var(--sp-1); max-width: 44rem; }
+.pf-notice h2 { margin: 0; font-size: var(--fs-lg); }
+.pf-notice p { margin: 0; color: var(--text-muted); }
+.pf-notice-done { background: var(--surface); border-color: var(--border); }
