@@ -293,6 +293,21 @@ rclone check ./data bucketeer:my-bucket/data   # compare checksums
 rclone mount bucketeer:my-bucket ~/my-bucket   # mount (needs FUSE, or WinFsp on Windows)
 ```
 
+**rclone with a GUI.** rclone 1.76 and later have a built-in web GUI. It uses the same
+`bucketeer` remote. Run the command below, and rclone opens its GUI in your browser,
+already logged in; it listens on your own computer only. Open **Explorer**, then
+**bucketeer** under Remotes, to browse, upload and download.
+
+```bash
+rclone gui
+```
+
+<figure class="osu-shot" markdown>
+![The rclone web GUI browsing a folder in a Bucketeer bucket](assets/clients/rclone-gui.webp#only-light)
+![The rclone web GUI browsing a folder in a Bucketeer bucket](assets/clients/rclone-gui-dark.webp#only-dark)
+<figcaption>The rclone GUI (<code>rclone gui</code>) browsing <code>bucketeer:alice-data/2026/run-42</code>.</figcaption>
+</figure>
+
 !!! danger "`rclone sync` deletes"
     `sync` deletes files in the target that are not in the source. Use `copy` when in
     doubt, and try `--dry-run` first.
