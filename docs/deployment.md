@@ -54,8 +54,15 @@ to start) or **Default** (the file matches the code default).
 - By hand: `python3 app.py --fetch-ldap-ca [--force]`.
 - The first fetch trusts the network. After it, compare the logged fingerprints with the
   directory team, then set `LDAP_CA_SHA256` so only that CA is accepted.
-- The domain controllers usually send only an intermediate CA, not the root. That is
+- The fetch asks every server in `LDAP_URL` and keeps the CA certificates they send.
+  The domain controllers usually send only an intermediate CA, not the root. That is
   enough: the app trusts an intermediate CA from the file as an anchor.
+- With a pin, only matching CAs are kept. You may pin the root CA (several fingerprints
+  are allowed, separated by commas). Because the servers never send the root, the app
+  then reads the CA certificates that AD publishes under Public Key Services, using the
+  service account. It keeps only the pinned one, and writes it only if every server's
+  chain leads to it. The service login in this step runs over a connection checked only
+  against the CA certificates the server sent, and the log says so.
 - At startup the log names the user the app runs as, its folder, the settings file, and the
   LDAP CA in use with its fingerprints and whether it is pinned. It warns when `.env` can
   be read by other users (fix: `chmod 600`), and when the file does not hold the pinned CA.

@@ -220,10 +220,12 @@ class Settings(BaseSettings):
     @field_validator("ldap_ca_sha256")
     @classmethod
     def _check_pin(cls, v: str) -> str:
-        v = v.replace(":", "").replace(" ", "").strip()
-        if v and not re.fullmatch(r"[0-9A-Fa-f]{64}", v):
-            raise ValueError("must be a SHA-256 fingerprint: 64 hex digits (colons allowed)")
-        return v.upper()
+        out = [p.replace(":", "").replace(" ", "").strip().upper() for p in v.split(",")]
+        out = [p for p in out if p]
+        if any(not re.fullmatch(r"[0-9A-F]{64}", p) for p in out):
+            raise ValueError("must be SHA-256 fingerprints: 64 hex digits each (colons "
+                             "allowed), several separated by commas")
+        return ",".join(out)
 
     @field_validator("log_level")
     @classmethod

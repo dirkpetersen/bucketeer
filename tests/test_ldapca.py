@@ -212,6 +212,110 @@ def test_pin_setting_is_validated():
     assert s.ldap_ca_sha256 == "AB" * 32
     with pytest.raises(ValueError, match="SHA-256"):
         Settings(_env_file=None, **REQUIRED, ldap_ca_sha256="xyz")
+    two = Settings(_env_file=None, **REQUIRED, ldap_ca_sha256="aa" * 32 + ", " + "bb" * 32)
+    assert two.ldap_ca_sha256 == "AA" * 32 + "," + "BB" * 32
+
+
+def _serve(tmp_path, name, certs, key):
+    """TLS server on localhost presenting `certs` (leaf first); returns (url, stop)."""
+    import socket
+
+    chain, keyf = tmp_path / f"{name}.pem", tmp_path / f"{name}.key"
+    chain.write_bytes(b"".join(_pem(c) for c in certs))
+    keyf.write_bytes(key.private_bytes(serialization.Encoding.PEM,
+                                       serialization.PrivateFormat.PKCS8,
+                                       serialization.NoEncryption()))
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(chain, keyf)
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)
+    srv.settimeout(0.2)
+    done = threading.Event()
+
+    def loop():
+        while not done.is_set():
+            try:
+                c, _ = srv.accept()
+            except OSError:
+                continue
+            try:
+                ctx.wrap_socket(c, server_side=True).close()
+            except (OSError, ssl.SSLError):
+                pass
+
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+
+    def stop():
+        done.set()
+        t.join()
+        srv.close()
+
+    return f"ldaps://localhost:{srv.getsockname()[1]}", stop
+
+
+def test_two_issuing_cas_pinned_from_all_servers(tmp_path, caplog):
+    """OSU style: one root (never sent), two intermediates, each DC sends one."""
+    k = [ec.generate_private_key(ec.SECP256R1()) for _ in range(5)]
+    mid1 = _cert("Issuing CA 1", "Root", k[1], k[0], ca=True)
+    mid2 = _cert("Issuing CA 2", "Root", k[2], k[0], ca=True)
+    leaf1 = _cert("localhost", "Issuing CA 1", k[3], k[1], ca=False, san="localhost")
+    leaf2 = _cert("localhost", "Issuing CA 2", k[4], k[2], ca=False, san="localhost")
+    der = serialization.Encoding.DER
+    fp1, fp2 = (ldapca.fingerprint(m.public_bytes(der)) for m in (mid1, mid2))
+    (u1, s1), (u2, s2) = _serve(tmp_path, "a", [leaf1, mid1], k[3]), _serve(
+        tmp_path, "b", [leaf2, mid2], k[4])
+    try:
+        out = tmp_path / "ca.pem"
+        assert ldapca.fetch_ca_file([u1, u2], str(out), pin=f"{fp1},{fp2}") == [fp1, fp2]
+        assert out.read_bytes() == _pem(mid1) + _pem(mid2)
+        caplog.clear()
+        assert ldapca.fetch_ca_file([u1, u2], str(out), pin=fp1, force=True) == [fp1]
+        assert "no CA certificate matches" in caplog.text  # the second server is skipped
+        with pytest.raises(ldapca.FetchError, match="matches LDAP_CA_SHA256"):
+            ldapca.fetch_ca_file([u2], str(out), pin=fp1, force=True)
+        assert out.read_bytes() == _pem(mid1)  # a refused fetch keeps the file
+    finally:
+        s1()
+        s2()
+
+
+def test_pinned_root_is_taken_from_the_directory(tmp_path, caplog):
+    """The pin is the root, which the server never sends: it comes from the directory,
+    and only a root the server's chain really leads to is written."""
+    k = [ec.generate_private_key(ec.SECP256R1()) for _ in range(4)]
+    root = _cert("Root", "Root", k[0], k[0], ca=True)
+    mid = _cert("Issuing CA", "Root", k[1], k[0], ca=True)
+    leaf = _cert("localhost", "Issuing CA", k[2], k[1], ca=False, san="localhost")
+    other_root = _cert("Root", "Root", k[3], k[3], ca=True)  # same name, wrong key
+    der = serialization.Encoding.DER
+    pin = ldapca.fingerprint(root.public_bytes(der))
+    url, stop = _serve(tmp_path, "a", [leaf, mid], k[2])
+    asked = []
+
+    def directory(host, port, cafile):
+        asked.append(open(cafile).read())
+        return [other_root.public_bytes(der), root.public_bytes(der)]
+
+    try:
+        out = tmp_path / "ca.pem"
+        assert ldapca.fetch_ca_file([url], str(out), pin=pin, directory=directory) == [pin]
+        assert out.read_bytes() == _pem(root)
+        assert asked == [_pem(mid).decode()]  # the TLS check used what the server sent
+        assert "from the directory" in caplog.text
+        bad = ldapca.fingerprint(other_root.public_bytes(der))
+        with pytest.raises(ldapca.FetchError, match="does not verify"):
+            ldapca.fetch_ca_file([url], str(out), pin=bad, directory=directory, force=True)
+        assert out.read_bytes() == _pem(root)
+
+        def broken(*a):
+            raise OSError("down")
+
+        with pytest.raises(ldapca.FetchError, match="directory lookup failed"):
+            ldapca.fetch_ca_file([url], str(out), pin=pin, directory=broken, force=True)
+    finally:
+        stop()
 
 
 def test_intermediate_ca_without_root_is_enough(tmp_path):
@@ -289,6 +393,6 @@ def test_startup_report(tmp_path, caplog, pki):
     env.chmod(0o600)
     assert "other users" not in report(ldap_ca_sha256=good)
     assert "pinned" in caplog.text and "NOT pinned" not in caplog.text
-    assert "does not contain the CA pinned" in report(ldap_ca_sha256="00" * 32)
+    assert "does not contain a CA pinned" in report(ldap_ca_sha256="00" * 32)
     assert "system trust store" in report(ldap_ca_cert_file="")
     assert "not checked" in report(ldap_tls_verify=False)
