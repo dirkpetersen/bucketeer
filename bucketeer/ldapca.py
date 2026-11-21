@@ -82,6 +82,7 @@ def _server_chain(host: str, port: int, timeout: float) -> list[bytes]:
 def _verifies(path: str, host: str, port: int, timeout: float) -> str | None:
     """None when the server's certificate verifies against the file, else the reason."""
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN  # same trust as ldapauth uses
     ctx.load_verify_locations(cafile=path)
     try:
         with socket.create_connection((host, port), timeout=timeout) as raw:
@@ -176,6 +177,37 @@ def ensure_ca_file(settings) -> None:
                 "It matches LDAP_CA_SHA256." if pin else
                 "NOT pinned: set LDAP_CA_SHA256 to one of the new fingerprints.",
                 ", ".join(before) or "none", ", ".join(prints))
+
+
+def startup_report(settings, cwd: Path | None = None) -> None:
+    """One look in the log tells an operator who runs the app, from where, with which
+    settings file and which LDAP trust. Warns about a .env other users can read."""
+    import getpass
+
+    cwd = cwd or Path.cwd()
+    env = cwd / ".env"
+    try:
+        user = getpass.getuser()
+    except Exception:  # noqa: BLE001  no user name in the password database
+        user = str(os.getuid())
+    log.info("running as user %s in %s, settings file %s", user, cwd,
+             env.resolve() if env.exists() else "none (environment only)")
+    if env.exists() and env.stat().st_mode & 0o077:
+        log.warning("%s holds secrets and other users can read it: run chmod 600 %s",
+                    env.resolve(), env.resolve())
+    ca, pin = settings.ldap_ca_cert_file, settings.ldap_ca_sha256
+    if not settings.ldap_tls_verify:
+        log.warning("LDAP_TLS_VERIFY=false: domain controller certificates are not checked")
+        return
+    if not ca:
+        log.info("LDAP CA: system trust store (LDAP_CA_CERT_FILE is empty)")
+        return
+    prints = _file_prints(ca)
+    if pin and normalize_pin(pin) not in {normalize_pin(p) for p in prints}:
+        log.warning("LDAP CA: %s does not contain the CA pinned by LDAP_CA_SHA256", ca)
+    else:
+        log.info("LDAP CA: %s, SHA-256 %s, %s", ca, ", ".join(prints) or "none",
+                 "pinned" if pin else "NOT pinned (set LDAP_CA_SHA256)")
 
 
 def main(argv: list[str]) -> int:

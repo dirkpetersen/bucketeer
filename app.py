@@ -1,3 +1,4 @@
+import logging
 import sys
 
 import uvicorn
@@ -7,6 +8,8 @@ from bucketeer.main import create_app
 
 
 def main() -> None:
+    # before load_settings, so the LDAP CA fetch messages reach the log with a time stamp
+    logging.basicConfig(level="INFO", format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = load_settings()
     uvicorn.run(
         create_app(settings),

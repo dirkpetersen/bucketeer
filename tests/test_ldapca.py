@@ -212,3 +212,83 @@ def test_pin_setting_is_validated():
     assert s.ldap_ca_sha256 == "AB" * 32
     with pytest.raises(ValueError, match="SHA-256"):
         Settings(_env_file=None, **REQUIRED, ldap_ca_sha256="xyz")
+
+
+def test_intermediate_ca_without_root_is_enough(tmp_path):
+    """Domain controllers send leaf + intermediate, not the root: the fetch keeps the
+    intermediate, and it verifies as a trust anchor (Python 3.12 needs the flag)."""
+    import socket
+
+    root_key, mid_key, leaf_key = (ec.generate_private_key(ec.SECP256R1()) for _ in range(3))
+    mid = _cert("Test Issuing CA", "Test Root", mid_key, root_key, ca=True)
+    leaf = _cert("localhost", "Test Issuing CA", leaf_key, mid_key, ca=False, san="localhost")
+    chain, keyf = tmp_path / "chain.pem", tmp_path / "leaf.key"
+    chain.write_bytes(_pem(leaf) + _pem(mid))
+    keyf.write_bytes(leaf_key.private_bytes(serialization.Encoding.PEM,
+                                            serialization.PrivateFormat.PKCS8,
+                                            serialization.NoEncryption()))
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(chain, keyf)
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)
+    stop = threading.Event()
+
+    def loop():
+        srv.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                c, _ = srv.accept()
+            except OSError:
+                continue
+            try:
+                ctx.wrap_socket(c, server_side=True).close()
+            except (OSError, ssl.SSLError):
+                pass
+
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    try:
+        out = tmp_path / "ca.pem"
+        ldapca.fetch_ca_file([f"ldaps://localhost:{srv.getsockname()[1]}"], str(out))
+        assert out.read_bytes() == _pem(mid)
+    finally:
+        stop.set()
+        t.join()
+        srv.close()
+
+
+def test_ldap3_trusts_an_intermediate_anchor():
+    import ldap3.core.tls as t
+
+    from bucketeer import ldapauth  # noqa: F401  installs the wrapper
+
+    assert t.create_default_context().verify_flags & ssl.VERIFY_X509_PARTIAL_CHAIN
+
+
+def test_startup_report(tmp_path, caplog, pki):
+    caplog.set_level("INFO")
+    env = tmp_path / ".env"
+    env.write_text("X=1\n")
+    env.chmod(0o644)
+    ca = tmp_path / "ca.pem"
+    ca.write_bytes(_pem(pki.root))
+    good = ldapca.fingerprint(pki.root.public_bytes(serialization.Encoding.DER))
+
+    def report(**kw):
+        caplog.clear()
+        s = SimpleNamespace(ldap_ca_cert_file=str(ca), ldap_ca_sha256="", ldap_tls_verify=True)
+        for k, v in kw.items():
+            setattr(s, k, v)
+        ldapca.startup_report(s, cwd=tmp_path)
+        return caplog.text
+
+    text = report()
+    assert "running as user" in text and str(env) in text
+    assert "other users can read it" in text and "NOT pinned" in text and good in text
+    env.chmod(0o600)
+    assert "other users" not in report(ldap_ca_sha256=good)
+    assert "pinned" in caplog.text and "NOT pinned" not in caplog.text
+    assert "does not contain the CA pinned" in report(ldap_ca_sha256="00" * 32)
+    assert "system trust store" in report(ldap_ca_cert_file="")
+    assert "not checked" in report(ldap_tls_verify=False)

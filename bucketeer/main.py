@@ -19,6 +19,7 @@ from . import (
     buckets,
     cors,
     credentials,
+    ldapca,
     lifecycle,
     lifecycle_rules,
     mailer,
@@ -75,12 +76,14 @@ def create_app(
         level=settings.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    logging.getLogger().setLevel(settings.log_level.upper())  # app.py may have set it up
     client = croit or (
         RgwAdminClient(settings) if settings.admin_backend == "rgw" else CroitClient(settings)
     )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        ldapca.startup_report(settings)
         owned = db is None
         if owned:
             # DATA_DIR is relative to the working directory (repo root).

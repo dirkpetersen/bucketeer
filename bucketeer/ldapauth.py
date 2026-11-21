@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import ldap3
+import ldap3.core.tls as _ldap3_tls
 from ldap3.core.exceptions import (
     LDAPBindError,
     LDAPException,
@@ -103,6 +104,19 @@ class Resolved:
 
 
 # -- real ldap3 backend -------------------------------------------------------
+
+_default_context = _ldap3_tls.create_default_context
+
+
+def _partial_chain_context(*args, **kwargs):
+    """ldap3's TLS context, also trusting an intermediate CA from LDAP_CA_CERT_FILE as an
+    anchor (Python 3.13+ does this by default). Domain controllers rarely send the root."""
+    ctx = _default_context(*args, **kwargs)
+    ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+    return ctx
+
+
+_ldap3_tls.create_default_context = _partial_chain_context
 
 
 def build_server(settings: Settings, url: str) -> ldap3.Server:

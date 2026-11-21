@@ -54,8 +54,14 @@ to start) or **Default** (the file matches the code default).
 - By hand: `python3 app.py --fetch-ldap-ca [--force]`.
 - The first fetch trusts the network. After it, compare the logged fingerprints with the
   directory team, then set `LDAP_CA_SHA256` so only that CA is accepted.
-- If the server does not send the root CA, the fetch fails with a clear message. Copy the
-  file to the server by hand then.
+- The domain controllers usually send only an intermediate CA, not the root. That is
+  enough: the app trusts an intermediate CA from the file as an anchor.
+- At startup the log names the user the app runs as, its folder, the settings file, and the
+  LDAP CA in use with its fingerprints and whether it is pinned. It warns when `.env` can
+  be read by other users (fix: `chmod 600`), and when the file does not hold the pinned CA.
+- In appmotel multi-user mode the app runs as its own user (for example `a-bucketeer`),
+  with its files under that user's home. Edit files as that user; run `appmo` as
+  `appmotel`.
 - For a directory with a public CA, set `LDAP_CA_CERT_FILE` empty to use the system trust
   store. With `LDAP_TLS_VERIFY=false` no CA file is used.
 
