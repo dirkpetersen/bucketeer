@@ -119,7 +119,7 @@ class Settings(BaseSettings):
     # S3
     s3_endpoint_url: str = ""
     s3_region: str = "us-east-1"
-    s3_addressing_style: Literal["path", "virtual", "auto"] = "path"
+    s3_addressing_style: Literal["path", "virtual", "auto"] = "virtual"
     aws_profile_name: str = "bucketeer"
     s3_tenant: str = ""
     s3_ca_cert_file: str = ""

@@ -14,9 +14,11 @@ with `await app.state.s3.call(acct, fn, ...)`, which uses `asyncio.to_thread`.
 """
 
 import asyncio
+import ipaddress
 import logging
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 import boto3
 from botocore.config import Config
@@ -30,10 +32,23 @@ from .croit import CroitClient, CroitClientError
 log = logging.getLogger("bucketeer.s3client")
 
 
-def make_config(settings: Settings) -> Config:
+def addressing_style(settings: Settings, endpoint: str | None = None) -> str:
+    """The configured style, except path for an IP or localhost endpoint (a bucket name
+    cannot go in front of an IP address; the demo and tests use one)."""
+    host = urlsplit(endpoint or "").hostname or ""
+    if host == "localhost":
+        return "path"
+    try:
+        ipaddress.ip_address(host)
+        return "path"
+    except ValueError:
+        return settings.s3_addressing_style
+
+
+def make_config(settings: Settings, endpoint: str | None = None) -> Config:
     return Config(
         signature_version="s3v4",
-        s3={"addressing_style": settings.s3_addressing_style},
+        s3={"addressing_style": addressing_style(settings, endpoint)},
         # newer SDKs send CRC checksums that many Ceph RGW versions reject
         request_checksum_calculation="when_required",
         response_checksum_validation="when_required",
@@ -57,7 +72,7 @@ def default_factory(endpoint: str, access_key: str, secret_key: str, settings: S
         region_name=settings.s3_region,
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
-        config=make_config(settings),
+        config=make_config(settings, endpoint),
         verify=tls_verify(settings),
     )
 

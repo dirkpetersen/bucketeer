@@ -82,7 +82,7 @@ def test_fetch_once_gives_script_with_values(env):
     t = r.text
     assert f"aws_access_key_id = {ALICE[2]}" in t and f"aws_secret_access_key = {ALICE[3]}" in t
     assert "[profile bucketeer]" in t and "endpoint_url = https://s3.example.org" in t
-    assert "addressing_style = path" in t and "region = us-east-1" in t
+    assert "addressing_style = virtual" in t and "region = us-east-1" in t
     again = fetch(env, link)
     assert again.status_code == 200 and "exit 1" in again.text and ALICE[3] not in again.text
     assert "already used or has expired" in again.text

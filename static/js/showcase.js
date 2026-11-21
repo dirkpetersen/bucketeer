@@ -13,7 +13,7 @@ const cp = document.getElementById("cp-demo");
 cp.tabs = [
   {
     label: "~/.aws/config", filename: "config",
-    content: "# Managed by Bucketeer\n[profile bucketeer]\nregion = us-east-1\nendpoint_url = https://s3.example.org\ns3 =\n  addressing_style = path\n",
+    content: "# Managed by Bucketeer\n[profile bucketeer]\nregion = us-east-1\nendpoint_url = https://s3.example.org\ns3 =\n  addressing_style = virtual\n",
   },
   {
     label: "~/.aws/credentials", filename: "credentials",

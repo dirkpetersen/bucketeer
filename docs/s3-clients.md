@@ -24,7 +24,9 @@ that connect each one to our Ceph cluster.
    three values: the **endpoint** (for example `https://s3.example.edu`), your **access
    key** and your **secret key**. Turn on **Advanced** in Bucketeer to see them on the
    Credentials card.
-3. Use **path-style** addressing unless your admin says otherwise. The region can be any
+3. Use **virtual-host style** addressing: the bucket name goes in front of the endpoint
+   host, as in `https://my-bucket.s3.example.edu`. This is why bucket names have no dots.
+   The region can be any
    value (for example `us-east-1`); Ceph ignores it, but most tools need one.
 
 !!! warning "Keep your secret key secret"
@@ -162,7 +164,7 @@ aws configure set region us-east-1                        --profile bucketeer
 aws configure set endpoint_url https://s3.example.edu     --profile bucketeer
 aws configure set request_checksum_calculation when_required --profile bucketeer
 aws configure set response_checksum_validation when_required --profile bucketeer
-aws configure set s3.addressing_style path                --profile bucketeer
+aws configure set s3.addressing_style virtual             --profile bucketeer
 ```
 
 **Step 3. Check it.**
@@ -213,7 +215,7 @@ Open a new terminal after this.
     request_checksum_calculation = when_required
     response_checksum_validation = when_required
     s3 =
-      addressing_style = path
+      addressing_style = virtual
     ```
 
 === "~/.aws/credentials"
@@ -248,7 +250,7 @@ copies the endpoint from your AWS config, so you do not need to type it:
 
     ```bash
     rclone config create bucketeer s3 provider=Ceph env_auth=true profile=bucketeer \
-      force_path_style=true endpoint="$(aws configure get endpoint_url --profile bucketeer)"
+      force_path_style=false endpoint="$(aws configure get endpoint_url --profile bucketeer)"
     ```
 
 === "PowerShell"
@@ -256,7 +258,7 @@ copies the endpoint from your AWS config, so you do not need to type it:
     ```powershell
     $ep = aws configure get endpoint_url --profile bucketeer
     rclone config create bucketeer s3 provider=Ceph env_auth=true profile=bucketeer `
-      force_path_style=true endpoint=$ep
+      force_path_style=false endpoint=$ep
     ```
 
 === "Resulting rclone.conf"
@@ -268,7 +270,7 @@ copies the endpoint from your AWS config, so you do not need to type it:
     env_auth = true
     profile = bucketeer
     endpoint = https://s3.example.edu
-    force_path_style = true
+    force_path_style = false
     ```
 
     `env_auth = true` and `profile = bucketeer` tell rclone to read the access key and
@@ -330,7 +332,7 @@ Old but common in Ceph documentation, and handy for policies and lifecycle rules
 access_key = <your access key>
 secret_key = <your secret key>
 host_base = s3.example.edu
-host_bucket = s3.example.edu
+host_bucket = %(bucket)s.s3.example.edu
 use_https = True
 signature_v2 = False
 ```
@@ -353,8 +355,8 @@ drive.
 
 S3 Browser, MSP360 Explorer, WinSCP, Transmit, FileZilla Pro, ExpanDrive and CloudMounter all
 ask for the same values: choose the **S3 compatible** or **Amazon S3** connection type, enter
-the endpoint host, your access key and secret key, and turn on **path style** if there is
-such a setting.
+the endpoint host, your access key and secret key. Use **virtual-host style** (bucket
+name as a subdomain) if the app asks; in Cyberduck this is the default.
 
 ## Motuz
 

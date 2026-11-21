@@ -41,6 +41,13 @@ to start) or **Default** (the file matches the code default).
 | S3 | `S3_ENDPOINT_URL`, `S3_REGION`, `S3_ADDRESSING_STYLE`, `S3_TENANT`, `S3_CA_CERT_FILE`, `S3_TLS_VERIFY` |
 | Email | `SMTP_FROM` (turns email on), `APP_URL`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURITY`, `SMTP_USERNAME`, `SMTP_PASSWORD` |
 
+!!! note "Virtual-host addressing is the default"
+    `S3_ADDRESSING_STYLE=virtual` puts the bucket name in front of the host
+    (`https://my-bucket.s3.example.edu`). The S3 endpoint needs a wildcard DNS record
+    (`*.s3.example.edu`) and a wildcard TLS certificate for it, and RGW needs the host in
+    `rgw_dns_name` (or the zonegroup `hostnames`). Without these, set
+    `S3_ADDRESSING_STYLE=path`.
+
 ## LDAP CA certificate
 
 `LDAP_CA_CERT_FILE` defaults to `data/ldap-ca.pem`. The app keeps this file up to date:

@@ -154,6 +154,7 @@ def demo_settings(*, port: int, s3_url: str, data_dir: str, backend: str = "rgw"
         ldap_bind_password="unused-in-demo",
         admin_backend=backend,
         s3_endpoint_url=s3_url,
+        s3_addressing_style="path",  # moto on 127.0.0.1: no bucket subdomains
         **backend_settings,
     )
 

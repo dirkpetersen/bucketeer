@@ -90,7 +90,7 @@ def test_list_has_no_secrets(env):
     assert r.status_code == 200
     assert r.json() == {
         "profile": "bucketeer", "region": "us-east-1", "endpointUrl": "https://s3.example.org",
-        "addressingStyle": "path", "keys": [{"accessKey": ALICE[2]}],
+        "addressingStyle": "virtual", "keys": [{"accessKey": ALICE[2]}],
     }
     assert ALICE[3] not in r.text
     assert r.headers["cache-control"] == "no-store"
@@ -268,9 +268,9 @@ def test_s3cfg_parsing():
 
 def test_addressing_style_setting(make_env):
     assert make_env(s3_endpoint_url="https://s3.example.org").alice.get(
-        "/api/credentials").json()["addressingStyle"] == "path"
-    e = make_env(s3_endpoint_url="https://s3.example.org", s3_addressing_style="virtual")
-    assert e.alice.get("/api/credentials").json()["addressingStyle"] == "virtual"
+        "/api/credentials").json()["addressingStyle"] == "virtual"  # the default
+    e = make_env(s3_endpoint_url="https://s3.example.org", s3_addressing_style="path")
+    assert e.alice.get("/api/credentials").json()["addressingStyle"] == "path"
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **REQUIRED, s3_addressing_style="bogus")
 

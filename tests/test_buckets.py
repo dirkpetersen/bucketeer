@@ -576,7 +576,10 @@ def test_s3_client_config(env):
     cfg = client.meta.config
     assert cfg.request_checksum_calculation == "when_required"
     assert cfg.response_checksum_validation == "when_required"
-    assert cfg.s3["addressing_style"] == "path" and client.meta.region_name == "us-east-1"
+    assert cfg.s3["addressing_style"] == "path" and client.meta.region_name == "us-east-1"  # IP
+    for ep in ("https://s3.example.org", "http://localhost:9000", "http://[::1]:9000"):
+        style = default_factory(ep, "AK", "SK", env.settings).meta.config.s3["addressing_style"]
+        assert style == ("virtual" if "example" in ep else "path"), ep
     assert cfg.connect_timeout and cfg.read_timeout
     assert "SK" not in repr(client) and "SK" not in repr(env.app.state.s3.__dict__)
 
