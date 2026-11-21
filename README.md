@@ -1,7 +1,7 @@
 # Bucketeer
 Self-service S3 bucket and credential portal for Ceph clusters, powered by the RGW Admin Ops API
 
-**[Documentation](https://dirkpetersen.github.io/bucketeer/)** · **[Which S3 client should I use? Compare 22 tools](https://dirkpetersen.github.io/bucketeer/clients/)** · [User guide](https://dirkpetersen.github.io/bucketeer/user-guide/) · [Admin guide](https://dirkpetersen.github.io/bucketeer/admin-guide/)
+**[Documentation](https://dirkpetersen.github.io/bucketeer/)** · **[Which S3 client should I use? Compare 22 tools](https://dirkpetersen.github.io/bucketeer/clients/)** · [Install](https://dirkpetersen.github.io/bucketeer/install/) · [User guide](https://dirkpetersen.github.io/bucketeer/user-guide/) · [Admin guide](https://dirkpetersen.github.io/bucketeer/admin-guide/)
 
 <img width="776" height="1104" alt="image" src="https://github.com/user-attachments/assets/2944d1fb-3adc-45b2-b489-0950b50eccbd" />
 

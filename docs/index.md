@@ -37,9 +37,9 @@ Users, quotas, offboarding, and the monthly billing per user and bucket.
 <div class="osu-card gold" markdown>
 <span class="osu-tag">Operators</span>
 
-### [Deployment](deployment.md)
+### [Install](install.md)
 
-Run Bucketeer on appmotel, with every setting explained.
+From an empty server to the first login in seven steps, on appmotel or on its own.
 </div>
 </div>
 
@@ -48,6 +48,11 @@ Run Bucketeer on appmotel, with every setting explained.
 ![The Bucketeer workspace](assets/screens/workspace-dark.webp#only-dark)
 <figcaption>The workspace: connect this computer on the left, your buckets on the right.</figcaption>
 </figure>
+
+## Source code
+
+Bucketeer is open source: [github.com/dirkpetersen/bucketeer](https://github.com/dirkpetersen/bucketeer).
+Report problems and ideas in its [issues](https://github.com/dirkpetersen/bucketeer/issues).
 
 ## How it works
 

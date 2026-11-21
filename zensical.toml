@@ -3,6 +3,9 @@
 site_name = "Bucketeer"
 site_description = "Self-service S3 portal for Ceph clusters"
 site_url = "https://dirkpetersen.github.io/bucketeer/"
+repo_url = "https://github.com/dirkpetersen/bucketeer"
+repo_name = "dirkpetersen/bucketeer"
+edit_uri = "edit/main/docs/"
 docs_dir = "docs"
 site_dir = "site"
 extra_css = ["stylesheets/osu.css"]
@@ -13,6 +16,7 @@ nav = [
     { "S3 clients" = "s3-clients.md" },
   ] },
   { "For admins" = [
+    { "Install" = "install.md" },
     { "Admin guide" = "admin-guide.md" },
     { "Deployment" = "deployment.md" },
     { "Admin Ops setup" = "admin-ops-setup.md" },
@@ -43,6 +47,7 @@ features = [
 
 [project.theme.icon]
 logo = "lucide/paint-bucket"
+repo = "fontawesome/brands/github"
 
 [[project.theme.palette]]
 media = "(prefers-color-scheme: light)"
