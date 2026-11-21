@@ -115,13 +115,94 @@ settings shown next to them.
 
 ### AWS CLI v2
 
-The **Set up this computer** command in Bucketeer configures the AWS CLI for you, as the
-profile `bucketeer`. Use `--profile bucketeer`, or set `AWS_PROFILE=bucketeer` once.
+The AWS CLI is the reference tool, and the base for the others: rclone, s5cmd and many
+scripts can read its profile. Bucketeer uses the profile name `bucketeer`, so it never
+touches your other AWS settings.
+
+**Step 1. Install the AWS CLI v2.**
+
+=== "Windows"
+
+    Download and run the installer from
+    [aws.amazon.com/cli](https://aws.amazon.com/cli/), or in PowerShell:
+
+    ```powershell
+    winget install Amazon.AWSCLI
+    ```
+
+=== "macOS"
+
+    ```bash
+    brew install awscli
+    ```
+
+    Or use the `.pkg` installer from [aws.amazon.com/cli](https://aws.amazon.com/cli/).
+
+=== "Linux"
+
+    ```bash
+    curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
+    unzip -q awscliv2.zip && ./aws/install --install-dir ~/.local/aws-cli --bin-dir ~/.local/bin
+    ```
+
+Check it with `aws --version`. It must say `aws-cli/2.x`.
+
+**Step 2. Create the profile `bucketeer`.** The easy way: in Bucketeer, open **Set up
+this computer**, create the command for your system and run it. It writes both files and
+tests the connection.
+
+If you cannot run the setup command, make the profile by hand. Turn on **Advanced** in
+Bucketeer to see your endpoint, access key and secret key, then run these lines (they work
+the same in a terminal and in PowerShell):
+
+```bash
+aws configure set aws_access_key_id     <your access key> --profile bucketeer
+aws configure set aws_secret_access_key <your secret key> --profile bucketeer
+aws configure set region us-east-1                        --profile bucketeer
+aws configure set endpoint_url https://s3.example.edu     --profile bucketeer
+aws configure set request_checksum_calculation when_required --profile bucketeer
+aws configure set response_checksum_validation when_required --profile bucketeer
+aws configure set s3.addressing_style path                --profile bucketeer
+```
+
+**Step 3. Check it.**
+
+```bash
+aws configure list --profile bucketeer   # shows where each value comes from
+aws --profile bucketeer s3 ls            # lists your buckets
+```
+
+**Step 4. Use `bucketeer` without typing `--profile` each time** (optional):
+
+=== "bash / zsh"
+
+    ```bash
+    echo 'export AWS_PROFILE=bucketeer' >> ~/.bashrc   # ~/.zshrc on a Mac
+    ```
+
+=== "PowerShell"
+
+    ```powershell
+    [Environment]::SetEnvironmentVariable("AWS_PROFILE", "bucketeer", "User")
+    ```
+
+Open a new terminal after this.
 
 <figure class="osu-shot" markdown>
 ![AWS CLI v2 listing buckets, uploading a file and syncing a folder](assets/clients/aws-cli.svg)
 <figcaption>List buckets, upload one file, sync a folder, then list it all.</figcaption>
 </figure>
+
+=== "Everyday commands"
+
+    ```bash
+    aws s3 ls                                   # your buckets
+    aws s3 ls s3://my-bucket/ --recursive       # files in a bucket
+    aws s3 cp results.csv s3://my-bucket/2026/  # upload one file
+    aws s3 cp s3://my-bucket/2026/results.csv . # download one file
+    aws s3 sync ./data s3://my-bucket/data      # upload only what changed
+    aws s3 sync s3://my-bucket/data ./data      # and back
+    ```
 
 === "~/.aws/config"
 
@@ -143,58 +224,80 @@ profile `bucketeer`. Use `--profile bucketeer`, or set `AWS_PROFILE=bucketeer` o
     aws_secret_access_key = <your secret key>
     ```
 
-=== "Everyday commands"
-
-    ```bash
-    export AWS_PROFILE=bucketeer
-    aws s3 ls                                   # your buckets
-    aws s3 cp results.csv s3://my-bucket/2026/  # upload one file
-    aws s3 sync ./data s3://my-bucket/data      # upload only what changed
-    aws s3 sync s3://my-bucket/data ./data      # and back
-    ```
-
 !!! tip "Checksum errors with new AWS tools"
     New AWS CLI and SDK versions send CRC checksums that some Ceph versions refuse. The two
-    `when_required` lines above prevent that. Bucketeer adds them for you.
+    `when_required` lines prevent that. The setup command adds them for you.
 
 ### rclone
 
-The most versatile tool: sync, copy with checksums, mount, encrypt. Add a remote once, then
-use `bucketeer:<bucket>/<path>`.
+The most versatile tool: sync, copy with checksums, mount, encrypt. rclone can use the AWS
+profile `bucketeer`, so your keys stay in one place: when you rotate a key and run the
+setup command again, rclone uses the new key at once.
 
-<figure class="osu-shot" markdown>
-![rclone listing buckets and copying a folder](assets/clients/rclone.svg)
-<figcaption>List buckets, copy a folder, list and size the result.</figcaption>
-</figure>
+**Step 1. Install rclone** from [rclone.org/install](https://rclone.org/install/)
+(`winget install Rclone.Rclone`, `brew install rclone`, or
+`sudo -v ; curl https://rclone.org/install.sh | sudo bash`). Check it with
+`rclone version`.
 
-=== "~/.config/rclone/rclone.conf"
+**Step 2. Make the profile `bucketeer` for the AWS CLI first** ([see above](#aws-cli-v2)).
+
+**Step 3. Create the rclone remote `bucketeer` from that profile.** This one command
+copies the endpoint from your AWS config, so you do not need to type it:
+
+=== "bash / zsh"
+
+    ```bash
+    rclone config create bucketeer s3 provider=Ceph env_auth=true profile=bucketeer \
+      force_path_style=true endpoint="$(aws configure get endpoint_url --profile bucketeer)"
+    ```
+
+=== "PowerShell"
+
+    ```powershell
+    $ep = aws configure get endpoint_url --profile bucketeer
+    rclone config create bucketeer s3 provider=Ceph env_auth=true profile=bucketeer `
+      force_path_style=true endpoint=$ep
+    ```
+
+=== "Resulting rclone.conf"
 
     ```ini
     [bucketeer]
     type = s3
     provider = Ceph
     env_auth = true
+    profile = bucketeer
     endpoint = https://s3.example.edu
     force_path_style = true
     ```
 
-    With `env_auth = true`, rclone reads the keys from the AWS profile. Run it with
-    `AWS_PROFILE=bucketeer`, or put `access_key_id` and `secret_access_key` in the file
-    instead.
+    `env_auth = true` and `profile = bucketeer` tell rclone to read the access key and
+    secret key from `~/.aws/credentials`. The file holds no secret. Find it with
+    `rclone config file`.
 
-=== "Everyday commands"
+**Step 4. Check it:** `rclone lsd bucketeer:` lists your buckets. Paths are
+`bucketeer:<bucket>/<folder>`.
 
-    ```bash
-    rclone lsd bucketeer:                          # buckets
-    rclone copy ./data bucketeer:my-bucket/data -P # copy with progress
-    rclone sync ./data bucketeer:my-bucket/data    # make the target equal the source
-    rclone check ./data bucketeer:my-bucket/data   # compare checksums
-    rclone mount bucketeer:my-bucket ~/my-bucket   # mount (needs FUSE / WinFsp)
-    ```
+<figure class="osu-shot" markdown>
+![rclone listing buckets and copying a folder](assets/clients/rclone.svg)
+<figcaption>List buckets, copy a folder, list and size the result.</figcaption>
+</figure>
+
+```bash
+rclone lsd bucketeer:                          # buckets
+rclone copy ./data bucketeer:my-bucket/data -P # copy with progress
+rclone sync ./data bucketeer:my-bucket/data    # make the target equal the source
+rclone check ./data bucketeer:my-bucket/data   # compare checksums
+rclone mount bucketeer:my-bucket ~/my-bucket   # mount (needs FUSE, or WinFsp on Windows)
+```
 
 !!! danger "`rclone sync` deletes"
     `sync` deletes files in the target that are not in the source. Use `copy` when in
     doubt, and try `--dry-run` first.
+
+!!! note "Shared buckets"
+    A bucket someone shared with you does not show in `rclone lsd bucketeer:`. Use its
+    name directly: `rclone ls bucketeer:their-bucket`.
 
 ### s5cmd
 
