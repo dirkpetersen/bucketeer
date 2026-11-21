@@ -186,6 +186,9 @@
 .bl-form .set-actions { grid-column: 1 / -1; }
 .bl-cur { text-transform: uppercase; }
 .bl-tools { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.bl-tools .btn { text-decoration: none; }
+.bl-tbl .who b { white-space: nowrap; }
+.bl-tbl th, .bl-tbl td { padding-inline: var(--sp-3); }
 .bl-tbl .bl-fytd { font-weight: 650; background: var(--accent-soft); }
 .bl-tbl tfoot th, .bl-tbl tfoot td { padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border); text-align: left; font-variant-numeric: tabular-nums; }
 .bl-tbl tfoot td.num { text-align: right; }

@@ -1,18 +1,57 @@
+---
+title: Bucketeer
+description: Self-service S3 storage on Ceph, with AD login.
+---
+
+<div class="osu-hero" markdown>
+<span class="osu-kicker">Self-service S3 storage</span>
+
 # Bucketeer
 
-Bucketeer is a self-service S3 portal for Ceph clusters. Users log in with their Active
-Directory account. They get S3 credentials and manage their buckets: create, delete,
-versioning, sharing, scoped keys, lifecycle rules and the other S3 bucket features.
+Log in with your university account, connect your computer with one command, and manage
+your own S3 buckets: create, share, version, and clean up, without a ticket.
+</div>
 
-Everyday features are always visible. Rare features sit behind one **Advanced** toggle.
-Admins get an extra page for users, buckets, settings, audit and offboarding.
+<div class="osu-cards" markdown>
+<div class="osu-card" markdown>
+<span class="osu-tag">Start here</span>
 
-Where to start:
+### [User guide](user-guide.md)
+
+Log in, save your budget number, set up your computer, create a bucket.
+</div>
+<div class="osu-card blue" markdown>
+<span class="osu-tag">Tools</span>
+
+### [S3 clients](s3-clients.md)
+
+22 tools compared, with real screenshots and settings for Cyberduck, AWS CLI, rclone and more.
+</div>
+<div class="osu-card pine" markdown>
+<span class="osu-tag">Admins</span>
+
+### [Admin guide](admin-guide.md)
+
+Users, quotas, offboarding, and the monthly billing per user and bucket.
+</div>
+<div class="osu-card gold" markdown>
+<span class="osu-tag">Operators</span>
+
+### [Deployment](deployment.md)
+
+Run Bucketeer on appmotel, with every setting explained.
+</div>
+</div>
+
+<figure class="osu-shot" markdown>
+![The Bucketeer workspace](assets/screens/workspace.webp#only-light)
+![The Bucketeer workspace](assets/screens/workspace-dark.webp#only-dark)
+<figcaption>The workspace: connect this computer on the left, your buckets on the right.</figcaption>
+</figure>
+
+## How it works
 
 - [Software stack](stack.md): every part of the web stack, backend and frontend.
 - [Architecture](architecture.md): how the parts work together.
 - [Security](security.md): the controls that protect users and keys.
-- [Deployment](deployment.md): run it on appmotel, with all the settings.
 - [Admin Ops setup](admin-ops-setup.md): prepare the Ceph cluster.
-
-The source of truth for product decisions is `CLAUDE.md` in the repository.

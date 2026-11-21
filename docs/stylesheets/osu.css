@@ -1,0 +1,101 @@
+/* Oregon State colours: Beaver Orange and black, with the secondary palette for accents. */
+:root {
+  --osu-orange: #D73F09;
+  --osu-orange-dark: #A82F05;
+  --osu-black: #000000;
+  --osu-luminance: #FFB500;
+  --osu-stratosphere: #006A8E;
+  --osu-pine: #4A773C;
+  --osu-paper: #F7F3EF;
+}
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: var(--osu-black);
+  --md-primary-fg-color--light: #2a2a2a;
+  --md-primary-fg-color--dark: #000;
+  --md-primary-bg-color: #fff;
+  --md-accent-fg-color: var(--osu-orange);
+  --md-typeset-a-color: #B53507; /* AA on white */
+}
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #0d0b0a;
+  --md-primary-fg-color--light: #1c1917;
+  --md-primary-fg-color--dark: #000;
+  --md-accent-fg-color: #FF7A45;
+  --md-typeset-a-color: #FF8A5B; /* AA on the slate background */
+  --md-default-bg-color: #141110;
+}
+/* Header and tabs: black bar with an orange underline */
+.md-header { border-bottom: 3px solid var(--osu-orange); }
+.md-tabs { background: var(--osu-black); }
+.md-tabs__link { color: rgba(255, 255, 255, .78); opacity: 1; font-weight: 600; }
+.md-tabs__item--active .md-tabs__link, .md-tabs__link:hover { color: #fff; text-decoration: underline 3px var(--osu-orange); text-underline-offset: 8px; }
+.md-header__button.md-logo .md-icon, .md-header__button.md-logo svg { color: var(--osu-orange); fill: var(--osu-orange); }
+.md-typeset h1 { font-weight: 800; letter-spacing: -0.02em; }
+.md-typeset h2 { font-weight: 700; border-bottom: 2px solid color-mix(in srgb, var(--osu-orange) 35%, transparent); padding-bottom: .2em; }
+.md-typeset .headerlink:hover, .md-typeset a:hover { color: var(--osu-orange); }
+
+/* Hero band at the top of a page */
+.md-typeset .osu-hero {
+  margin: 0 0 2rem; padding: 2rem 2rem 1.6rem; border-radius: 14px; color: #fff;
+  background: radial-gradient(120% 140% at 100% 0%, #F0642B 0%, var(--osu-orange) 38%, #8E2A04 100%);
+  box-shadow: 0 10px 30px -12px rgba(215, 63, 9, .55);
+}
+.md-typeset .osu-hero h1 { color: #fff; margin: 0 0 .4rem; font-size: 2.1rem; }
+.md-typeset .osu-hero p { margin: .3rem 0; font-size: .95rem; max-width: 46rem; color: #fff; }
+.md-typeset .osu-hero a { color: #fff; text-decoration: underline; }
+.md-typeset .osu-hero .osu-kicker { text-transform: uppercase; letter-spacing: .14em; font-size: .7rem; font-weight: 700; opacity: .9; }
+
+/* Pick cards */
+.md-typeset .osu-cards { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr)); margin: 1rem 0 2rem; }
+.md-typeset .osu-card {
+  border: 1px solid var(--md-default-fg-color--lightest); border-top: 4px solid var(--osu-orange);
+  border-radius: 12px; padding: 1rem 1.1rem; background: var(--md-default-bg-color);
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.md-typeset .osu-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px -14px rgba(0, 0, 0, .45); }
+.md-typeset .osu-card h3 { margin: .1rem 0 .4rem; font-size: 1rem; }
+.md-typeset .osu-card h3 a { text-decoration: none; color: var(--md-default-fg-color); }
+.md-typeset .osu-card:hover h3 a { color: var(--md-typeset-a-color); }
+.md-typeset .osu-card p { margin: .2rem 0; font-size: .78rem; }
+.md-typeset .osu-card .osu-tag { display: inline-block; font-size: .62rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--osu-orange); }
+.md-typeset .osu-card.blue { border-top-color: var(--osu-stratosphere); }
+.md-typeset .osu-card.blue .osu-tag { color: var(--osu-stratosphere); }
+.md-typeset .osu-card.pine { border-top-color: var(--osu-pine); }
+.md-typeset .osu-card.pine .osu-tag { color: var(--osu-pine); }
+.md-typeset .osu-card.gold { border-top-color: var(--osu-luminance); }
+.md-typeset .osu-card.gold .osu-tag { color: #8A6200; }
+[data-md-color-scheme="slate"] .md-typeset .osu-card.blue .osu-tag { color: #5AB4D6; }
+[data-md-color-scheme="slate"] .md-typeset .osu-card.pine .osu-tag { color: #8CC47A; }
+[data-md-color-scheme="slate"] .md-typeset .osu-card.gold .osu-tag { color: var(--osu-luminance); }
+
+/* Screenshots */
+.md-typeset .osu-shot { margin: 1.2rem 0 1.8rem; }
+.md-typeset .osu-shot img { border-radius: 12px; border: 1px solid var(--md-default-fg-color--lightest); box-shadow: 0 18px 40px -22px rgba(0, 0, 0, .55); }
+.md-typeset .osu-shot figcaption { font-size: .72rem; color: var(--md-default-fg-color--light); margin-top: .5rem; }
+
+/* Comparison table */
+.md-typeset .osu-table table:not([class]) { font-size: .72rem; display: table; width: 100%; }
+.md-typeset .osu-table table:not([class]) :is(th, td) { min-width: 0; padding: .55em .7em; vertical-align: top; }
+.md-typeset .osu-table table:not([class]) :is(th, td):nth-child(1) { width: 2em; }
+.md-typeset .osu-table table:not([class]) :is(th, td):nth-child(2) { min-width: 9em; }
+.md-typeset .osu-table table:not([class]) :is(th, td):nth-child(n+4):nth-child(-n+6) { width: 3.2em; }
+.md-typeset .osu-table table:not([class]) :is(th, td):nth-child(7) { min-width: 8em; }
+.md-typeset .osu-table table:not([class]) :is(th, td):nth-child(8) { min-width: 20em; }
+.md-typeset .osu-table table:not([class]) tbody tr:nth-child(even) { background: color-mix(in srgb, var(--md-default-fg-color) 3%, transparent); }
+.md-typeset .osu-table table:not([class]) th { background: var(--osu-black); color: #fff; }
+[data-md-color-scheme="slate"] .md-typeset .osu-table table:not([class]) th { background: #2a2421; }
+.md-typeset .osu-table table:not([class]) td:nth-child(n+4):nth-child(-n+6) { text-align: center; }
+.md-typeset .yes { color: var(--osu-pine); font-weight: 800; }
+[data-md-color-scheme="slate"] .md-typeset .yes { color: #8CC47A; }
+.md-typeset .no { color: var(--md-default-fg-color--lighter); }
+.md-typeset .osu-pill { display: inline-block; padding: .05rem .5rem; border-radius: 999px; font-size: .62rem; font-weight: 700; white-space: nowrap; background: color-mix(in srgb, var(--osu-orange) 14%, transparent); color: var(--md-typeset-a-color); }
+.md-typeset .osu-pill.cli { background: color-mix(in srgb, var(--osu-stratosphere) 16%, transparent); color: var(--osu-stratosphere); }
+.md-typeset .osu-pill.mount { background: color-mix(in srgb, var(--osu-pine) 18%, transparent); color: var(--osu-pine); }
+[data-md-color-scheme="slate"] .md-typeset .osu-pill.cli { color: #5AB4D6; }
+[data-md-color-scheme="slate"] .md-typeset .osu-pill.mount { color: #8CC47A; }
+@media (prefers-reduced-motion: reduce) { .md-typeset .osu-card { transition: none; } .md-typeset .osu-card:hover { transform: none; } }
+@media (max-width: 44.99em) {
+  .md-typeset .osu-hero { padding: 1.3rem 1.2rem 1.1rem; border-radius: 12px; }
+  .md-typeset .osu-hero h1 { font-size: 1.6rem; }
+  .md-typeset .osu-hero p { font-size: .82rem; }
+}

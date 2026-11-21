@@ -4,15 +4,72 @@ site_name = "Bucketeer"
 site_description = "Self-service S3 portal for Ceph clusters"
 docs_dir = "docs"
 site_dir = "site"
+extra_css = ["stylesheets/osu.css"]
 nav = [
   { "Home" = "index.md" },
-  { "Software stack" = "stack.md" },
-  { "Architecture" = "architecture.md" },
-  { "Security" = "security.md" },
-  { "Deployment" = "deployment.md" },
-  { "Admin Ops setup" = "admin-ops-setup.md" },
+  { "For users" = [
+    { "User guide" = "user-guide.md" },
+    { "S3 clients" = "s3-clients.md" },
+  ] },
+  { "For admins" = [
+    { "Admin guide" = "admin-guide.md" },
+    { "Deployment" = "deployment.md" },
+    { "Admin Ops setup" = "admin-ops-setup.md" },
+  ] },
+  { "How it works" = [
+    { "Software stack" = "stack.md" },
+    { "Architecture" = "architecture.md" },
+    { "Security" = "security.md" },
+  ] },
 ]
 
 [project.theme]
 variant = "modern"
-features = ["navigation.sections", "content.code.copy"]
+language = "en"
+features = [
+  "content.code.copy",
+  "content.tabs.link",
+  "content.tooltips",
+  "navigation.footer",
+  "navigation.instant",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.tabs",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+]
+
+[project.theme.icon]
+logo = "lucide/paint-bucket"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
+
+[project.markdown_extensions]
+abbr = {}
+admonition = {}
+attr_list = {}
+def_list = {}
+md_in_html = {}
+tables = {}
+toc = { permalink = true }
+"pymdownx.details" = {}
+"pymdownx.highlight" = { anchor_linenums = true }
+"pymdownx.inlinehilite" = {}
+"pymdownx.superfences" = {}
+"pymdownx.tabbed" = { alternate_style = true }
+"pymdownx.emoji" = { emoji_index = "zensical.extensions.emoji.twemoji", emoji_generator = "zensical.extensions.emoji.to_svg" }
