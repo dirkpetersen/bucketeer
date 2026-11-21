@@ -56,6 +56,7 @@ from .admin import croit_http_error
 from .auth import SessionUser, require_admin
 from .credentials import _key_locks, generate_key_pair
 from .croit import CroitClient, CroitClientError, CroitError
+from .profile import require_default_budget
 from .rgw_user import RgwAccount, is_service_uid, require_active_rgw_user, same_uid, split_uid
 
 log = logging.getLogger("bucketeer.bucket_keys")
@@ -229,7 +230,8 @@ async def _delete_key_user(croit: CroitClient, uid: str) -> None:
 # -- create ----------------------------------------------------------------------
 
 
-@router.post("/buckets/{name}/keys", status_code=201)
+@router.post("/buckets/{name}/keys", status_code=201,
+             dependencies=[Depends(require_default_budget)])
 async def create_key(name: str, body: CreateBody, request: Request, response: Response,
                      acct: Account):
     response.headers["Cache-Control"] = "no-store"

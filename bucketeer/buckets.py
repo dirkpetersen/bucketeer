@@ -81,6 +81,7 @@ from .policy_settings import (
     suggest_prefix,
     validate_bucket_name,
 )
+from .profile import require_default_budget
 from .rgw_admin import RgwAdminUnsupported
 from .rgw_user import RgwAccount, require_active_rgw_user, split_uid
 
@@ -367,7 +368,7 @@ async def options(request: Request, acct: Account, user: User):
 # -- create ----------------------------------------------------------------------
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, dependencies=[Depends(require_default_budget)])
 async def create_bucket(body: CreateBody, request: Request, acct: Account, user: User):
     croit: CroitClient = request.app.state.croit
     db = request.app.state.db

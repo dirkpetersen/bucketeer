@@ -46,6 +46,7 @@ from pydantic import BaseModel, Field
 from .admin import croit_http_error
 from .credentials import _key_locks, generate_key_pair
 from .croit import SUBUSER_PERMISSIONS, CroitClient, CroitClientError, CroitError
+from .profile import require_default_budget
 from .rgw_user import RgwAccount, require_active_rgw_user
 
 log = logging.getLogger("bucketeer.subusers")
@@ -172,7 +173,7 @@ async def list_subusers(request: Request, response: Response, acct: Account):
             "limits": {"maxSubusers": MAX_SUBUSERS, "maxKeys": MAX_KEYS}}
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, dependencies=[Depends(require_default_budget)])
 async def create_subuser(body: CreateBody, request: Request, response: Response,
                          acct: Account):
     response.headers["Cache-Control"] = "no-store"
@@ -263,7 +264,7 @@ async def delete_subuser(name: str, request: Request, response: Response, acct: 
     return {"name": name}
 
 
-@router.post("/{name}/keys")
+@router.post("/{name}/keys", dependencies=[Depends(require_default_budget)])
 async def create_key(name: str, request: Request, response: Response, acct: Account):
     response.headers["Cache-Control"] = "no-store"
     async with _key_locks(request)(acct.uid):

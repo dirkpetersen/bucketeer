@@ -81,6 +81,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "POST /api/admin/users/{uid}/unsuspend": ("admin.user.unsuspend",),
     "POST /api/admin/offboarding/run": ("offboarding.run",),
     "PUT /api/admin/offboarding/settings": ("admin.settings.offboarding",),
+    "PUT /api/admin/billing/settings": ("admin.settings.billing",),
     f"PUT {S}/naming": ("admin.settings.naming",),
     f"POST {S}/naming/test": (),
     f"PUT {S}/budget-number": ("admin.settings.budget_number",),
@@ -417,6 +418,8 @@ def run(tmp_path_factory, moto_server):
     # (limit lifted) enforced; his next login undoes it
     r.step("POST /api/admin/offboarding/run", lambda: b.post(
         "/api/admin/offboarding/run", headers=H))
+    r.step("PUT /api/admin/billing/settings", lambda: b.put(
+        "/api/admin/billing/settings", json={"pricePerTiBMonth": 9.5}, headers=H))
     r.step("PUT /api/admin/offboarding/settings", lambda: b.put(
         "/api/admin/offboarding/settings",
         json={"mode": "enforce", "time": "04:30", "minPeopleForPercent": 1}, headers=H))

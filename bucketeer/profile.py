@@ -20,6 +20,26 @@ from pydantic import BaseModel, ConfigDict, Field
 from .auth import SessionUser, require_user
 from .budget import BudgetNumberError, budget_example, validate_budget_number
 
+# Owner, 2026-11-21: no new bucket or credential until the user saved a default budget
+# number. Admins are exempt; existing keys stay revealable. Tests switch it off
+# (conftest) and test it in tests/test_budget_gate.py.
+REQUIRE_DEFAULT_BUDGET = True
+BUDGET_MISSING_TEXT = ("Save a default budget number in your profile first. Every bucket "
+                       "and every credential is charged to one.")
+
+
+class BudgetMissing(Exception):
+    """Answered as 409 {detail, budgetMissing: true} by the handler in main.py."""
+
+
+async def require_default_budget(request: Request,
+                                 user: Annotated[SessionUser, Depends(require_user)]) -> None:
+    if not REQUIRE_DEFAULT_BUDGET or user.is_admin:
+        return
+    db = request.app.state.db
+    if not (await db.run(db.profiles.get, user.username))["default_budget_number"]:
+        raise BudgetMissing
+
 router = APIRouter(prefix="/profile", tags=["profile"])
 
 

@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import (
@@ -14,6 +15,7 @@ from . import (
     admin_settings,
     audit_viewer,
     auth,
+    billing,
     bucket_delete,
     bucket_keys,
     buckets,
@@ -95,6 +97,9 @@ def create_app(
         resume = None
         if bucket_delete.RESUME_ON_START:  # unfinished delete jobs; never blocks startup
             resume = asyncio.get_running_loop().create_task(bucket_delete.resume(_app))
+        sampler = None
+        if billing.SAMPLE_ON_START:  # hourly bucket sizes for billing; never blocks startup
+            sampler = asyncio.get_running_loop().create_task(billing.sample_loop(_app))
         schedule = None
         if offboarding.SCHEDULE_ON_START:  # background: never blocks startup or /health
             schedule = asyncio.get_running_loop().create_task(
@@ -102,6 +107,9 @@ def create_app(
         try:
             yield
         finally:
+            if sampler is not None:
+                sampler.cancel()
+                await asyncio.gather(sampler, return_exceptions=True)
             if schedule is not None:
                 schedule.cancel()
                 await asyncio.gather(schedule, return_exceptions=True)
@@ -121,6 +129,11 @@ def create_app(
     app = FastAPI(
         title=settings.app_name, docs_url=None, redoc_url=None, lifespan=lifespan
     )
+
+    @app.exception_handler(profile.BudgetMissing)
+    async def _budget_missing(_request, _exc):
+        return JSONResponse(status_code=409, content={
+            "detail": profile.BUDGET_MISSING_TEXT, "budgetMissing": True})
     app.state.settings = settings
     app.state.clock = clock
     credentials.install_access_log_filter()
@@ -200,6 +213,7 @@ def create_app(
     api.include_router(admin.router)
     api.include_router(admin_settings.router)
     api.include_router(offboarding.router)
+    api.include_router(billing.router)
     app.include_router(api)
     app.include_router(credentials.setup_router)  # POST /setup/{token}: the token is the credential
 

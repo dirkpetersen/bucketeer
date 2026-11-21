@@ -274,6 +274,13 @@ def test_empty_admin_group_means_no_admins(tmp_path):
     assert e.login("bob").json()["isAdmin"] is False
 
 
+def test_admin_users_setting_adds_admins(tmp_path):
+    e = Env(tmp_path, ldap_admin_group_dn="", admin_users=" ALICE , nobody")
+    assert e.login("alice").json()["isAdmin"] is True  # listed, any case
+    assert e.login("bob").json()["isAdmin"] is False  # group setting empty, not listed
+    assert e.login("alice", "nope").status_code == 401  # still needs a valid AD login
+
+
 def test_wrong_password_and_unknown_user_look_identical(env):
     wrong = env.login("alice", "nope")
     unknown = env.login("nobody", "nope")

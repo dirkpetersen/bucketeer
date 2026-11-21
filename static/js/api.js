@@ -37,6 +37,7 @@ export async function api(path, { method = "GET", json, signal, announce401 = tr
   if (res.status === 401 && announce401) {
     window.dispatchEvent(new CustomEvent("bucketeer:unauthorized"));
   }
+  if (body?.budgetMissing) window.dispatchEvent(new CustomEvent("bucketeer:budget-missing"));
   const detail = typeof body?.detail === "string" ? body.detail : `Request failed (${res.status}).`;
   const ra = Number.parseInt(res.headers.get("Retry-After") ?? "", 10);
   throw new ApiError(res.status, detail, { retryAfter: Number.isFinite(ra) ? ra : null, body });

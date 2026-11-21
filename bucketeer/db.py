@@ -217,6 +217,16 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX setup_tokens_user ON setup_tokens (ad_username, created_at);
     """,
+    # v12: one size reading per bucket and day (the last one of the day wins), for billing.
+    """
+    CREATE TABLE usage_daily (
+        day     TEXT NOT NULL,         -- YYYY-MM-DD, server local date
+        bucket  TEXT NOT NULL,         -- tenant-qualified name
+        owner   TEXT NOT NULL,         -- RGW uid
+        bytes   INTEGER NOT NULL,
+        PRIMARY KEY (day, bucket)
+    );
+    """,
 ]
 
 _MISSING: Any = object()
@@ -297,6 +307,7 @@ class Database:
         self.offboarding_runs = OffboardingRuns(self)
         self.delete_jobs = BucketDeleteJobs(self)
         self.setup_tokens = SetupTokens(self)
+        self.usage = UsageDaily(self)
         self.audit = AuditLog(self)
 
     # -- plumbing -----------------------------------------------------------
@@ -925,6 +936,21 @@ class SetupTokens(_Repo):
                 "UPDATE setup_tokens SET used_at = ?, used_ip = ? "
                 "WHERE id = ? AND used_at IS NULL AND expires_at > ?",
                 (now_iso, ip, row_id, now_iso)).rowcount == 1
+
+
+class UsageDaily(_Repo):
+    """Daily bucket sizes for billing; a later reading of the same day replaces it."""
+
+    def record(self, day: str, rows: list[tuple[str, str, int]]) -> None:
+        with self.db.tx() as c:
+            c.executemany(
+                "INSERT INTO usage_daily (day, bucket, owner, bytes) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (day, bucket) DO UPDATE SET owner = excluded.owner, "
+                "bytes = excluded.bytes", [(day, b, o, n) for b, o, n in rows])
+
+    def between(self, first: str, last: str) -> list[dict[str, Any]]:
+        return self.db.query("SELECT day, bucket, owner, bytes FROM usage_daily "
+                             "WHERE day BETWEEN ? AND ? ORDER BY day", (first, last))
 
 
 class AuditLog(_Repo):

@@ -63,6 +63,13 @@ async function doLogout() {
   showLogin();
 }
 
+// The server refused a create because no default budget number is saved: go set it.
+window.addEventListener("bucketeer:budget-missing", () => {
+  if (!me) return;
+  me.budgetMissing = true;
+  if (location.hash !== "#/profile") location.hash = "#/profile";
+});
+
 // Any API call that comes back 401 (expired session) returns to login.
 window.addEventListener("bucketeer:unauthorized", () => {
   if (current !== "login") {

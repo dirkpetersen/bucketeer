@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     ldap_email_attribute: str = "mail"
     ldap_required_group_dn: str = ""
     ldap_admin_group_dn: str = ""
+    admin_users: str = ""  # comma-separated AD usernames that are admins as well
     ldap_ca_cert_file: str = "data/ldap-ca.pem"
     ldap_ca_sha256: str = ""
     ldap_tls_verify: bool = True

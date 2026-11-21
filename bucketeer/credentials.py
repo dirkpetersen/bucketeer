@@ -52,6 +52,7 @@ from pydantic import BaseModel, Field
 from .admin import croit_http_error
 from .config import Settings
 from .croit import CroitClient, CroitClientError, CroitError
+from .profile import require_default_budget
 from .rgw_user import RgwAccount, require_active_rgw_user
 from .setup_script import SetupValues, command, error_script, script
 
@@ -226,7 +227,7 @@ def _own(keys: list[dict], uid: str) -> list[dict]:
     return [k for k in keys if k.get("user") == uid]
 
 
-@router.post("/keys")
+@router.post("/keys", dependencies=[Depends(require_default_budget)])
 async def create_key(request: Request, response: Response, acct: Account):
     response.headers["Cache-Control"] = "no-store"
     async with _key_locks(request)(acct.uid):
@@ -335,7 +336,7 @@ class SetupBody(BaseModel):
     os: Literal["windows", "macos", "linux"]
 
 
-@router.post("/setup-link")
+@router.post("/setup-link", dependencies=[Depends(require_default_budget)])
 async def setup_link(body: SetupBody, request: Request, response: Response, acct: Account):
     response.headers["Cache-Control"] = "no-store"
     state = request.app.state

@@ -85,6 +85,22 @@ def s3_endpoint(moto_server):
 
 
 @pytest.fixture(autouse=True)
+def no_billing_sampler(monkeypatch):
+    """The hourly billing sampler is driven explicitly (`billing.sample`)."""
+    from bucketeer import billing
+
+    monkeypatch.setattr(billing, "SAMPLE_ON_START", False)
+
+
+@pytest.fixture(autouse=True)
+def no_budget_gate(monkeypatch):
+    """The default-budget gate is tested in tests/test_budget_gate.py."""
+    from bucketeer import profile
+
+    monkeypatch.setattr(profile, "REQUIRE_DEFAULT_BUDGET", False)
+
+
+@pytest.fixture(autouse=True)
 def no_key_cleanup_on_start(monkeypatch):
     """The startup clean-up of pending bucket keys is tested explicitly."""
     from bucketeer import bucket_keys

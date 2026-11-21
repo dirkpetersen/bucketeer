@@ -286,9 +286,10 @@ class AdAuthenticator:
         try:
             entry, username = self._find_entry(svc, login)
             # Only handed out after verify() succeeds.
-            is_admin = bool(s.ldap_admin_group_dn) and self._is_member(
-                svc, entry.dn, s.ldap_admin_group_dn
-            )
+            listed = {u.strip().lower() for u in s.admin_users.split(",") if u.strip()}
+            is_admin = username.lower() in listed or (
+                bool(s.ldap_admin_group_dn)
+                and self._is_member(svc, entry.dn, s.ldap_admin_group_dn))
             user = AuthUser(
                 username=username,
                 display_name=entry.attrs.get(s.ldap_display_name_attribute, "").strip(),
