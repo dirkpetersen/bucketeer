@@ -140,6 +140,7 @@ async def get_credentials(request: Request, response: Response, acct: Account):
         "region": settings.s3_region,
         "endpointUrl": endpoint,
         "addressingStyle": settings.s3_addressing_style,
+        "docsUrl": settings.docs_url or None,
         "keys": [{"accessKey": k["access_key"]} for k in keys],
     }
 

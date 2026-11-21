@@ -125,6 +125,15 @@ select.input { appearance: auto; }
 .sp { display: grid; gap: var(--sp-3); padding: var(--sp-5); border: 1px solid var(--border); border-radius: var(--r-lg);
   background: var(--surface-2); }
 .sp > * { min-width: 0; }
+.sp-help { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-2); padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--text);
+  font-size: var(--fs-sm); text-decoration: none; transition: border-color var(--dur-fast), background-color var(--dur-fast); }
+.sp-help:hover { border-color: var(--accent-ring); background: var(--accent-soft); }
+.sp-help:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sp-help > svg:first-child { flex: none; color: var(--accent); }
+.sp-help > span { flex: 1; color: var(--text-muted); }
+.sp-help b { color: var(--text); font-weight: 600; }
+.sp-help > svg:last-child { flex: none; color: var(--text-muted); }
 .sp-title { font: 560 var(--fs-lg) / 1.15 var(--font-display); letter-spacing: -0.005em; }
 .sp-os { display: inline-flex; width: fit-content; max-width: 100%; padding: 0.2rem; gap: 0.2rem;
   border: 1px solid var(--border-strong); border-radius: var(--r-pill); background: var(--surface-sunken); }

@@ -73,6 +73,8 @@ export function renderDashboard({ me, appName, onLogout, page = "home" }) {
           me.isAdmin && (page === "admin"
             ? h("a", { class: "btn btn-ghost", href: "#/" }, icon("home"), "My workspace")
             : h("a", { class: "btn btn-ghost", href: "#/admin" }, icon("shield"), "Administration")),
+          me.docsUrl && h("a", { class: "btn btn-ghost", href: `${me.docsUrl}s3-clients/`, target: "_blank", rel: "noopener" }, icon("download"), "S3 clients"),
+          me.docsUrl && h("a", { class: "btn btn-ghost", href: me.docsUrl, target: "_blank", rel: "noopener" }, icon("book"), "Help and docs"),
           h("button", { class: "btn btn-ghost", type: "button", on: { click: onLogout } }, icon("logout"), "Sign out")))));
 
   const home = () => h("main", { class: "main", id: "main" },

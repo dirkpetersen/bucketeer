@@ -34,7 +34,7 @@ to start) or **Default** (the file matches the code default).
 
 | Area | Variables |
 |---|---|
-| Server | `PORT`, `HOST`, `LOG_LEVEL`, `DATA_DIR`, `HEALTH_CHECK_PATH` |
+| Server | `PORT`, `HOST`, `LOG_LEVEL`, `DATA_DIR`, `HEALTH_CHECK_PATH`, `DOCS_URL` (the docs the workspace links to; empty hides the links) |
 | Sessions | `SESSION_SECRET`, `SESSION_MAX_AGE`, `SESSION_COOKIE_SECURE` |
 | Active Directory | `LDAP_URL`, `LDAP_BASE_DN`, `LDAP_BIND_DN`, `LDAP_BIND_PASSWORD`, `LDAP_USER_FILTER`, `LDAP_REQUIRED_GROUP_DN`, `LDAP_ADMIN_GROUP_DN`, `ADMIN_USERS`, `LDAP_CA_CERT_FILE`, `LDAP_CA_SHA256`, `LDAP_TLS_VERIFY` |
 | Admin backend | `RGW_ADMIN_URL`, `RGW_ADMIN_ACCESS_KEY`, `RGW_ADMIN_SECRET_KEY` |

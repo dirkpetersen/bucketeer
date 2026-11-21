@@ -381,4 +381,5 @@ def me(request: Request, response: Response, user: Annotated[SessionUser, Depend
     profile = request.app.state.db.profiles.get(user.username)
     # budgetMissing: the frontend opens the profile first until a default is saved
     return {**user.public(), "advancedMode": profile["advanced_mode"],
-            "budgetMissing": not profile["default_budget_number"]}
+            "budgetMissing": not profile["default_budget_number"],
+            "docsUrl": request.app.state.settings.docs_url or None}

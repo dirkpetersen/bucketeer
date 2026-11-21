@@ -47,7 +47,7 @@ function downloadFor(os, link) {
   return saveFile("bucketeer-setup.sh", enc(sh), "text/x-shellscript");
 }
 
-export function setupPanel({ endpointUrl, profile = "bucketeer" }) {
+export function setupPanel({ endpointUrl, docsUrl, profile = "bucketeer" }) {
   let os = detectOs();
   let link = null;
   let deadline = 0;
@@ -124,7 +124,9 @@ export function setupPanel({ endpointUrl, profile = "bucketeer" }) {
     h("p", { class: "acct-sub" }, "Installs your keys as the AWS profile ", h("code", { text: profile }),
       " on this computer. No secret is shown here."),
     !endpointUrl && h("p", { class: "cred-warn", role: "status", text: "The S3 endpoint is not configured. Ask an administrator to set S3_ENDPOINT_URL." }),
-    tabs, body]);
+    tabs, body,
+    docsUrl && h("a", { class: "sp-help", href: `${docsUrl}s3-clients/`, target: "_blank", rel: "noopener" },
+      icon("book"), h("span", {}, h("b", { text: "Which app can I use?" }), " Compare S3 clients and set up rclone, Cyberduck and more"), icon("right"))]);
   paintTabs();
   paintIdle();
   return root;

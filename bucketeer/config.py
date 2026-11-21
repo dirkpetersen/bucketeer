@@ -115,6 +115,8 @@ class Settings(BaseSettings):
     smtp_password: SecretStr = SecretStr("")
     smtp_from: str = ""
     app_url: str = ""
+    # user and admin docs; the workspace links to it and to its s3-clients/ page. Empty = no links
+    docs_url: str = "https://dirkpetersen.github.io/bucketeer/"
 
     # S3
     s3_endpoint_url: str = ""
@@ -148,6 +150,14 @@ class Settings(BaseSettings):
         if v and not ENDPOINT_URL_RE.match(v):
             raise ValueError("must look like https://host[:port] (no spaces, quotes or newlines)")
         return v
+
+    @field_validator("docs_url")
+    @classmethod
+    def _check_docs_url(cls, v: str) -> str:
+        v = v.strip()
+        if v and not re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d+)?(/[A-Za-z0-9._~/-]*)?", v):
+            raise ValueError("must be an https:// URL (letters, digits, . _ ~ / - only) or empty")
+        return v if not v or v.endswith("/") else v + "/"
 
     @model_validator(mode="after")
     def _mail_settings(self):

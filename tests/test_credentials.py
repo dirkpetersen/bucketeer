@@ -90,7 +90,8 @@ def test_list_has_no_secrets(env):
     assert r.status_code == 200
     assert r.json() == {
         "profile": "bucketeer", "region": "us-east-1", "endpointUrl": "https://s3.example.org",
-        "addressingStyle": "virtual", "keys": [{"accessKey": ALICE[2]}],
+        "addressingStyle": "virtual", "docsUrl": "https://dirkpetersen.github.io/bucketeer/",
+        "keys": [{"accessKey": ALICE[2]}],
     }
     assert ALICE[3] not in r.text
     assert r.headers["cache-control"] == "no-store"
@@ -273,6 +274,17 @@ def test_addressing_style_setting(make_env):
     assert e.alice.get("/api/credentials").json()["addressingStyle"] == "path"
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **REQUIRED, s3_addressing_style="bogus")
+
+
+def test_docs_url_setting(make_env):
+    e = make_env(s3_endpoint_url="https://s3.example.org", docs_url="https://docs.example.org/s3")
+    assert e.alice.get("/api/credentials").json()["docsUrl"] == "https://docs.example.org/s3/"
+    assert e.alice.get("/api/me").json()["docsUrl"] == "https://docs.example.org/s3/"
+    e = make_env(s3_endpoint_url="https://s3.example.org", docs_url="")  # links hidden
+    assert e.alice.get("/api/me").json()["docsUrl"] is None
+    for bad in ("http://docs.example.org/", "javascript:alert(1)", 'https://x.org/"><b>'):
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, **REQUIRED, docs_url=bad)
 
 
 @pytest.mark.parametrize("name", ["bucketeer", "default", "my-lab_2.s3", "A1"])
