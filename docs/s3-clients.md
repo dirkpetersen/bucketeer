@@ -47,7 +47,7 @@ Free, Windows and Mac. Drag and drop, easy to set up. The best start for most pe
 <div class="osu-card blue" markdown>
 <span class="osu-tag">Command line</span>
 
-### AWS CLI v2 { #setup-aws-cli }
+### AWS CLI v2
 
 The reference tool. Bucketeer's setup command configures it for you.
 [Examples](#setup-aws-cli)
@@ -55,7 +55,7 @@ The reference tool. Bucketeer's setup command configures it for you.
 <div class="osu-card pine" markdown>
 <span class="osu-tag">Sync and mount</span>
 
-### rclone { #setup-rclone }
+### rclone
 
 Sync folders, mount a bucket as a drive, check checksums. One tool for everything.
 [Examples](#setup-rclone)
@@ -63,7 +63,7 @@ Sync folders, mount a bucket as a drive, check checksums. One tool for everythin
 <div class="osu-card gold" markdown>
 <span class="osu-tag">Web app</span>
 
-### Motuz { #setup-motuz }
+### Motuz
 
 Large transfers between file systems and the cloud, from the browser, with checksums.
 [Read more](#setup-motuz)
@@ -115,7 +115,7 @@ Large transfers between file systems and the cloud, from the browser, with check
 All screenshots below are real output of each tool against an S3 test server, with the
 settings shown next to them.
 
-### AWS CLI v2
+### AWS CLI v2 { #setup-aws-cli }
 
 The AWS CLI is the reference tool, and the base for the others: rclone, s5cmd and many
 scripts can read its profile. Bucketeer uses the profile name `bucketeer`, so it never
@@ -230,7 +230,7 @@ Open a new terminal after this.
     New AWS CLI and SDK versions send CRC checksums that some Ceph versions refuse. The two
     `when_required` lines prevent that. The setup command adds them for you.
 
-### rclone
+### rclone { #setup-rclone }
 
 The most versatile tool: sync, copy with checksums, mount, encrypt. rclone can use the AWS
 profile `bucketeer`, so your keys stay in one place: when you rotate a key and run the
@@ -418,7 +418,7 @@ ask for the same values: choose the **S3 compatible** or **Amazon S3** connectio
 the endpoint host, your access key and secret key. Use **virtual-host style** (bucket
 name as a subdomain) if the app asks; in Cyberduck this is the default.
 
-## Motuz
+## Motuz { #setup-motuz }
 
 [Motuz](https://dirkpetersen.github.io/motuz) is a web application for large data
 transfers between on-premise file systems and cloud storage. It runs on a server near the
