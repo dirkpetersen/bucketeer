@@ -260,6 +260,67 @@ order, except that A3 to A6 can run in parallel once A2 is done.
 - [ ] (needs cluster) Remove the croit backend after that check (owner
   decides).
 
+## Phase 6: Bucket facts, quotas, billing sheet, backups, cloud (PLAN.md)
+
+Design and owner decisions: `PLAN.md` (2026-11-24; where it contradicts itself, the
+"Decisions" list at its end wins, e.g. decision 18: cloud cost comes from the AWS data
+export, not cost allocation tags). Never put AWS account ids, IAM user names or other
+account specifics into repo files (public repo). Move each decision into CLAUDE.md as
+the item lands.
+
+- [ ] P6-1 Database upgrade framework (PLAN 6): migrations may be Python steps as well
+  as SQL; safety copy `bucketeer.sqlite3.pre-v<old>-<time>` (0600, max 3) before any
+  migration; clear startup error naming the failing migration; upgrade tests from every
+  past `user_version` with sample rows (`tests/db_versions/`).
+- [ ] P6-2 Bucket facts as tags (PLAN 1): `bucketeer-bucket|owner|owner-email|creator|
+  created|quota|product|location` written with the owner's key on create, adopt, budget
+  or quota change and reconcile (`tag_synced` = all managed tags); values outside the
+  tag alphabet left out with a warning; admin action "Write Bucketeer tags to all
+  buckets"; tag editor keeps them read-only; bucket-key users get display names
+  `bucketeer key: <owner> / <bucket> / <ro|rw>`.
+- [ ] P6-3 `python3 app.py --rebuild-from-ceph [--fill-gaps]` (PLAN 1, 6): rebuild
+  `buckets`, `bucket_keys`, `shares` from tags, key users and policy statements; fill-gaps
+  mode never overwrites; prints and audits `system.rebuild`.
+- [ ] P6-4 Product catalog and bucket quotas (PLAN 0, 2): admin catalog (name, price per
+  TiB-month, advertised text per product; defaults Tier-3-S3 / Archive-S3 / Cloud-S3);
+  every bucket has a whole-TiB quota (create + "Change quota…"), live monthly cost in the
+  dialogs; weekly increase limit `maxWeeklyQuotaIncreaseTiB` (default 100, rolling 7
+  days, admins exempt, 409 with what is left and when); `quota_changes` table; RGW user
+  quota set unlimited (new and, once, existing accounts; bucket-key users keep zero);
+  "Default quota" becomes "Default bucket quota"; audit `bucket.quota`.
+- [ ] P6-5 Chargeback .xlsx (PLAN 3): daily quota reading next to `usage_daily`;
+  on-prem quantity = daily average quota TiB rounded up; 10-column sheet + "Problems"
+  sheet; `openpyxl`; `csv_safe` cells; Billing tab month picker download; audit
+  `admin.export.billing_xlsx`.
+- [ ] P6-6 Billing contact and monthly email (PLAN 3): settings contact(s), send day
+  1-28, on/off; mailer attachments; scheduler at 06:00 with catch-up and no double send;
+  "Send now"; audit `billing.report_sent|report_failed`.
+- [ ] P6-7 Backup bucket on premises (PLAN 5): `BACKUP_BUCKET`; RGW user
+  `bucketeer-backup` via Admin Ops (hidden like the service user); bucket with
+  COMPLIANCE object lock, versioning, lifecycle; nightly tar.gz (SQLite `.backup`, `.env`,
+  `meta.json`); admin "Backup" tab (time default 03:00, retention default 30, back up
+  now, last 30); `python3 app.py --restore-backup <key|latest>` with migrations and
+  fill-gaps catch-up, `.env.restored-<time>`; audit `backup.*`, `system.restore`.
+- [ ] P6-8 Cloud foundation (PLAN 4): `CLOUD_*` settings (REQUIRED only when cloud is
+  configured), AWS admin client (boto3; IAM, S3, CloudWatch), connection check, global
+  "Default location" admin setting, per-user Cloud / On Premises switch left of the
+  Advanced toggle, profile names `s3-onprem` / `CLOUD_PROFILE_NAME=s3-cloud`. Tests on
+  moto (IAM, S3, CloudWatch).
+- [ ] P6-9 Cloud users and keys (PLAN 4): per-person IAM user `<CLOUD_USER_PREFIX>
+  <username>` under `/bucketeer/` with the boundary, inline policy for own buckets, keys
+  (max 5, rotate, reveal), setup script and snippets with `[s3-cloud]`; existing users
+  made outside Bucketeer are refused (decision 17); offboarding deactivates cloud keys.
+- [ ] P6-10 Cloud buckets (PLAN 4): `<CLOUD_BUCKET_PREFIX><username>-<name>`, availability
+  check with suggestions, storage class Intelligent-Tiering or Deep Archive via day-0
+  lifecycle, Block Public Access, SSE-S3, versioning, tags; list and delete; daily
+  CloudWatch over-quota email to the owner (at most weekly).
+- [ ] P6-11 Cloud billing (PLAN 3, decision 18): `tools/aws-setup` creates the billing
+  bucket, its policy and the CUR 2.0 export, and lets the admin user read that bucket
+  only; Bucketeer sums `line_item_unblended_cost` per bucket from the export; cloud rows
+  in the sheet in cents, unknown lines on the Problems sheet, export total shown.
+- [ ] P6-12 Backups to AWS (PLAN 5): when the global location is Cloud, back up to an AWS
+  bucket with the same object-lock rules through a dedicated backup IAM user.
+
 ## Verify against a real croit cluster
 
 Things the spec leaves unclear. Check each one once a real cluster is

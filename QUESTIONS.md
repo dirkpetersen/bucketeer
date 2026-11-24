@@ -12,7 +12,40 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 ## Open
 
-None right now.
+### Q16: Should OSU-specific details stay in PLAN.md?
+
+- **Blocks:** nothing.
+- **Context:** the owner wrote "any osu specific details should be in PLAN.md". It may
+  mean they should stay there, or that they should not be there (the repo is public).
+  PLAN.md holds the product names `Tier-3-S3`, `Archive-S3`, `Cloud-S3`, the example
+  index `DN002480 AC02619` and the example email `Jane.Doe@oregonstate.edu`.
+- **Default being built:** keep them in PLAN.md as written. In code they are only
+  defaults of admin settings (the product names) or examples, never hard-coded rules.
+- **Recommendation:** keep them; they are not secrets.
+
+**Answer:**
+
+### Q17: Remove the first plan commit from the public history?
+
+- **Blocks:** nothing.
+- **Context:** commit `956c475` (already pushed) still has IAM user names and the AWS
+  setup-status section (no account ids). Removing it means rewriting `main` and a force
+  push.
+- **Default being built:** history left as it is.
+- **Recommendation:** leave it; the names carry no credentials, and the setup script now
+  takes them as arguments.
+
+**Answer:**
+
+### Q18: Push and deploy while the build loop runs?
+
+- **Blocks:** nothing.
+- **Context:** the loop works through TODO Phase 6 one item at a time.
+- **Default being built:** each finished item is committed locally; nothing is pushed or
+  deployed (`appmo update`) until the owner says so.
+- **Recommendation:** push after each item that passes its tests; deploy by hand.
+
+**Answer:**
 
 ## Resolved
 
