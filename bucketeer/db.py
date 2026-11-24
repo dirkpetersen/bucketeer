@@ -234,6 +234,11 @@ MIGRATIONS: list[Migration] = [
         PRIMARY KEY (day, bucket)
     );
     """,
+    # v13: the bucket's size quota at that reading (bytes; NULL = no size quota, unlimited),
+    # for the chargeback sheet (Tier-3-S3 is billed on the quota).
+    """
+    ALTER TABLE usage_daily ADD COLUMN quota_bytes INTEGER;
+    """,
 ]
 
 _MISSING: Any = object()
@@ -1006,15 +1011,18 @@ class SetupTokens(_Repo):
 class UsageDaily(_Repo):
     """Daily bucket sizes for billing; a later reading of the same day replaces it."""
 
-    def record(self, day: str, rows: list[tuple[str, str, int]]) -> None:
+    def record(self, day: str, rows: list[tuple]) -> None:
+        """Rows are `(bucket, owner, bytes)` or `(bucket, owner, bytes, quota_bytes|None)`."""
         with self.db.tx() as c:
             c.executemany(
-                "INSERT INTO usage_daily (day, bucket, owner, bytes) VALUES (?, ?, ?, ?) "
+                "INSERT INTO usage_daily (day, bucket, owner, bytes, quota_bytes) "
+                "VALUES (?, ?, ?, ?, ?) "
                 "ON CONFLICT (day, bucket) DO UPDATE SET owner = excluded.owner, "
-                "bytes = excluded.bytes", [(day, b, o, n) for b, o, n in rows])
+                "bytes = excluded.bytes, quota_bytes = excluded.quota_bytes",
+                [(day, r[0], r[1], r[2], r[3] if len(r) > 3 else None) for r in rows])
 
     def between(self, first: str, last: str) -> list[dict[str, Any]]:
-        return self.db.query("SELECT day, bucket, owner, bytes FROM usage_daily "
+        return self.db.query("SELECT day, bucket, owner, bytes, quota_bytes FROM usage_daily "
                              "WHERE day BETWEEN ? AND ? ORDER BY day", (first, last))
 
 

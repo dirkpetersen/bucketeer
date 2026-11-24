@@ -16,6 +16,7 @@ from . import (
     audit_viewer,
     auth,
     billing,
+    billing_report,
     bucket_delete,
     bucket_facts,
     bucket_keys,
@@ -102,6 +103,9 @@ def create_app(
         sampler = None
         if billing.SAMPLE_ON_START:  # hourly bucket sizes for billing; never blocks startup
             sampler = asyncio.get_running_loop().create_task(billing.sample_loop(_app))
+        reporter = None
+        if billing.REPORT_ON_START:  # monthly chargeback email; never blocks startup
+            reporter = asyncio.get_running_loop().create_task(billing_report.report_loop(_app))
         schedule = None
         if offboarding.SCHEDULE_ON_START:  # background: never blocks startup or /health
             schedule = asyncio.get_running_loop().create_task(
@@ -109,9 +113,10 @@ def create_app(
         try:
             yield
         finally:
-            if sampler is not None:
-                sampler.cancel()
-                await asyncio.gather(sampler, return_exceptions=True)
+            for task in (sampler, reporter):
+                if task is not None:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
             if schedule is not None:
                 schedule.cancel()
                 await asyncio.gather(schedule, return_exceptions=True)
@@ -217,6 +222,7 @@ def create_app(
     api.include_router(admin_settings.router)
     api.include_router(offboarding.router)
     api.include_router(billing.router)
+    api.include_router(billing_report.router)
     app.include_router(api)
     app.include_router(credentials.setup_router)  # POST /setup/{token}: the token is the credential
 

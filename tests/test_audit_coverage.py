@@ -24,6 +24,7 @@ from bucketeer.bucket_keys import cleanup_pending
 from .conftest import REQUIRED
 from .test_acl import fake_objects
 from .test_auth import SECRET_PW, TEAM_GROUP, USERS_GROUP
+from .test_billing import FakeMailer
 from .test_buckets import Env, H
 
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
@@ -83,6 +84,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "POST /api/admin/offboarding/run": ("offboarding.run",),
     "PUT /api/admin/offboarding/settings": ("admin.settings.offboarding",),
     "PUT /api/admin/billing/settings": ("admin.settings.billing",),
+    "POST /api/admin/billing/report/send": ("billing.report_sent",),
     f"PUT {S}/naming": ("admin.settings.naming",),
     f"POST {S}/naming/test": (),
     f"PUT {S}/budget-number": ("admin.settings.budget_number",),
@@ -118,6 +120,7 @@ EVENTS = {
     "offboarding.suspend": "enforce mode suspends a person who left AD",
     "offboarding.unsuspend": "login undoes the job's suspension (actor system)",
     "rgw.user.create": "first S3 use of a new AD user creates the RGW user",
+    "billing.report_failed": "no billing contact's mail server took the monthly sheet",
 }
 
 ACTION_RE = re.compile(r"^(?:[a-z][a-z_]*)(?:\.[a-z][a-z_]*)+$")
@@ -423,6 +426,16 @@ def run(tmp_path_factory, moto_server):
         "/api/admin/offboarding/run", headers=H))
     r.step("PUT /api/admin/billing/settings", lambda: b.put(
         "/api/admin/billing/settings", json={"pricePerTiBMonth": 9.5}, headers=H))
+    ok(b.put("/api/admin/billing/settings", json={"contacts": ["finance@example.org"]},
+             headers=H))
+    real_mailer = env.app.state.mailer
+    env.app.state.mailer = mail = FakeMailer()
+    r.step("POST /api/admin/billing/report/send", lambda: b.post(
+        "/api/admin/billing/report/send", json={"month": "2026-01"}, headers=H))
+    mail.fail = {"finance@example.org"}
+    r.step("event", lambda: b.post(
+        "/api/admin/billing/report/send", json={"month": "2026-01"}, headers=H))
+    env.app.state.mailer = real_mailer
     r.step("PUT /api/admin/offboarding/settings", lambda: b.put(
         "/api/admin/offboarding/settings",
         json={"mode": "enforce", "time": "04:30", "minPeopleForPercent": 1}, headers=H))

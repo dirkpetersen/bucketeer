@@ -90,6 +90,7 @@ def no_billing_sampler(monkeypatch):
     from bucketeer import billing
 
     monkeypatch.setattr(billing, "SAMPLE_ON_START", False)
+    monkeypatch.setattr(billing, "REPORT_ON_START", False)  # monthly email: `report_tick`
 
 
 @pytest.fixture(autouse=True)

@@ -14,6 +14,7 @@
 | Email | standard library SMTP and dnspython (`>=2.6`) for MX lookups |
 | Sessions | itsdangerous (`>=2.2`), signed stateless cookie |
 | Regular expressions | regex (`>=2024.0`), with a match timeout |
+| Spreadsheets | openpyxl (`>=3.1`), the monthly chargeback `.xlsx` |
 | Storage | SQLite (standard library), WAL mode |
 
 Notes:

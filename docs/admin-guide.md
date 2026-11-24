@@ -50,6 +50,51 @@ How the charge is calculated:
   read) costs nothing. **Days measured** shows this for each month.
 - The current price applies to all months shown. 1 TiB = 2^40 bytes.
 
+### Products
+
+Bucketeer knows three products: `Tier-3-S3` (on premises), `Archive-S3` and `Cloud-S3`
+(AWS). On the Billing tab you can change each product's name, price per TiB-month and the
+short text users see. The `Tier-3-S3` price is the price used for the monthly charges.
+Defaults: 0, 1 and 18 per TiB-month.
+
+### Chargeback sheet (.xlsx)
+
+Pick a month and click **Download .xlsx** for the sheet finance imports
+(`bucketeer-chargeback-YYYY-MM.xlsx`). Sheet 1 has one row per bucket:
+
+| Column | Value |
+|---|---|
+| A Username / Email | the owner's email address from AD (the S3 user id when none is found) |
+| B Index | the bucket's budget number (empty when missing or not in the right format) |
+| C Product Name | `Tier-3-S3` for on-premises buckets |
+| D Quantity | the month's daily average **quota** in TiB, rounded up |
+| E, F Order / Fulfillment Date | the first and last day of the month |
+| G Note, I Reference ID | the bucket name (`tenant:bucket` with a tenant) |
+| H Order, J Project Name | empty |
+
+How the quantity is worked out: Bucketeer also records each bucket's quota every day. The
+quantity is the sum of the daily quotas in TiB divided by the days in the month, rounded
+up. Days without a reading count 0. Example: 10 TiB for 20 days, then 40 TiB for 10 days
+of a 30-day month = (200 + 400) / 30 = 20 TiB. A bucket without a quota is billed on its
+measured size instead.
+
+The second sheet, **Problems**, lists what needs chasing: buckets without a budget number
+or with one in the wrong format, owners without an email address, and buckets without a
+quota.
+
+### Monthly email
+
+Enter one or more **billing contacts** (up to 10 addresses), the **send day** (1-28) and
+tick **Email last month's sheet**. On that day at 06:00 server time Bucketeer emails last
+month's sheet to the contacts. If the server was down then, it sends at the next start; it
+never sends the same month twice. A failed send is retried every hour. Switching the email
+on after this month's send day starts with next month's.
+
+The email needs Bucketeer's email to be on (`SMTP_FROM` and `APP_URL`, see the deployment
+guide); while it is off, the tab says so and the email can't be switched on. **Send now**
+mails the chosen month at once, for testing. Every send or failure is in the audit log
+(`billing.report_sent`, `billing.report_failed`).
+
 ## Bucket tags
 
 Every bucket carries its own record as `bucketeer-*` tags, so its facts survive outside

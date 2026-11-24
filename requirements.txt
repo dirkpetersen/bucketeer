@@ -8,3 +8,4 @@ ldap3>=2.9
 dnspython>=2.6
 itsdangerous>=2.2
 regex>=2024.0
+openpyxl>=3.1
