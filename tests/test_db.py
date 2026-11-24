@@ -9,7 +9,14 @@ from fastapi.testclient import TestClient
 
 from bucketeer import db as dbmod
 from bucketeer.config import Settings
-from bucketeer.db import DB_FILENAME, MIGRATIONS, Database, SchemaTooNew, get_db
+from bucketeer.db import (
+    DB_FILENAME,
+    MIGRATIONS,
+    Database,
+    MigrationFailed,
+    SchemaTooNew,
+    get_db,
+)
 from bucketeer.main import create_app
 
 from .conftest import REQUIRED
@@ -64,7 +71,7 @@ def test_failed_migration_rolls_back(tmp_path, monkeypatch):
     monkeypatch.setattr(
         dbmod, "MIGRATIONS", [*MIGRATIONS, "CREATE TABLE t (a); BOGUS SQL;"]
     )
-    with pytest.raises(sqlite3.Error):
+    with pytest.raises(MigrationFailed):
         Database(p)
     monkeypatch.setattr(dbmod, "MIGRATIONS", MIGRATIONS)
     d = Database(p)  # v1 intact, no half-applied v2

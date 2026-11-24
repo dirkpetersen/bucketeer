@@ -5,9 +5,12 @@ Concurrency: the app is a single process, so there is one connection
 Async handlers call `await db.run(fn, ...)`, which runs a sync repository
 call in a worker thread so the event loop never waits on disk or on the lock.
 
-Migrations: `MIGRATIONS` is an ordered list of SQL scripts; the schema version
-is `PRAGMA user_version` (= number of applied scripts). Append a new script,
-never edit an applied one.
+Migrations: `MIGRATIONS` is an ordered list of SQL scripts or Python steps
+(`fn(conn)`, run inside the migration's transaction: plain `execute` calls, never
+`executescript` or COMMIT); the schema version is `PRAGMA user_version` (= number
+of applied entries). Append a new entry, never edit an applied one. Before an
+existing file database is upgraded, a consistent copy is written next to it
+(`<file>.pre-v<old>-<UTC time>`, 0600, the newest `KEEP_UPGRADE_COPIES` kept).
 """
 
 import asyncio
@@ -29,7 +32,11 @@ log = logging.getLogger(__name__)
 DB_FILENAME = "bucketeer.sqlite3"
 ACCESS_LEVELS = ("read", "readwrite")
 
-MIGRATIONS: list[str] = [
+Migration = str | Callable[[sqlite3.Connection], None]
+KEEP_UPGRADE_COPIES = 3
+_COPY_NAME = re.compile(r"\.pre-v\d+-\d{8}T\d{6}Z(?:-\d+)?\Z")
+
+MIGRATIONS: list[Migration] = [
     # 1: initial schema
     """
     CREATE TABLE settings (
@@ -244,6 +251,10 @@ class SchemaTooNew(RuntimeError):
     """The database was written by a newer version of Bucketeer."""
 
 
+class MigrationFailed(RuntimeError):
+    """A migration (or the copy taken before it) failed; the app must not start."""
+
+
 def now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
@@ -325,18 +336,72 @@ class Database:
                     f"{self.path} is schema version {current}, but this Bucketeer "
                     f"only knows up to {len(MIGRATIONS)}; refusing to start"
                 )
+            if current == len(MIGRATIONS):
+                return current
+            copy = None
+            if current > 0 and self.path != ":memory:":
+                copy = self._upgrade_copy(current)
+                log.info("upgrading database %s from schema v%d to v%d; copy of v%d at %s",
+                         self.path, current, len(MIGRATIONS), current, copy)
             for n in range(current + 1, len(MIGRATIONS) + 1):
-                script = (
-                    f"BEGIN IMMEDIATE;\n{MIGRATIONS[n - 1]}\n"
-                    f"PRAGMA user_version = {n};\nCOMMIT;"
-                )
                 try:
-                    self._conn.executescript(script)
-                except Exception:
+                    self._apply(n, MIGRATIONS[n - 1])
+                except Exception as exc:
                     if self._conn.in_transaction:
                         self._conn.execute("ROLLBACK")
-                    raise
+                    where = (f"the copy taken before the upgrade is {copy}" if copy
+                             else "no copy was taken (new database)")
+                    raise MigrationFailed(
+                        f"database migration {n} failed: {type(exc).__name__}: {exc}; "
+                        f"{self.path} stays at schema v{n - 1}; {where}; "
+                        f"refusing to start"
+                    ) from exc
             return self.version
+
+    def _apply(self, n: int, step: Migration) -> None:
+        if isinstance(step, str):
+            self._conn.executescript(
+                f"BEGIN IMMEDIATE;\n{step}\nPRAGMA user_version = {n};\nCOMMIT;"
+            )
+            return
+        self._conn.execute("BEGIN IMMEDIATE")
+        step(self._conn)
+        self._conn.execute(f"PRAGMA user_version = {n}")
+        self._conn.execute("COMMIT")
+
+    def _upgrade_copy(self, version: int) -> Path:
+        """Consistent 0600 copy of the database before an upgrade; keeps the newest few."""
+        src = Path(self.path)
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        dest = src.with_name(f"{src.name}.pre-v{version}-{stamp}")
+        i = 0
+        while dest.exists():
+            i += 1
+            dest = src.with_name(f"{src.name}.pre-v{version}-{stamp}-{i}")
+        try:
+            os.close(os.open(dest, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+            dest.chmod(0o600)
+            out = sqlite3.connect(dest)
+            try:
+                self._conn.backup(out)
+                out.execute("PRAGMA journal_mode = DELETE")  # one self-contained file
+            finally:
+                out.close()
+        except Exception as exc:
+            dest.unlink(missing_ok=True)
+            raise MigrationFailed(
+                f"could not copy {self.path} to {dest} before upgrading it from schema "
+                f"v{version}: {type(exc).__name__}: {exc}; refusing to start"
+            ) from exc
+        copies = sorted(
+            (p for p in src.parent.iterdir()
+             if p.name.startswith(src.name) and _COPY_NAME.fullmatch(p.name[len(src.name):])),
+            key=lambda p: (p.stat().st_mtime_ns, p.name),
+        )
+        for old in copies[:-KEEP_UPGRADE_COPIES]:
+            old.unlink(missing_ok=True)
+            log.info("removed old pre-upgrade copy %s", old)
+        return dest
 
     @contextmanager
     def tx(self) -> Iterator[sqlite3.Connection]:

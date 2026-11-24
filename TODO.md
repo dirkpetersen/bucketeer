@@ -268,10 +268,11 @@ export, not cost allocation tags). Never put AWS account ids, IAM user names or 
 account specifics into repo files (public repo). Move each decision into CLAUDE.md as
 the item lands.
 
-- [ ] P6-1 Database upgrade framework (PLAN 6): migrations may be Python steps as well
+- [x] P6-1 Database upgrade framework (PLAN 6): migrations may be Python steps as well
   as SQL; safety copy `bucketeer.sqlite3.pre-v<old>-<time>` (0600, max 3) before any
   migration; clear startup error naming the failing migration; upgrade tests from every
-  past `user_version` with sample rows (`tests/db_versions/`).
+  past `user_version` with sample rows (generated from `MIGRATIONS[:n]` in
+  `tests/test_db_upgrade.py`).
 - [ ] P6-2 Bucket facts as tags (PLAN 1): `bucketeer-bucket|owner|owner-email|creator|
   created|quota|product|location` written with the owner's key on create, adopt, budget
   or quota change and reconcile (`tag_synced` = all managed tags); values outside the
