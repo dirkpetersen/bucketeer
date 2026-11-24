@@ -48,6 +48,7 @@ with the user's key (fallback: set `S3_REGION` to the zonegroup api name and sen
 import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from botocore.exceptions import (
     BotoCoreError,
@@ -94,6 +95,19 @@ def http_error(e: CroitError) -> HTTPException | None:
     return HTTPException(e.status if e.status in (400, 403, 404) else 502, e.public)
 
 
+def _connection_detail(e: BotoCoreError) -> str:
+    """Exception type, endpoint host and (TLS errors) the cause, for the log.
+
+    Only the host of the endpoint is logged, never the URL: no path or query can leak."""
+    kwargs = getattr(e, "kwargs", {}) or {}
+    host = urlsplit(str(kwargs.get("endpoint_url") or "")).hostname or "?"
+    detail = f"{type(e).__name__} host={host}"
+    cause = kwargs.get("error")
+    if cause is not None:
+        detail += f" ({type(cause).__name__}: {str(cause)[:200]})"
+    return detail
+
+
 def s3_failure(e: Exception, what: str) -> CroitError:
     """Map a botocore exception to the errors `buckets.py` already handles."""
     if isinstance(e, ClientError):
@@ -111,9 +125,11 @@ def s3_failure(e: Exception, what: str) -> CroitError:
         msg = known or f"The storage system refused the request to {what} ({code or status})."
         return S3OpError(403 if status == 403 else 400, msg, code)
     if isinstance(e, ReadTimeoutError):
+        log.warning("S3 %s timed out: %s", what, _connection_detail(e))
         return S3OpError(504, f"The storage system did not answer in time while trying to "
                               f"{what}. Check the list and try again.")
     if isinstance(e, BotoConnectionError):
+        log.warning("S3 %s failed, storage unreachable: %s", what, _connection_detail(e))
         return S3OpError(503, "The storage system is unreachable. Try again later.")
     log.warning("S3 %s failed: %s", what, type(e).__name__)
     return S3OpError(502, f"The storage system could not {what}. Check the list and try again.")

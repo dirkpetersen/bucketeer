@@ -6,10 +6,11 @@ client the app builds so the exact calls and the key used can be asserted.
 """
 
 import asyncio
+import logging
 
 import boto3
 import pytest
-from botocore.exceptions import ClientError, ReadTimeoutError
+from botocore.exceptions import ClientError, EndpointConnectionError, ReadTimeoutError, SSLError
 
 from .backends import admin_backend, rgw_only  # noqa: F401
 from .test_buckets import ALICE_KEY, Env, H, create
@@ -207,6 +208,27 @@ def test_timeout_is_audited_as_unknown_outcome(env):
     r = create(env.alice)
     assert r.status_code == 502 and "in time" in r.json()["detail"]
     assert len(env.audit("bucket.create_failed")) == 1
+
+
+def test_unreachable_endpoint_is_logged_with_its_host(env, caplog):
+    # A misspelt S3_ENDPOINT_URL (no DNS) must show up in the log, not only as a 502.
+    env.fail["create_bucket"] = EndpointConnectionError(
+        endpoint_url="https://alice-new.s3-typo.example.org/?x=secret")
+    with caplog.at_level(logging.WARNING, logger="bucketeer.bucket_ops"):
+        r = create(env.alice)
+    assert r.status_code == 502 and "unreachable" in r.json()["detail"]
+    (msg,) = [m.getMessage() for m in caplog.records if "unreachable" in m.getMessage()]
+    assert "EndpointConnectionError" in msg and "host=alice-new.s3-typo.example.org" in msg
+    assert "secret" not in msg and "https://" not in msg
+
+
+def test_tls_failure_is_logged_with_its_cause(env, caplog):
+    env.fail["create_bucket"] = SSLError(endpoint_url="https://s3.example.org/",
+                                         error=ValueError("certificate verify failed"))
+    with caplog.at_level(logging.WARNING, logger="bucketeer.bucket_ops"):
+        create(env.alice)
+    assert any("SSLError host=s3.example.org (ValueError: certificate verify failed)"
+               in m.getMessage() for m in caplog.records)
 
 
 def test_refused_versioning_step_keeps_the_bucket_and_says_off(env):
