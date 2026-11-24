@@ -6,10 +6,10 @@
 #
 # It creates:
 #   * BucketeerUserBoundary  permissions boundary every per-person IAM user must carry:
-#                            the most an s3-<username> user can ever do (object access to
+#                            the most a <user-prefix><username> user can ever do (object access to
 #                            <prefix>* buckets, nothing else).
 #   * BucketeerAdmin         policy for Bucketeer's own identity:
-#                            - IAM users s3-* under path /bucketeer/, created ONLY with the
+#                            - IAM users <user-prefix>* under path /bucketeer/, created ONLY with the
 #                              boundary above (so Bucketeer can't hand out more rights)
 #                            - bucket set-up on <prefix>* buckets (tags, versioning,
 #                              lifecycle, policy, encryption, public access block, object
@@ -17,19 +17,23 @@
 #                              no object read or write
 #                            - CloudWatch S3 metrics (daily bucket sizes, monitoring)
 #                            - Cost Explorer (billing check) and cost allocation tags
-#   * IAM user s3-bucketeer-admin (path /bucketeer-admin/, outside what it can manage)
+#   * IAM user <admin-user> (path /bucketeer-admin/, outside what it can manage)
 #     with BucketeerAdmin attached, and, with --create-key, one access key.
 #
 # Needs: aws CLI v2 and credentials of an IAM administrator (AWS_PROFILE works).
 #
 # Usage:
-#   tools/aws-setup [--prefix bucketeer-] [--region us-west-2] [--create-key]
-#                   [--activate-tags] [--print]
+#   tools/aws-setup --admin-user NAME --user-prefix PREFIX [--prefix bucketeer-]
+#                   [--region us-west-2] [--create-key] [--activate-tags] [--print]
 #
+#   --admin-user     name of Bucketeer's own IAM user (required; must not start with
+#                    the user prefix)
+#   --user-prefix    name prefix of the per-person IAM users (required, e.g. "s3-");
+#                    must match CLOUD_USER_PREFIX in Bucketeer's .env
 #   --prefix         bucket name prefix Bucketeer may manage (default bucketeer-);
 #                    must match CLOUD_BUCKET_PREFIX in Bucketeer's .env
 #   --region         default region written into the hints (default us-west-2)
-#   --create-key     create an access key for s3-bucketeer-admin and print it ONCE;
+#   --create-key     create an access key for the admin user and print it ONCE;
 #                    refused when the user already has 2 keys
 #   --activate-tags  activate the bucketeer-* cost allocation tags in Cost Explorer;
 #                    AWS only knows a tag key after a resource carried it (up to 24 h),
@@ -45,7 +49,8 @@ CREATE_KEY=0
 ACTIVATE_TAGS=0
 PRINT_ONLY=0
 
-ADMIN_USER="s3-bucketeer-admin"
+ADMIN_USER=""
+USER_PREFIX=""
 ADMIN_PATH="/bucketeer-admin/"
 USER_PATH="/bucketeer/"
 ADMIN_POLICY="BucketeerAdmin"
@@ -58,6 +63,8 @@ usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --prefix) PREFIX="${2:-}"; shift 2 ;;
+    --admin-user) ADMIN_USER="${2:-}"; shift 2 ;;
+    --user-prefix) USER_PREFIX="${2:-}"; shift 2 ;;
     --region) REGION="${2:-}"; shift 2 ;;
     --create-key) CREATE_KEY=1; shift ;;
     --activate-tags) ACTIVATE_TAGS=1; shift ;;
@@ -70,6 +77,11 @@ done
 # A bucket prefix that is too short would let Bucketeer touch unrelated buckets.
 [[ "$PREFIX" =~ ^[a-z0-9][a-z0-9-]{2,30}-$ ]] \
   || die "--prefix must be 4-32 lowercase letters, digits or hyphens and end with '-'"
+[[ "$USER_PREFIX" =~ ^[a-z0-9][a-z0-9_-]{0,15}-$ ]] \
+  || die "--user-prefix is required: 1-16 lowercase letters, digits, '_' or '-', ending with '-'"
+[[ "$ADMIN_USER" =~ ^[A-Za-z0-9+=,.@_-]{1,64}$ ]] || die "--admin-user is required (an IAM user name)"
+[[ "$ADMIN_USER" != "$USER_PREFIX"* ]] \
+  || die "--admin-user must not start with --user-prefix, or it could manage itself"
 [[ "$REGION" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]$ ]] || die "--region looks wrong: $REGION"
 
 if [ "$PRINT_ONLY" = 1 ]; then
@@ -83,7 +95,7 @@ fi
 
 BOUNDARY_ARN="arn:aws:iam::${ACCOUNT}:policy${USER_PATH}${BOUNDARY_POLICY}"
 ADMIN_POLICY_ARN="arn:aws:iam::${ACCOUNT}:policy${ADMIN_PATH}${ADMIN_POLICY}"
-USERS_ARN="arn:aws:iam::${ACCOUNT}:user${USER_PATH}s3-*"
+USERS_ARN="arn:aws:iam::${ACCOUNT}:user${USER_PATH}${USER_PREFIX}*"
 BUCKETS_ARN="arn:aws:s3:::${PREFIX}*"
 OBJECTS_ARN="arn:aws:s3:::${PREFIX}*/*"
 
@@ -283,6 +295,7 @@ if [ "$CREATE_KEY" = 1 ]; then
 Put these into Bucketeer's live .env (appmo env bucketeer). The secret is shown only now.
 CLOUD_REGION=${REGION}
 CLOUD_BUCKET_PREFIX=${PREFIX}
+CLOUD_USER_PREFIX=${USER_PREFIX}
 CLOUD_ADMIN_ACCESS_KEY=${key}
 CLOUD_ADMIN_SECRET_KEY=${secret}
 EOF

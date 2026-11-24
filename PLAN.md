@@ -123,8 +123,7 @@ One row per bucket per month:
   Bucketeer sums `line_item_unblended_cost` per bucket for the month, filtered to
   `line_item_product_code = AmazonS3` and buckets with our prefix. That covers storage per
   tier, requests, retrievals, transitions, Deep Archive's early-deletion fees and egress:
-  a real pass-through. Works in a member account without the platform team (tested
-  2026-11-24, see the status section).
+  a real pass-through.
   - AWS finalizes a month a few days after it ends, so the sheet for month M is built no
     earlier than the 5th of M+1 (the send day is at least 5 while cloud is set up).
   - S3 lines without a resource id, and lines for our prefix whose bucket Bucketeer
@@ -134,7 +133,7 @@ One row per bucket per month:
   - The `bucketeer-*` cost allocation tags stay useful for people reading Cost Explorer,
     but billing no longer depends on them. Asking the platform team to activate them is
     optional.
-  - Reading the export: `s3-bucketeer-admin` gets `GetObject`/`ListBucket` on the
+  - Reading the export: Bucketeer's AWS admin user gets `GetObject`/`ListBucket` on the
     billing bucket only (the "no object access" Deny gets a `NotResource` exception for
     it), and `tools/aws-setup` creates the billing bucket, its policy for
     `bcm-data-exports.amazonaws.com` and the export itself.
@@ -176,15 +175,15 @@ One row per bucket per month:
 ### AWS side (decided)
 
 - One shared AWS account. Bucketeer's own identity is the IAM user
-  **`s3-bucketeer-admin`** (decided), set up by **`tools/aws-setup`** (run once by an AWS
+  **Bucketeer's AWS admin user** (decided; its name is chosen by the operator), set up by **`tools/aws-setup`** (run once by an AWS
   administrator; idempotent; `--print` shows the policies, `--create-key` prints the
   `.env` lines once, `--activate-tags` turns on the cost allocation tags). `.env`:
   `CLOUD_REGION` (default `us-west-2`), `CLOUD_BUCKET_PREFIX` (default `bucketeer-`),
-  `CLOUD_ADMIN_ACCESS_KEY`, `CLOUD_ADMIN_SECRET_KEY`. What the script grants:
+  `CLOUD_USER_PREFIX`, `CLOUD_ADMIN_ACCESS_KEY`, `CLOUD_ADMIN_SECRET_KEY`. What the script grants:
   - **IAM:** person users `s3-*` under path `/bucketeer/` only, and only created with the
     permissions boundary `BucketeerUserBoundary` (object access to `<prefix>*` buckets,
     nothing else). So even a stolen admin key can't create a user with wider rights.
-    `s3-bucketeer-admin` lives under `/bucketeer-admin/`, outside what it can manage, and
+    The admin user lives under `/bucketeer-admin/`, outside what it can manage, and
     an explicit Deny stops it from removing boundaries, attaching or editing policies, or
     creating console logins.
   - **Buckets:** create, delete, tags, versioning, lifecycle, bucket policy, encryption,
@@ -199,12 +198,13 @@ One row per bucket per month:
     the real AWS cost per bucket is what cloud buckets are billed. In an AWS Organization, tag
     activation has to happen in the management account. Cost Explorer API calls cost
     $0.01 each, so Bucketeer calls it at most once a day.
-  - Honest limit: `s3-bucketeer-admin` can still create access keys for person users and
+  - Honest limit: the admin user can still create access keys for person users and
     write bucket policies, so it can reach data indirectly, like the on-prem Admin Ops
     key. It can't escape the boundary or the `<prefix>` buckets.
 - AD usernames that would collide with the system users (`bucketeer-admin`,
   `bucketeer-backup`) are refused for cloud.
-- **One IAM user per person, named `s3-<username>`** (lowercased sAMAccountName, same
+- **One IAM user per person, named `<CLOUD_USER_PREFIX><username>`** (prefix chosen by the
+  operator and passed to `tools/aws-setup --user-prefix`; lowercased sAMAccountName, same
   rules as the RGW uid; created on first use of cloud, like the RGW account on first
   login). Each has its own access keys, managed like the on-prem keys (max 5, rotate,
   reveal). Bucketeer never uses its own AWS identity for user data.
@@ -250,7 +250,7 @@ One row per bucket per month:
 - **Owner:** on premises, a dedicated RGW user `bucketeer-backup` that Bucketeer creates
   through Admin Ops. Its key is read from Admin Ops each time, so it is never stored, and
   it is hidden from admin lists like the service user. In AWS, a dedicated IAM user
-  `s3-bucketeer-backup` (created by `s3-bucketeer-admin` under the same boundary) whose
+  backup IAM user (created by the admin user under the same boundary) whose
   inline policy only allows `PutObject`/`GetObject`/`ListBucket` on that bucket. Never a
   person's account.
 - **Can't be deleted early:** object lock in **COMPLIANCE** mode with a default retention
@@ -272,9 +272,9 @@ One row per bucket per month:
   counts, SHA-256 of each file).
 - **Not encrypted by Bucketeer (decided, Q21).** `.env` holds every secret, so what
   protects the archive is who can read the bucket:
-  - only the backup user (`bucketeer-backup` on premises, `s3-bucketeer-backup` in AWS);
+  - only the backup user (`bucketeer-backup` on premises, the backup IAM user in AWS);
     no person, share, bucket key or public access, and Bucketeer never offers it in the UI
-  - in AWS: Block Public Access, SSE-S3 at rest, and `s3-bucketeer-admin` has an
+  - in AWS: Block Public Access, SSE-S3 at rest, and the admin user has an
     explicit Deny on object reads
   - on premises, the Admin Ops key can read the backup user's key, but it is itself in
     `.env`, so nobody new gets access
@@ -287,46 +287,6 @@ One row per bucket per month:
   hand. Documented and tested.
 
 ---
-
-## AWS setup status (2026-11-24)
-
-- Our AWS account (us-west-2) is a **member account** of the university's AWS
-  Organization; the management (payer) account belongs to the platform team.
-- `tools/aws-setup --prefix bucketeer-test-` was run with an AWS administrator profile:
-  `BucketeerUserBoundary` (path `/bucketeer/`), `BucketeerAdmin` (path
-  `/bucketeer-admin/`) and the user `s3-bucketeer-admin`. Both policies pass IAM Access
-  Analyzer with no findings. **Test prefix for now**: Bucketeer may only manage
-  `bucketeer-test-*` buckets. For production, re-run with `--prefix bucketeer-`, which
-  gives the policies a new version.
-- One access key for `s3-bucketeer-admin` lives in the local AWS profile
-  `s3-bucketeer-admin` (`~/.aws/credentials` of `peterdir`, now mode 0600). It is not
-  in Bucketeer's `.env` yet, since no code uses it.
-- Smoke test with that key, all as expected:
-  - **allowed:** bucket create/tag/versioning/lifecycle (Deep Archive day 0)/public access
-    block/delete; person user under `/bucketeer/` created with the boundary, inline
-    policy, deleted; CloudWatch S3 metrics; Cost Explorer `GetCostAndUsage`
-  - **refused:** objects (`PutObject`), buckets outside the prefix, users without the
-    boundary or outside `/bucketeer/`, removing the boundary, attaching
-    AdministratorAccess, new keys for itself, reading other IAM users
-  - Test bucket and test user are deleted again.
-- **Cost allocation tags can't be managed from this account**, not even with
-  AdministratorAccess ("Linked account doesn't have access to cost allocation tags"), and
-  Cost Explorer's resource-level data needs a payer opt-in. Both need the management
-  account the management account. Billing therefore uses the data export instead (feature 3);
-  activating the tags is optional. `--activate-tags` moves to a step for the management
-  account.
-- **Data export works from this account (tested 2026-11-24):** created by hand with an
-  administrator profile: bucket `bucketeer-test-billing-<random>` (us-west-2, public access blocked,
-  policy for `billingreports`/`bcm-data-exports` limited to our account) and export
-  `bucketeer-test-s3-costs` (CUR 2.0, daily, resource ids, gzip CSV, prefix `cur/`),
-  status `HEALTHY`. First files arrive within about 24 h. To do: check the files hold
-  bucket names in `line_item_resource_id`, then fold the steps into `tools/aws-setup`.
-- The account already has two IAM users named `s3-<username>` (path `/`), made
-  outside Bucketeer. Bucketeer can't see or manage them, and it couldn't create a user
-  with either name. (decision 17)
-- Known limit: in the same account, a bucket policy that names a user grants access
-  even past that user's permissions boundary. Bucketeer writes bucket policies only on
-  `<prefix>*` buckets, so this stays inside them.
 
 ## 6. Automatic upgrade of an older database
 
@@ -379,13 +339,13 @@ Feature 6 (database upgrade) goes in with step 2, since a restore needs it.
 2. Products: `Tier-3-S3` (on premises) and `Archive-S3` (cloud).
 3. The account-wide user quota is dropped in favour of bucket quotas.
 4. The weekly increase limit is in TiB: 100 TiB by default.
-5. AWS, one shared account, an IAM user per person named `s3-<username>`, default region
+5. AWS, one shared account, an IAM user per person (prefix plus username), default region
    `us-west-2`. No restore requests in the UI (a different tool does them).
 6. The global location setting picks where backups go. Once it is Cloud, Cloud is the
    default for everyone, even with Advanced off.
 7. Cloud users choose per bucket between Intelligent-Tiering (`Cloud-S3`, advertised
    $13-18 per TiB-month) and Glacier Deep Archive (`Archive-S3`, $1 per TiB-month).
-8. Bucketeer's AWS identity is the IAM user `s3-bucketeer-admin`, set up by
+8. Bucketeer's AWS identity is its own IAM admin user, set up by
    `tools/aws-setup`.
 9. `Archive-S3` and `Cloud-S3` pass through the real AWS cost per bucket, through cost
    allocation tags. `Tier-3-S3` stays billed on quota.
@@ -401,7 +361,7 @@ Feature 6 (database upgrade) goes in with step 2, since a restore needs it.
 15. Backups are not encrypted by Bucketeer (no age key).
 16. An older database (older installation or restored backup) is upgraded to the latest
     schema automatically at startup, keeping its data (feature 6).
-17. Existing IAM users with a `s3-<username>` name made outside Bucketeer (two exist today): Bucketeer refuses cloud for that person with "ask an
+17. Existing IAM users with a per-person name made outside Bucketeer: Bucketeer refuses cloud for that person with "ask an
     administrator" until an admin removes the old user or maps the person to another
     name.
 18. Billing for cloud uses the AWS data export by bucket name; the cost allocation tag

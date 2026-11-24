@@ -199,15 +199,16 @@ Unlike the croit tools it is a bash script around the aws CLI v2, run by an AWS
 administrator (`AWS_PROFILE` works), never by Bucketeer.
 
 ```bash
-tools/aws-setup --print                       # show both policies, change nothing
-tools/aws-setup --create-key                  # policies + user s3-bucketeer-admin + one key
-tools/aws-setup --activate-tags               # later: turn on the cost allocation tags
-tools/aws-setup --prefix osu-bkt- --region us-west-2
+A='--admin-user <admin-user> --user-prefix <user-prefix>'
+tools/aws-setup $A --print                    # show both policies, change nothing
+tools/aws-setup $A --create-key               # policies + admin user + one key
+tools/aws-setup $A --activate-tags            # later: turn on the cost allocation tags
+tools/aws-setup $A --prefix bucketeer-test- --region us-west-2
 ```
 
 It creates the permissions boundary `BucketeerUserBoundary` (the most any per-person
-`s3-<username>` user can do), the policy `BucketeerAdmin` (IAM users under
+per-person IAM user can do; their names start with `--user-prefix`), the policy `BucketeerAdmin` (IAM users under
 `/bucketeer/` only with that boundary; bucket set-up on `<prefix>*` buckets without object
-access; CloudWatch S3 metrics; Cost Explorer and the cost allocation tags, `bucketeer-bucket` first, since cloud buckets are billed by it) and the user
-`s3-bucketeer-admin` under `/bucketeer-admin/`. It is idempotent: a re-run gives the
+access; CloudWatch S3 metrics; Cost Explorer and the cost allocation tags, `bucketeer-bucket` first, since cloud buckets are billed by it) and Bucketeer's own IAM user
+(`--admin-user`) under `/bucketeer-admin/`. It is idempotent: a re-run gives the
 policies a new default version. `--create-key` prints the `.env` lines once.
