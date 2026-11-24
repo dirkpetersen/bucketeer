@@ -36,6 +36,33 @@
 .switch[aria-checked="true"] .switch-track::after { translate: 1rem 0; }
 @media (max-width: 34em) { .switch-label { display: none; } }
 
+/* Storage location: segmented "Cloud | On Premises" radiogroup, left of Advanced. */
+.loc-switch {
+  position: relative; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+  padding: var(--sp-1); border-radius: var(--r-pill); background: var(--surface-2);
+  border: 1px solid var(--border); box-shadow: var(--sh-inset);
+}
+.loc-switch[hidden] { display: none; }
+.loc-thumb {
+  position: absolute; inset-block: var(--sp-1); left: var(--sp-1); width: calc(50% - var(--sp-1));
+  border-radius: var(--r-pill); background: var(--surface); box-shadow: var(--sh-1);
+  transition: translate var(--dur) var(--ease-spring);
+}
+.loc-switch[data-value="onprem"] .loc-thumb { translate: 100% 0; }
+.loc-opt {
+  position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center;
+  gap: var(--sp-1); min-height: 2rem; padding: 0 var(--sp-3); border: 0; background: none;
+  border-radius: var(--r-pill); font-size: var(--fs-sm); font-weight: 520; white-space: nowrap;
+  color: var(--text-muted); cursor: pointer; transition: color var(--dur-fast);
+}
+.loc-opt:hover { color: var(--text); }
+.loc-opt .icon { width: 1rem; height: 1rem; }
+.loc-opt[aria-checked="true"] { color: var(--text); }
+.loc-opt[aria-checked="true"] .icon { color: var(--accent-text); }
+.loc-opt:focus-visible { outline-offset: 0; }
+@media (max-width: 34em) { .loc-text { display: none; } .loc-opt { padding: 0 var(--sp-2); } }
+@media (prefers-reduced-motion: reduce) { .loc-thumb { transition: none; } }
+
 /* User menu */
 .user { position: relative; }
 .user-btn {
@@ -76,8 +103,12 @@
 .hero h1 { font: 480 var(--fs-3xl) / 1.05 var(--font-display); letter-spacing: -0.02em;
   font-variation-settings: "opsz" 120; }
 .hero p { color: var(--text-muted); max-width: 40rem; }
-.hero .adv-note { display: none; }
+.hero-notes { display: none; flex-wrap: wrap; gap: var(--sp-2); }
+[data-advanced="true"] .hero-notes, [data-location="cloud"] .hero-notes { display: flex; }
+.hero .adv-note, .hero .loc-note { display: none; }
 [data-advanced="true"] .hero .adv-note { display: inline-flex; width: fit-content; }
+[data-location="cloud"] .hero .loc-note { display: inline-flex; width: fit-content; }
+.loc-note .icon { width: 0.9rem; height: 0.9rem; }
 
 .grid { display: grid; gap: var(--sp-5); grid-template-columns: 1fr; }
 @media (min-width: 60em) { .grid { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); } }

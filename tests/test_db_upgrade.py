@@ -50,7 +50,9 @@ BACKFILLS: list[tuple[int, str, dict, dict]] = [
     (2, "bucket_keys", {"id": 7}, {"suspended_by": "direct"}),
     (3, "buckets", {"name": "alice-data"}, {"tag_synced": 1}),
     (4, "bucket_keys", {"id": 7}, {"state": "active", "access_key": None}),
-    (5, "bucket_keys", {"id": 7}, {"statement_pending_cleanup": 0}),]
+    (5, "bucket_keys", {"id": 7}, {"statement_pending_cleanup": 0}),
+    (14, "user_profiles", {"ad_username": "alice"}, {"location": None}),
+]
 
 
 def build(path, version, monkeypatch):

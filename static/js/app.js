@@ -3,6 +3,7 @@ import { renderLogin } from "./views/login.js";
 import { renderDashboard } from "./views/dashboard.js";
 import { h } from "./dom.js";
 import { initAdvanced } from "./advanced.js";
+import { initLocation } from "./location.js";
 import { toast } from "./components/toast.js";
 import "./components/secret-field.js";
 import "./components/code-panel.js";
@@ -30,6 +31,7 @@ function swap(node, name) {
 // the profile page has a link back to the workspace).
 function showMe(user) {
   initAdvanced(user.advancedMode);
+  initLocation(user);
   if (user.budgetMissing && location.hash !== "#/profile") {
     history.replaceState(null, "", "#/profile");
   }

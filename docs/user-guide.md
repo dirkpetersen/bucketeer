@@ -42,7 +42,7 @@ workspace**. You can still choose another number for each bucket.
 Your workspace has two cards: **Credentials** and **Your buckets**. In **Set up this
 computer**, choose your system and click **Create setup command**. Copy the command into a
 terminal (PowerShell on Windows) and run it within 15 minutes. It installs your keys as the
-AWS profile `bucketeer`, makes a backup of any file it changes, and tests the connection.
+AWS profile `s3-onprem`, makes a backup of any file it changes, and tests the connection.
 The link works only once.
 
 <figure class="osu-shot" markdown>
@@ -54,8 +54,14 @@ The link works only once.
 Then use any [S3 client](s3-clients.md). With the AWS CLI:
 
 ```bash
-aws --profile bucketeer s3 ls
+aws --profile s3-onprem s3 ls
 ```
+
+!!! note "Used Bucketeer before? The profile is now `s3-onprem`"
+    Earlier versions wrote the profile `bucketeer`. Running the setup command again adds
+    `s3-onprem` and leaves an existing `[bucketeer]` section alone, so old scripts keep
+    working. Switch them to `--profile s3-onprem` (or `AWS_PROFILE=s3-onprem`), then delete
+    the old section from `~/.aws/config` and `~/.aws/credentials` when you no longer need it.
 
 ## 4. Create a bucket
 

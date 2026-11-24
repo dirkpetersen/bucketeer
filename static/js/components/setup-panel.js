@@ -47,7 +47,7 @@ function downloadFor(os, link) {
   return saveFile("bucketeer-setup.sh", enc(sh), "text/x-shellscript");
 }
 
-export function setupPanel({ endpointUrl, docsUrl, profile = "bucketeer" }) {
+export function setupPanel({ endpointUrl, docsUrl, profile = "s3-onprem" }) {
   let os = detectOs();
   let link = null;
   let deadline = 0;

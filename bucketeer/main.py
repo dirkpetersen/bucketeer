@@ -21,11 +21,13 @@ from . import (
     bucket_facts,
     bucket_keys,
     buckets,
+    cloud,
     cors,
     credentials,
     ldapca,
     lifecycle,
     lifecycle_rules,
+    location,
     mailer,
     multipart,
     notifications,
@@ -70,12 +72,14 @@ def create_app(
     db: Database | None = None,
     authenticator: AdAuthenticator | None = None,
     clock: Callable[[], float] = time.time,
+    cloud_admin: "cloud.CloudAdmin | None | object" = None,
 ) -> FastAPI:
     """`croit` (the admin-plane client: `CroitClient`, or `RgwAdminClient` when
     `ADMIN_BACKEND=rgw`) lets tests inject a client (e.g. on an ASGI transport); `db` an
     already-open database (e.g. in-memory), which the caller then closes;
     `authenticator` a fake-LDAP one; `clock` drives session expiry and the
-    login throttle."""
+    login throttle; `cloud_admin` a cloud client (tests; default: one built from the
+    CLOUD_* settings when cloud is configured, else none)."""
     logging.basicConfig(
         level=settings.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -106,6 +110,10 @@ def create_app(
         reporter = None
         if billing.REPORT_ON_START:  # monthly chargeback email; never blocks startup
             reporter = asyncio.get_running_loop().create_task(billing_report.report_loop(_app))
+        cloud_check = None
+        if _app.state.cloud is not None and cloud.CHECK_ON_START:  # never blocks startup
+            cloud_check = asyncio.get_running_loop().create_task(
+                _app.state.cloud.monitor_loop())
         schedule = None
         if offboarding.SCHEDULE_ON_START:  # background: never blocks startup or /health
             schedule = asyncio.get_running_loop().create_task(
@@ -113,7 +121,7 @@ def create_app(
         try:
             yield
         finally:
-            for task in (sampler, reporter):
+            for task in (cloud_check, sampler, reporter):
                 if task is not None:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
@@ -145,6 +153,11 @@ def create_app(
     app.state.clock = clock
     credentials.install_access_log_filter()
     app.state.croit = client  # one client per app, closed on shutdown
+    # Cloud (AWS) admin client, None when the CLOUD_* settings are not set (cloud.py).
+    app.state.cloud = (cloud_admin if cloud_admin is not None
+                       else cloud.CloudAdmin(settings) if settings.cloud_configured else None)
+    if app.state.cloud is cloud.NO_CLOUD:
+        app.state.cloud = None
     app.state.db = db  # else opened in the lifespan; /health never touches it
 
     app.state.authenticator = authenticator or AdAuthenticator(settings)
@@ -219,6 +232,7 @@ def create_app(
     api.include_router(acl.router)
     api.include_router(sharing.router)
     api.include_router(admin.router)
+    api.include_router(location.router)  # /admin/settings/location
     api.include_router(admin_settings.router)
     api.include_router(offboarding.router)
     api.include_router(billing.router)

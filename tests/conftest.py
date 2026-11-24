@@ -126,6 +126,14 @@ def no_offboarding_schedule(monkeypatch):
     monkeypatch.setattr(offboarding, "SCHEDULE_ON_START", False)
 
 
+@pytest.fixture(autouse=True)
+def no_cloud_monitor_on_start(monkeypatch):
+    """The cloud connection re-check loop is tested in tests/test_cloud.py."""
+    from bucketeer import cloud
+
+    monkeypatch.setattr(cloud, "CHECK_ON_START", False)
+
+
 @pytest.fixture
 def admin_ops():
     """The RGW Admin Ops mock in-process, over the same state as a mock croit app
