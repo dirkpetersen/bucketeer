@@ -87,6 +87,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     f"PUT {S}/budget-number": ("admin.settings.budget_number",),
     f"POST {S}/budget-number/test": (),
     f"PUT {S}/placement": ("admin.settings.placement",),
+    f"PUT {S}/location": ("admin.settings.location",),
     f"PUT {S}/default-quota": ("admin.settings.default_quota",),
     f"DELETE {S}/default-quota": ("admin.settings.default_quota",),
     f"PUT {S}/uid-mappings/{{ad_username}}": ("admin.settings.uid_mapping.set",),
@@ -185,6 +186,14 @@ def stale_pending_row(env):
     old = (datetime.now(UTC) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     with env.db.tx() as c:
         c.execute("UPDATE bucket_keys SET created_at = ? WHERE id = ?", (old, row["id"]))
+
+
+class FakeCloud:
+    available = True
+
+    async def check(self):
+        return {"ok": True, "accountId": None, "region": "us-west-2", "reason": None,
+                "checkedAt": None}
 
 
 @pytest.fixture(scope="module")
@@ -465,6 +474,10 @@ def run(tmp_path_factory, moto_server):
         json={"rules": {"prefix": "", "pattern": ""}, "name": "x", "username": "alice"}))
     r.step(f"PUT {S}/naming", lambda: b.put(
         f"{S}/naming", json={"prefix": "{username}-", "pattern": ""}, headers=H))
+    env.app.state.cloud = FakeCloud()  # the AWS side is tested on moto in test_cloud.py
+    r.step(f"PUT {S}/location", lambda: b.put(f"{S}/location", json={"default": "cloud"},
+                                              headers=H))
+    env.app.state.cloud = None
     ok(b.get(S))
     yield r
     env.db.close()

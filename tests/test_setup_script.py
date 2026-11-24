@@ -12,12 +12,12 @@ import pytest
 from bucketeer.setup_script import SetupValues, command, error_script, ps_script, sh_script
 
 SECRET = "s3cr3tSECRETvalue0123456789ABCDEFGHIJKLmn"
-V = SetupValues("bucketeer", "us-east-1", "https://s3.example.org", "path", "AKIAEXAMPLE0123456789", SECRET)
+V = SetupValues("s3-onprem", "us-east-1", "https://s3.example.org", "path", "AKIAEXAMPLE0123456789", SECRET)
 
 OLD_CRED = ("[work]\naws_access_key_id = WORKKEY\naws_secret_access_key = worksecret\n\n"
-            "[bucketeer]\naws_access_key_id = OLDKEY\naws_secret_access_key = OLDSECRET\n\n"
+            "[s3-onprem]\naws_access_key_id = OLDKEY\naws_secret_access_key = OLDSECRET\n\n"
             "[other]\naws_access_key_id = OTHERKEY\n")
-OLD_CFG = ("[default]\nregion = eu-west-1\n\n[profile bucketeer]\nregion = old\ns3 =\n"
+OLD_CFG = ("[default]\nregion = eu-west-1\n\n[profile s3-onprem]\nregion = old\ns3 =\n"
            "  addressing_style = virtual\n\n[profile other]\nregion = ap-south-1\n")
 
 
@@ -40,8 +40,8 @@ def test_sh_fresh_install_idempotent_and_private(tmp_path):
     r = run_sh(tmp_path)
     assert r.returncode == 0, r.stderr
     cred, cfg = tmp_path / ".aws/credentials", tmp_path / ".aws/config"
-    assert cred.read_text() == f"[bucketeer]\naws_access_key_id = {V.access_key}\naws_secret_access_key = {SECRET}\n"
-    assert cfg.read_text().startswith("[profile bucketeer]\nregion = us-east-1\nendpoint_url = https://s3.example.org\n")
+    assert cred.read_text() == f"[s3-onprem]\naws_access_key_id = {V.access_key}\naws_secret_access_key = {SECRET}\n"
+    assert cfg.read_text().startswith("[profile s3-onprem]\nregion = us-east-1\nendpoint_url = https://s3.example.org\n")
     assert cfg.read_text().endswith("s3 =\n  addressing_style = path\n")
     assert stat.S_IMODE(cred.stat().st_mode) == 0o600
     assert SECRET not in r.stdout + r.stderr
@@ -59,10 +59,10 @@ def test_sh_replaces_only_its_section(tmp_path):
     assert r.returncode == 0, r.stderr
     cred = (tmp_path / ".aws/credentials").read_text()
     cfg = (tmp_path / ".aws/config").read_text()
-    assert cred.count("[bucketeer]") == 1 and "OLDKEY" not in cred and "OLDSECRET" not in cred
+    assert cred.count("[s3-onprem]") == 1 and "OLDKEY" not in cred and "OLDSECRET" not in cred
     assert "[work]\naws_access_key_id = WORKKEY\naws_secret_access_key = worksecret\n" in cred
     assert "[other]\naws_access_key_id = OTHERKEY\n" in cred
-    assert cfg.count("[profile bucketeer]") == 1 and "region = old" not in cfg
+    assert cfg.count("[profile s3-onprem]") == 1 and "region = old" not in cfg
     assert "[default]\nregion = eu-west-1\n" in cfg and "[profile other]\nregion = ap-south-1\n" in cfg
     backups = sorted(p.name for p in (tmp_path / ".aws").glob("*.bucketeer-backup-*"))
     assert len(backups) == 2
@@ -81,7 +81,7 @@ def test_sh_honours_file_variables_and_runs_aws(tmp_path):
                aws=True)
     assert r.returncode == 0, r.stderr
     assert cred.exists() and cfg.exists() and not (tmp_path / ".aws").exists()
-    assert (tmp_path / "aws-args").read_text().strip() == "--profile bucketeer s3 ls"
+    assert (tmp_path / "aws-args").read_text().strip() == "--profile s3-onprem s3 ls"
     assert SECRET not in r.stdout + r.stderr
 
 
@@ -116,10 +116,10 @@ def test_ps_text():
     t = ps_script(V)
     assert "WriteAllText" in t and "UTF8Encoding $false" in t
     assert "Set-Content" not in t and "Out-File" not in t and "-Encoding" not in t
-    assert f"'aws_secret_access_key = {SECRET}'" in t and "'[profile bucketeer]'" in t
+    assert f"'aws_secret_access_key = {SECRET}'" in t and "'[profile s3-onprem]'" in t
     assert "-ceq $header" in t and "-eq $header" not in t
     assert "GetCurrent().User.Value" in t and '"*${sid}:F"' in t and "USERNAME):F" not in t
-    assert "icacls" in t and "AWS_SHARED_CREDENTIALS_FILE" in t and "& aws --profile bucketeer s3 ls" in t
+    assert "icacls" in t and "AWS_SHARED_CREDENTIALS_FILE" in t and "& aws --profile s3-onprem s3 ls" in t
     assert "@" not in t.replace("@(", "").replace("@'", "")  # no unfilled placeholder
 
 
@@ -136,5 +136,5 @@ def test_ps_runs(tmp_path):
                            capture_output=True, text=True, timeout=60)
         assert r.returncode == 0, r.stderr
     cred = Path(tmp_path / ".aws/credentials").read_bytes()
-    assert not cred.startswith(b"\xef\xbb\xbf") and cred.count(b"[bucketeer]") == 1
+    assert not cred.startswith(b"\xef\xbb\xbf") and cred.count(b"[s3-onprem]") == 1
     assert b"[other]" in cred and b"OLDKEY" not in cred and SECRET.encode() not in r.stdout.encode()

@@ -8,6 +8,7 @@ import { UNITS, quotaText } from "../format.js";
 import { toast } from "../components/toast.js";
 import { confirmDialog } from "../components/confirm-dialog.js";
 import { SIZE_UNITS, splitSize } from "../components/quota-dialog.js";
+import { locationCard } from "./admin-location.js";
 
 // The "Settings" tab of the administration page: runtime policy edited here
 // instead of in .env. Every section is a card with its own form, inline
@@ -524,7 +525,7 @@ export function renderSettings() {
     if (!data) host.replaceChildren(h("div", { class: "set-loading", "aria-hidden": "true" }, [1, 2, 3].map(() => h("div", { class: "skel-field set-skel" }))));
     try {
       data = await getSettings();
-      host.replaceChildren();
+      host.replaceChildren(locationCard()); // loads on its own (AWS check), first card
       for (const k of Object.keys(slots)) delete slots[k];
       paint();
     } catch (err) {

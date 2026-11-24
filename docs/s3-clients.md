@@ -18,7 +18,7 @@ that connect each one to our Ceph cluster.
 ## Before you start
 
 1. Log in to Bucketeer and open **Set up this computer**. Copy the one-line command for your
-   system and run it. It writes the profile `bucketeer` to `~/.aws/config` and
+   system and run it. It writes the profile `s3-onprem` to `~/.aws/config` and
    `~/.aws/credentials`.
 2. Most command-line tools below read that profile directly. For graphical tools, you need
    three values: the **endpoint** (for example `https://s3.example.edu`), your **access
@@ -118,8 +118,10 @@ settings shown next to them.
 ### AWS CLI v2 { #setup-aws-cli }
 
 The AWS CLI is the reference tool, and the base for the others: rclone, s5cmd and many
-scripts can read its profile. Bucketeer uses the profile name `bucketeer`, so it never
-touches your other AWS settings.
+scripts can read its profile. Bucketeer uses the profile name `s3-onprem`, so it never
+touches your other AWS settings. (Earlier versions used `bucketeer`; an existing
+`[bucketeer]` section is left alone, so switch your scripts to `s3-onprem` and then remove
+it.)
 
 **Step 1. Install the AWS CLI v2.**
 
@@ -149,7 +151,7 @@ touches your other AWS settings.
 
 Check it with `aws --version`. It must say `aws-cli/2.x`.
 
-**Step 2. Create the profile `bucketeer`.** The easy way: in Bucketeer, open **Set up
+**Step 2. Create the profile `s3-onprem`.** The easy way: in Bucketeer, open **Set up
 this computer**, create the command for your system and run it. It writes both files and
 tests the connection.
 
@@ -158,34 +160,34 @@ Bucketeer to see your endpoint, access key and secret key, then run these lines 
 the same in a terminal and in PowerShell):
 
 ```bash
-aws configure set aws_access_key_id     <your access key> --profile bucketeer
-aws configure set aws_secret_access_key <your secret key> --profile bucketeer
-aws configure set region us-east-1                        --profile bucketeer
-aws configure set endpoint_url https://s3.example.edu     --profile bucketeer
-aws configure set request_checksum_calculation when_required --profile bucketeer
-aws configure set response_checksum_validation when_required --profile bucketeer
-aws configure set s3.addressing_style virtual             --profile bucketeer
+aws configure set aws_access_key_id     <your access key> --profile s3-onprem
+aws configure set aws_secret_access_key <your secret key> --profile s3-onprem
+aws configure set region us-east-1                        --profile s3-onprem
+aws configure set endpoint_url https://s3.example.edu     --profile s3-onprem
+aws configure set request_checksum_calculation when_required --profile s3-onprem
+aws configure set response_checksum_validation when_required --profile s3-onprem
+aws configure set s3.addressing_style virtual             --profile s3-onprem
 ```
 
 **Step 3. Check it.**
 
 ```bash
-aws configure list --profile bucketeer   # shows where each value comes from
-aws --profile bucketeer s3 ls            # lists your buckets
+aws configure list --profile s3-onprem   # shows where each value comes from
+aws --profile s3-onprem s3 ls            # lists your buckets
 ```
 
-**Step 4. Use `bucketeer` without typing `--profile` each time** (optional):
+**Step 4. Use `s3-onprem` without typing `--profile` each time** (optional):
 
 === "bash / zsh"
 
     ```bash
-    echo 'export AWS_PROFILE=bucketeer' >> ~/.bashrc   # ~/.zshrc on a Mac
+    echo 'export AWS_PROFILE=s3-onprem' >> ~/.bashrc   # ~/.zshrc on a Mac
     ```
 
 === "PowerShell"
 
     ```powershell
-    [Environment]::SetEnvironmentVariable("AWS_PROFILE", "bucketeer", "User")
+    [Environment]::SetEnvironmentVariable("AWS_PROFILE", "s3-onprem", "User")
     ```
 
 Open a new terminal after this.
@@ -209,7 +211,7 @@ Open a new terminal after this.
 === "~/.aws/config"
 
     ```ini
-    [profile bucketeer]
+    [profile s3-onprem]
     region = us-east-1
     endpoint_url = https://s3.example.edu
     request_checksum_calculation = when_required
@@ -221,7 +223,7 @@ Open a new terminal after this.
 === "~/.aws/credentials"
 
     ```ini
-    [bucketeer]
+    [s3-onprem]
     aws_access_key_id = <your access key>
     aws_secret_access_key = <your secret key>
     ```
@@ -233,7 +235,7 @@ Open a new terminal after this.
 ### rclone { #setup-rclone }
 
 The most versatile tool: sync, copy with checksums, mount, encrypt. rclone can use the AWS
-profile `bucketeer`, so your keys stay in one place: when you rotate a key and run the
+profile `s3-onprem`, so your keys stay in one place: when you rotate a key and run the
 setup command again, rclone uses the new key at once.
 
 **Step 1. Install rclone** from [rclone.org/install](https://rclone.org/install/)
@@ -241,7 +243,7 @@ setup command again, rclone uses the new key at once.
 `sudo -v ; curl https://rclone.org/install.sh | sudo bash`). Check it with
 `rclone version`.
 
-**Step 2. Make the profile `bucketeer` for the AWS CLI first** ([see above](#setup-aws-cli)).
+**Step 2. Make the profile `s3-onprem` for the AWS CLI first** ([see above](#setup-aws-cli)).
 
 **Step 3. Create the rclone remote `bucketeer` from that profile.** This one command
 copies the endpoint from your AWS config, so you do not need to type it:
@@ -249,15 +251,15 @@ copies the endpoint from your AWS config, so you do not need to type it:
 === "bash / zsh"
 
     ```bash
-    rclone config create bucketeer s3 provider=Ceph env_auth=true profile=bucketeer \
-      force_path_style=false endpoint="$(aws configure get endpoint_url --profile bucketeer)"
+    rclone config create bucketeer s3 provider=Ceph env_auth=true profile=s3-onprem \
+      force_path_style=false endpoint="$(aws configure get endpoint_url --profile s3-onprem)"
     ```
 
 === "PowerShell"
 
     ```powershell
-    $ep = aws configure get endpoint_url --profile bucketeer
-    rclone config create bucketeer s3 provider=Ceph env_auth=true profile=bucketeer `
+    $ep = aws configure get endpoint_url --profile s3-onprem
+    rclone config create bucketeer s3 provider=Ceph env_auth=true profile=s3-onprem `
       force_path_style=false endpoint=$ep
     ```
 
@@ -268,12 +270,12 @@ copies the endpoint from your AWS config, so you do not need to type it:
     type = s3
     provider = Ceph
     env_auth = true
-    profile = bucketeer
+    profile = s3-onprem
     endpoint = https://s3.example.edu
     force_path_style = false
     ```
 
-    `env_auth = true` and `profile = bucketeer` tell rclone to read the access key and
+    `env_auth = true` and `profile = s3-onprem` tell rclone to read the access key and
     secret key from `~/.aws/credentials`. The file holds no secret. Find it with
     `rclone config file`.
 
@@ -327,7 +329,7 @@ the endpoint on the command line (or in `S3_ENDPOINT_URL`).
 </figure>
 
 ```bash
-export AWS_PROFILE=bucketeer S3_ENDPOINT_URL=https://s3.example.edu
+export AWS_PROFILE=s3-onprem S3_ENDPOINT_URL=https://s3.example.edu
 s5cmd ls
 s5cmd cp 'data/*' s3://my-bucket/run-42/      # parallel upload
 s5cmd sync ./data/ s3://my-bucket/data/

@@ -378,8 +378,11 @@ async def logout(request: Request, response: Response, db: Annotated[Database, D
 @router.get("/me")
 def me(request: Request, response: Response, user: Annotated[SessionUser, Depends(require_user)]):
     _no_store(response)
+    from .location import view as location_view  # location imports admin, which imports auth
+
     profile = request.app.state.db.profiles.get(user.username)
     # budgetMissing: the frontend opens the profile first until a default is saved
     return {**user.public(), "advancedMode": profile["advanced_mode"],
+            **location_view(request.app, profile),
             "budgetMissing": not profile["default_budget_number"],
             "docsUrl": request.app.state.settings.docs_url or None}

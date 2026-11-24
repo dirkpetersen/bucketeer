@@ -178,3 +178,66 @@ def test_smtp_login_without_encryption_is_refused():
         Settings(_env_file=None, **base, smtp_username="u", smtp_security="none")
     Settings(_env_file=None, **base, smtp_username="u", smtp_security="starttls")
     Settings(_env_file=None, **base, smtp_security="none")
+
+
+# -- cloud (AWS), Phase 6 --------------------------------------------------------------
+
+CLOUD_VALUES = {"cloud_user_prefix": "s3-", "cloud_admin_access_key": "AKIAEXAMPLEKEY000001",
+                "cloud_admin_secret_key": "cloud-secret"}
+
+
+def test_cloud_defaults_and_profile_names():
+    s = Settings(_env_file=None, **REQUIRED)
+    assert (s.cloud_region, s.cloud_bucket_prefix, s.cloud_profile_name) == (
+        "us-west-2", "bucketeer-", "s3-cloud")
+    assert s.aws_profile_name == "s3-onprem" and s.cloud_configured is False
+    assert Settings(_env_file=None, **REQUIRED, **CLOUD_VALUES).cloud_configured is True
+
+
+@pytest.mark.parametrize("left_out", list(CLOUD_VALUES))
+def test_partial_cloud_settings_are_refused_naming_the_missing(left_out):
+    given = {k: v for k, v in CLOUD_VALUES.items() if k != left_out}
+    with pytest.raises(ValueError) as exc:
+        Settings(_env_file=None, **REQUIRED, **given)
+    named = str(exc.value).split("REQUIRED when cloud")[0]
+    assert left_out.upper() in named
+    assert not any(f"{n.upper()}," in named or f"{n.upper()}:" in named for n in given)
+
+
+def test_partial_cloud_settings_stop_startup(monkeypatch, tmp_path):
+    for k, v in {**REQUIRED, "ldap_ca_cert_file": "", "cloud_user_prefix": "s3-"}.items():
+        monkeypatch.setenv(k.upper(), v)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        load_settings()
+    msg = str(exc.value)
+    assert "  CLOUD_ADMIN_ACCESS_KEY:" in msg and "  CLOUD_ADMIN_SECRET_KEY:" in msg
+    assert "  CLOUD_USER_PREFIX:" not in msg
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("cloud_bucket_prefix", "bucketeer"), ("cloud_bucket_prefix", "Bu-"),
+    ("cloud_bucket_prefix", "ab-"), ("cloud_bucket_prefix", "a" * 32 + "-"),
+    ("cloud_bucket_prefix", "buck_et-"), ("cloud_user_prefix", "s3"),
+    ("cloud_user_prefix", "S3-"), ("cloud_user_prefix", "-s3-"),
+    ("cloud_user_prefix", "a" * 17 + "-"), ("cloud_user_prefix", "s3.x-"),
+    ("cloud_region", "us west"), ("cloud_profile_name", "[x]"),
+    ("cloud_admin_access_key", "akia-lower"),
+])
+def test_cloud_values_are_checked(field, value):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **REQUIRED, **{**CLOUD_VALUES, field: value})
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("cloud_bucket_prefix", "abc-"), ("cloud_bucket_prefix", "a" * 31 + "-"),
+    ("cloud_bucket_prefix", "lab-2-"), ("cloud_user_prefix", "a-"),
+    ("cloud_user_prefix", "s3_x-"), ("cloud_user_prefix", "a" * 16 + "-"),
+])
+def test_cloud_values_accepted(field, value):
+    Settings(_env_file=None, **REQUIRED, **{**CLOUD_VALUES, field: value})
+
+
+def test_cloud_profile_must_differ():
+    with pytest.raises(ValueError, match="CLOUD_PROFILE_NAME"):
+        Settings(_env_file=None, **REQUIRED, cloud_profile_name="s3-onprem")

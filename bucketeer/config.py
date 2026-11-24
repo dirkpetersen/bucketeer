@@ -29,6 +29,14 @@ ENDPOINT_URL_RE = re.compile(
 
 RGW_KEY_RE = re.compile(r"^[A-Za-z0-9._+-]{1,128}\Z")
 
+# Cloud (AWS, Phase 6). Bucket names are global and the IAM policies are scoped by the
+# prefix; IAM user names are `<CLOUD_USER_PREFIX><username>`.
+CLOUD_BUCKET_PREFIX_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,30}-\Z")
+CLOUD_USER_PREFIX_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,15}-\Z")
+AWS_ACCESS_KEY_RE = re.compile(r"^[A-Z0-9]{16,128}\Z")
+# Cloud is configured when these are set; all of them or none.
+CLOUD_REQUIRED = ("CLOUD_USER_PREFIX", "CLOUD_ADMIN_ACCESS_KEY", "CLOUD_ADMIN_SECRET_KEY")
+
 
 def _check_rgw_admin_url(v: str) -> str:
     """https://host[:port][/prefix]; plain http only for a loopback host (the secret key
@@ -122,12 +130,57 @@ class Settings(BaseSettings):
     s3_endpoint_url: str = ""
     s3_region: str = "us-east-1"
     s3_addressing_style: Literal["path", "virtual", "auto"] = "virtual"
-    aws_profile_name: str = "bucketeer"
+    aws_profile_name: str = "s3-onprem"
     s3_tenant: str = ""
     s3_ca_cert_file: str = ""
     s3_tls_verify: bool = True
 
-    @field_validator("aws_profile_name")
+    # Cloud (AWS, Phase 6). Off unless CLOUD_USER_PREFIX and both admin keys are set
+    # (all three or none; checked in `_cloud_settings`).
+    cloud_region: str = "us-west-2"
+    cloud_bucket_prefix: str = "bucketeer-"
+    cloud_user_prefix: str = ""
+    cloud_admin_access_key: str = ""
+    cloud_admin_secret_key: SecretStr = SecretStr("")
+    cloud_profile_name: str = "s3-cloud"
+
+    @property
+    def cloud_configured(self) -> bool:
+        return bool(self.cloud_user_prefix and self.cloud_admin_access_key
+                    and self.cloud_admin_secret_key.get_secret_value())
+
+    @field_validator("cloud_region")
+    @classmethod
+    def _check_cloud_region(cls, v: str) -> str:
+        if not REGION_RE.match(v):
+            raise ValueError("must be an AWS region such as us-west-2")
+        return v
+
+    @field_validator("cloud_bucket_prefix")
+    @classmethod
+    def _check_cloud_bucket_prefix(cls, v: str) -> str:
+        if not CLOUD_BUCKET_PREFIX_RE.match(v):
+            raise ValueError("must be 4-32 lowercase letters, digits or '-', start with a "
+                             "letter or digit and end with '-', e.g. bucketeer-")
+        return v
+
+    @field_validator("cloud_user_prefix")
+    @classmethod
+    def _check_cloud_user_prefix(cls, v: str) -> str:
+        if v and not CLOUD_USER_PREFIX_RE.match(v):
+            raise ValueError("must be 2-17 lowercase letters, digits, '_' or '-', start "
+                             "with a letter or digit and end with '-', e.g. s3-")
+        return v
+
+    @field_validator("cloud_admin_access_key")
+    @classmethod
+    def _check_cloud_key(cls, v: str) -> str:
+        v = v.strip()
+        if v and not AWS_ACCESS_KEY_RE.match(v):
+            raise ValueError("must be an AWS access key id (capital letters and digits)")
+        return v
+
+    @field_validator("aws_profile_name", "cloud_profile_name")
     @classmethod
     def _check_profile(cls, v: str) -> str:
         if not PROFILE_NAME_RE.match(v):
@@ -171,6 +224,17 @@ class Settings(BaseSettings):
             if self.smtp_username and self.smtp_security == "none":
                 raise ValueError("SMTP_USERNAME with SMTP_SECURITY=none would send the "
                                  "login in clear text; use starttls or ssl")
+        return self
+
+    @model_validator(mode="after")
+    def _cloud_settings(self):
+        if missing := _missing_cloud({
+                "CLOUD_USER_PREFIX": self.cloud_user_prefix,
+                "CLOUD_ADMIN_ACCESS_KEY": self.cloud_admin_access_key,
+                "CLOUD_ADMIN_SECRET_KEY": self.cloud_admin_secret_key.get_secret_value()}):
+            raise ValueError(f"{', '.join(missing)}: {CLOUD_PARTIAL}")
+        if self.cloud_profile_name == self.aws_profile_name:
+            raise ValueError("CLOUD_PROFILE_NAME must differ from AWS_PROFILE_NAME")
         return self
 
     @model_validator(mode="after")
@@ -254,6 +318,23 @@ class Settings(BaseSettings):
         return v
 
 
+CLOUD_PARTIAL = ("REQUIRED when cloud is configured (some of CLOUD_USER_PREFIX, "
+                 "CLOUD_ADMIN_ACCESS_KEY, CLOUD_ADMIN_SECRET_KEY are set), not set")
+
+
+def _missing_cloud(values: dict[str, str]) -> list[str]:
+    """Cloud needs all of CLOUD_REQUIRED or none: the names missing from a partial set."""
+    if not any(values.values()):
+        return []
+    return [n for n in CLOUD_REQUIRED if not values.get(n)]
+
+
+def _cloud_problems() -> list[str]:
+    """Missing cloud settings, read from the environment (see `_backend_problems`)."""
+    missing = _missing_cloud({n: os.environ.get(n, "").strip() for n in CLOUD_REQUIRED})
+    return [f"  {n}: {CLOUD_PARTIAL}" for n in missing]
+
+
 def _backend_problems() -> list[str]:
     """The missing settings of the chosen admin backend, read from the environment, so one
     startup message lists them together with any other missing setting."""
@@ -300,6 +381,8 @@ def load_settings() -> Settings:
         return settings
     except ValidationError as e:
         lines = _backend_problems()  # pydantic skips the cross-field check after field errors
+        backend_listed = bool(lines)
+        lines += _cloud_problems()
         listed = bool(lines)
         for err in e.errors():
             if not err["loc"]:  # the cross-field check; _backend_problems() listed these
@@ -310,7 +393,7 @@ def load_settings() -> Settings:
             missing = err["type"] in ("missing", "string_too_short", "too_short")
             lines.append(f"  {name}: {'REQUIRED, not set' if missing else err['msg']}")
         msg = "Invalid configuration (see .env.default):\n" + "\n".join(sorted(lines))
-        if listed:
+        if backend_listed:
             backend = (os.environ.get("ADMIN_BACKEND") or "rgw").strip().lower()
             how = ("ADMIN_BACKEND is not set, so the default rgw (RGW Admin Ops) applies"
                    if not os.environ.get("ADMIN_BACKEND") else f"ADMIN_BACKEND={backend}")

@@ -302,7 +302,7 @@ the item lands.
   `meta.json`); admin "Backup" tab (time default 03:00, retention default 30, back up
   now, last 30); `python3 app.py --restore-backup <key|latest>` with migrations and
   fill-gaps catch-up, `.env.restored-<time>`; audit `backup.*`, `system.restore`.
-- [ ] P6-8 Cloud foundation (PLAN 4): `CLOUD_*` settings (REQUIRED only when cloud is
+- [x] P6-8 Cloud foundation (PLAN 4): `CLOUD_*` settings (REQUIRED only when cloud is
   configured), AWS admin client (boto3; IAM, S3, CloudWatch), connection check, global
   "Default location" admin setting, per-user Cloud / On Premises switch left of the
   Advanced toggle, profile names `s3-onprem` / `CLOUD_PROFILE_NAME=s3-cloud`. Tests on

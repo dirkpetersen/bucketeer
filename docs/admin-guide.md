@@ -59,7 +59,51 @@ How the charge is calculated:
 | Bucket keys | All keys scoped to one bucket; revoke them. Admins never see a secret. |
 | Audit | Who did what and when; filter and export CSV. |
 | Offboarding | Daily check against AD. Starts in report-only mode; switch to enforce when you trust it. |
-| Settings | Bucket naming rules, budget number format, placements, default quota, uid mappings, notification endpoints. |
+| Settings | Default location (On Premises or Cloud), bucket naming rules, budget number format, placements, default quota, uid mappings, notification endpoints. |
+
+## Cloud (AWS) { #cloud }
+
+Bucketeer can also keep buckets in one shared AWS account. It is off until you set it up.
+
+**1. Prepare the AWS account (once).** An AWS administrator runs `tools/aws-setup` with
+the AWS CLI v2. Pick a name for Bucketeer's own IAM user and a prefix for the per-person
+IAM users (2-17 lowercase letters, digits, `_` or `-`, ending with `-`):
+
+```bash
+tools/aws-setup --admin-user <name> --user-prefix <prefix> --print        # show the policies only
+tools/aws-setup --admin-user <name> --user-prefix <prefix> --create-key   # set up, print the .env lines once
+```
+
+The script creates the permissions boundary for person users, the admin policy and the
+admin user, and with `--create-key` prints the `CLOUD_*` lines. `--prefix` (default
+`bucketeer-`) and `--region` (default `us-west-2`) must match `CLOUD_BUCKET_PREFIX` and
+`CLOUD_REGION`. See `tools/README.md` for details.
+
+**2. Put the lines into `.env`** (`appmo env bucketeer`) and restart:
+
+| Variable | Meaning |
+|---|---|
+| `CLOUD_REGION` | AWS region, default `us-west-2`. |
+| `CLOUD_BUCKET_PREFIX` | Every cloud bucket is `<prefix><username>-<name>`; default `bucketeer-`. |
+| `CLOUD_USER_PREFIX` | Name prefix of the per-person IAM users (the `--user-prefix`). |
+| `CLOUD_ADMIN_ACCESS_KEY`, `CLOUD_ADMIN_SECRET_KEY` | The admin user's key from `--create-key`. |
+| `CLOUD_PROFILE_NAME` | Profile name for cloud keys on users' computers, default `s3-cloud`. |
+
+Cloud is on only when `CLOUD_USER_PREFIX` and both keys are set. Setting only some of them
+stops Bucketeer at startup with a message naming the missing ones. Bucketeer checks the
+connection at startup and then every hour (every 5 minutes while it fails).
+
+**3. Choose the default location.** On **Settings > Default location** Bucketeer shows the
+result of a fresh connection check (account and region, or why it failed). **Cloud** can
+be chosen only while the check passes. Once Cloud is the default, everyone works in the
+cloud by default, with Advanced mode on or off; people with Advanced mode on get a
+**Cloud | On Premises** switch next to the Advanced toggle and can choose for themselves.
+Changes are recorded in the audit log.
+
+!!! note "Profile names changed"
+    The on-premises profile on users' computers is now `s3-onprem` (`AWS_PROFILE_NAME`; it
+    was `bucketeer`) and cloud keys use `s3-cloud` (`CLOUD_PROFILE_NAME`). Existing `[bucketeer]` sections on
+    users' computers are left alone; the user guide tells people to switch.
 
 For installation and the cluster side, see [Deployment](deployment.md) and
 [Admin Ops setup](admin-ops-setup.md).

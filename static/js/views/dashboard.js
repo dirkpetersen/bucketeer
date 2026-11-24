@@ -3,6 +3,8 @@ import { icon } from "../icons.js";
 import { credentialsCard } from "./credentials.js";
 import { save } from "../storage.js";
 import { isAdvanced, setAdvanced, subscribe } from "../advanced.js";
+import { getLocation, subscribe as onLocation } from "../location.js";
+import { locationSwitch } from "../components/location-switch.js";
 import { toast } from "../components/toast.js";
 import { renderAdmin } from "./admin.js";
 import { renderProfile } from "./profile.js";
@@ -26,11 +28,17 @@ export function renderDashboard({ me, appName, onLogout, page = "home" }) {
   // Advanced mode: global store (advanced.js), server-persisted per user.
   const sw = h("button", { class: "switch", type: "button", role: "switch", "aria-checked": String(isAdvanced()) },
     h("span", { class: "switch-label", text: "Advanced" }), h("span", { class: "switch-track", "aria-hidden": "true" }));
-  const shell = h("div", { class: "shell", "data-advanced": String(isAdvanced()), "data-page": page });
+  const shell = h("div", { class: "shell", "data-advanced": String(isAdvanced()), "data-page": page, "data-location": getLocation() });
   const unsub = subscribe((on) => {
     if (!shell.isConnected) { unsub(); return; } // this shell was replaced
     sw.setAttribute("aria-checked", String(on));
     shell.dataset.advanced = String(on);
+  });
+  // Storage location (Phase 6): the switch sits left of Advanced; the hero shows a
+  // "Cloud" pill while the effective location is cloud (also with Advanced off).
+  const unsubLoc = onLocation((loc) => {
+    if (!shell.isConnected) { unsubLoc(); return; }
+    shell.dataset.location = loc;
   });
   sw.addEventListener("click", () => {
     setAdvanced(!isAdvanced()).catch((err) => toast.error(err.message || "Could not save the Advanced setting."));
@@ -60,7 +68,7 @@ export function renderDashboard({ me, appName, onLogout, page = "home" }) {
     h("div", { class: "hdr-in" },
       h("a", { class: "brand", href: "#/", "aria-label": `${appName} home` },
         h("img", { src: "img/mark.svg", alt: "", width: 30, height: 30 }), h("span", { class: "brand-name", text: appName })),
-      sw, themeBtn,
+      locationSwitch(), sw, themeBtn,
       h("div", { class: "user" },
         h("button", { class: "user-btn", type: "button", popovertarget: menuId, "aria-label": `Account menu for ${name}` },
           h("span", { class: "avatar", "aria-hidden": "true", text: initials(name) }), h("span", { class: "user-name", text: name })),
@@ -82,7 +90,9 @@ export function renderDashboard({ me, appName, onLogout, page = "home" }) {
       h("span", { class: "eyebrow", text: "Your workspace" }),
       h("h1", { text: `${greeting()}, ${first}.` }),
       h("p", { text: "Your S3 credentials and your buckets, in one place." }),
-      h("span", { class: "chip adv-note" }, h("span", { class: "dot" }), "Advanced mode on")),
+      h("div", { class: "hero-notes" },
+        h("span", { class: "chip chip-accent loc-note" }, icon("cloud"), "Cloud"),
+        h("span", { class: "chip adv-note" }, h("span", { class: "dot" }), "Advanced mode on"))),
     h("div", { class: "ws" },
       h("div", { class: "ws-col" }, credentialsCard()),
       h("div", { class: "ws-col" }, bucketsCard(), sharedWithMeCard())));

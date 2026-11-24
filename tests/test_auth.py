@@ -443,6 +443,8 @@ def test_me_returns_session_user_or_401(env):
     assert r.json() == {
         "username": "bob", "displayName": "Bob B", "email": "bob@example.org", "isAdmin": True,
         "advancedMode": False, "budgetMissing": True, "docsUrl": "https://dirkpetersen.github.io/bucketeer/",
+        "location": "onprem", "locationChoice": None, "defaultLocation": "onprem",
+        "cloudAvailable": False,
     }
 
 

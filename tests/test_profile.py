@@ -40,7 +40,9 @@ def test_get_defaults(env):
     assert body["username"] == "alice"
     assert body["defaultBudgetNumber"] is None
     assert set(body) == {"username", "displayName", "email", "defaultBudgetNumber",
-                         "advancedMode", "budgetExample"}
+                         "advancedMode", "budgetExample", "location", "locationChoice",
+                         "defaultLocation", "cloudAvailable"}
+    assert body["location"] == "onprem" and body["cloudAvailable"] is False
     assert r.headers["cache-control"] == "no-store"
 
 

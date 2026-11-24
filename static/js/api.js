@@ -157,6 +157,10 @@ export const unsuspendUser = (uid) => api(`/admin/users/${enc(uid)}/unsuspend`, 
 
 // Admin settings (naming rules, placement, default quota, uid mappings, notification endpoints).
 export const getSettings = () => api("/admin/settings");
+// Global "Default location" (onprem|cloud): the GET runs a fresh AWS connection check.
+export const getLocationSetting = () => api("/admin/settings/location");
+export const saveLocationSetting = (value) =>
+  api("/admin/settings/location", { method: "PUT", json: { default: value } });
 export const saveNaming = (rules) => api("/admin/settings/naming", { method: "PUT", json: rules });
 export const testNaming = (body) => api("/admin/settings/naming/test", { method: "POST", json: body });
 export const saveBudgetNumber = (rules) => api("/admin/settings/budget-number", { method: "PUT", json: rules });

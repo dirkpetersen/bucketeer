@@ -13,14 +13,14 @@ const cp = document.getElementById("cp-demo");
 cp.tabs = [
   {
     label: "~/.aws/config", filename: "config",
-    content: "# Managed by Bucketeer\n[profile bucketeer]\nregion = us-east-1\nendpoint_url = https://s3.example.org\ns3 =\n  addressing_style = virtual\n",
+    content: "# Managed by Bucketeer\n[profile s3-onprem]\nregion = us-east-1\nendpoint_url = https://s3.example.org\ns3 =\n  addressing_style = virtual\n",
   },
   {
     label: "~/.aws/credentials", filename: "credentials",
-    content: "[bucketeer]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n",
+    content: "[s3-onprem]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n",
   },
 ];
-cp.hint = "Save both files, then run: aws --profile bucketeer s3 ls";
+cp.hint = "Save both files, then run: aws --profile s3-onprem s3 ls";
 
 const sw = document.getElementById("swatches");
 for (const t of ["bg", "surface", "surface-2", "text", "text-muted", "accent", "accent-text", "border-strong", "danger", "success"]) {

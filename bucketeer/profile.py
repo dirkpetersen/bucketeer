@@ -2,11 +2,13 @@
 
 - `GET /api/profile` -> `{username, displayName, email, defaultBudgetNumber|null,
   budgetExample|null}` (the admin's example hint)
-- `PUT /api/profile` `{defaultBudgetNumber?: string|null, advancedMode?: bool}` ->
-  the same shape (plus `advancedMode`). Partial update: only the fields present in
+- `PUT /api/profile` `{defaultBudgetNumber?: string|null, advancedMode?: bool,
+  location?: "onprem"|"cloud"|null}` -> the same shape (plus `advancedMode` and the
+  location fields of `location.view`). Partial update: only the fields present in
   the body change. Null or an empty budget string clears it. Rules:
   `budget.validate_budget_number` (422 with a message). Each changed field is
-  audited as `profile.update` with `field`, old and new value.
+  audited as `profile.update` with `field`, old and new value. `location: "cloud"` is
+  refused (422) while cloud is not available; null follows the admin's default.
 
 The username comes only from the session, never from the request.
 """
@@ -19,6 +21,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .auth import SessionUser, require_user
 from .budget import BudgetNumberError, budget_example, validate_budget_number
+from .location import LOCATIONS, cloud_available
+from .location import view as location_view
 
 # Owner, 2026-11-21: no new bucket or credential until the user saved a default budget
 # number. Admins are exempt; existing keys stay revealable. Tests switch it off
@@ -47,25 +51,26 @@ class ProfileUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     defaultBudgetNumber: str | None = Field(default=None, max_length=4096)
     advancedMode: bool | None = None
+    location: str | None = None
 
 
-def _view(user: SessionUser, stored: str | None, advanced: bool, example: str | None) -> dict:
+async def _view(request: Request, user: SessionUser, profile: dict) -> dict:
+    db = request.app.state.db
     return {
+        **await db.run(location_view, request.app, profile),
         "username": user.username,
         "displayName": user.display_name,
         "email": user.email,
-        "defaultBudgetNumber": stored,
-        "advancedMode": advanced,
-        "budgetExample": example,
+        "defaultBudgetNumber": profile["default_budget_number"],
+        "advancedMode": profile["advanced_mode"],
+        "budgetExample": await db.run(budget_example, db.settings),
     }
 
 
 @router.get("")
 async def get_profile(request: Request, user: Annotated[SessionUser, Depends(require_user)]):
     db = request.app.state.db
-    profile = await db.run(db.profiles.get, user.username)
-    example = await db.run(budget_example, db.settings)
-    return _view(user, profile["default_budget_number"], profile["advanced_mode"], example)
+    return await _view(request, user, await db.run(db.profiles.get, user.username))
 
 
 @router.put("")
@@ -76,6 +81,11 @@ async def put_profile(
     sent = body.model_fields_set
     if "advancedMode" in sent and not isinstance(body.advancedMode, bool):
         raise HTTPException(422, "advancedMode must be true or false")
+    if "location" in sent:  # checked before anything is written
+        if body.location is not None and body.location not in LOCATIONS:
+            raise HTTPException(422, "location must be \"onprem\", \"cloud\" or null")
+        if body.location == "cloud" and not cloud_available(request.app):
+            raise HTTPException(422, "Cloud storage isn't available right now.")
     profile = await db.run(db.profiles.get, user.username)
     budget, advanced = profile["default_budget_number"], profile["advanced_mode"]
     if "defaultBudgetNumber" in sent:
@@ -97,4 +107,9 @@ async def put_profile(
                      user.username,
                      {"field": "advanced_mode", "old": advanced, "new": body.advancedMode})
         advanced = body.advancedMode
-    return _view(user, budget, advanced, await db.run(budget_example, db.settings))
+    if "location" in sent and body.location != profile["location"]:
+        await db.run(db.profiles.set_location, user.username, body.location)
+        await db.run(db.audit.add, user.username, "profile.update", "profile",
+                     user.username,
+                     {"field": "location", "old": profile["location"], "new": body.location})
+    return await _view(request, user, await db.run(db.profiles.get, user.username))

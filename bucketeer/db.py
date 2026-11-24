@@ -234,6 +234,12 @@ MIGRATIONS: list[Migration] = [
         PRIMARY KEY (day, bucket)
     );
     """,
+    # v13: the user's own storage location (Cloud / On Premises switch, Phase 6). NULL = the
+    # admin's global default; used only while Advanced mode is on.
+    """
+    ALTER TABLE user_profiles ADD COLUMN location TEXT
+        CHECK (location IS NULL OR location IN ('onprem', 'cloud'));
+    """,
 ]
 
 _MISSING: Any = object()
@@ -510,6 +516,7 @@ class UserProfiles(_Repo):
                 "ad_username": ad_username,
                 "default_budget_number": None,
                 "advanced_mode": False,
+                "location": None,
                 "updated_at": None,
             }
         row["advanced_mode"] = bool(row["advanced_mode"])
@@ -529,6 +536,9 @@ class UserProfiles(_Repo):
 
     def set_advanced_mode(self, ad_username: str, enabled: bool) -> None:
         self._upsert(ad_username, "advanced_mode", int(enabled))
+
+    def set_location(self, ad_username: str, location: str | None) -> None:
+        self._upsert(ad_username, "location", location)
 
 
 class Buckets(_Repo):

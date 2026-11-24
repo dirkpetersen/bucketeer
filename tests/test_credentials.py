@@ -89,7 +89,7 @@ def test_list_has_no_secrets(env):
     r = env.alice.get("/api/credentials")
     assert r.status_code == 200
     assert r.json() == {
-        "profile": "bucketeer", "region": "us-east-1", "endpointUrl": "https://s3.example.org",
+        "profile": "s3-onprem", "region": "us-east-1", "endpointUrl": "https://s3.example.org",
         "addressingStyle": "virtual", "docsUrl": "https://dirkpetersen.github.io/bucketeer/",
         "keys": [{"accessKey": ALICE[2]}],
     }

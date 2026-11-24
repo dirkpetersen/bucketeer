@@ -98,3 +98,9 @@ textarea.input { resize: vertical; line-height: var(--lh-body); }
 .off-limit-err ul { margin: 0; padding-left: var(--sp-4); }
 .off-limits-act .btn { min-height: 2.5rem; }
 .off-limits-used b { color: var(--text); font-weight: 600; }
+
+/* Default location card (admin-location.js) */
+.loc-status { min-height: 1.5rem; }
+.loc-check { display: flex; align-items: center; gap: var(--sp-2); }
+.loc-status .set-warn svg, .loc-status .set-ok svg { flex: none; }
+.set-check:has(input:disabled) { opacity: 0.6; cursor: not-allowed; }

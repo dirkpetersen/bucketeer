@@ -344,7 +344,7 @@ Bucketeer DEMO  (fake directory, mock cluster, moto S3; nothing here is real)
   Use the keys without touching your real ~/.aws: reveal them in the UI, download
   the files (named config and credentials) into {aws_dir}/ and run:
       AWS_CONFIG_FILE={aws_dir}/config AWS_SHARED_CREDENTIALS_FILE={aws_dir}/credentials \\
-        aws --profile bucketeer s3 ls
+        aws --profile s3-onprem s3 ls
   (--keep-data keeps that folder.)
 
 Ctrl+C stops everything.
