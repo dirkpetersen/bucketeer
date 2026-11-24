@@ -149,19 +149,19 @@ def test_reconcile_holds_the_user_lock_and_uses_the_fresh_row(env):
     the row as it is inside the lock, not the stale one it listed earlier."""
     from unittest.mock import patch
 
-    from bucketeer import buckets
     env.db.buckets.set_budget_number("alice-new", "WT-AAA")
     env.db.buckets.set_tag_synced("alice-new", False)
     stale = [dict(env.db.buckets.get("alice-new"))]
     # ... then the user saves BBB (row changes, still unsynced for this test)
     env.db.buckets.set_budget_number("alice-new", "WT-BBB")
-    real = buckets._write_budget_tag
+    from bucketeer import bucket_facts
+    real = bucket_facts.write
     held = []
 
-    def spy(s3, bucket, value):
+    def spy(s3, bucket, facts):
         held.append(env.app.state.bucket_locks["alice"].locked())
-        return real(s3, bucket, value)
-    with patch.object(buckets, "_write_budget_tag", spy), \
+        return real(s3, bucket, facts)
+    with patch.object(bucket_facts, "write", spy), \
             patch.object(env.db.buckets, "list", lambda owner=None: stale):
         r = env.alice.post("/api/buckets/reconcile", headers=H)
     assert r.json()["synced"] == ["alice-new"]

@@ -85,6 +85,19 @@ def sid_for(key_id: int) -> str:
     return s3docs.PREFIX + "key-" + str(key_id)
 
 
+def key_display_name(owner_ad: str, bucket_short: str, access: str) -> str:
+    """The RGW display name of a key user: owner, bucket and access, so the key can be
+    rebuilt from Ceph (PLAN 1), e.g. `bucketeer key: jdoe / reports / rw`."""
+    return f"bucketeer key: {owner_ad} / {bucket_short} / {'rw' if access == 'readwrite' else 'ro'}"
+
+
+def key_display_names(row: dict, bucket_short: str) -> tuple[str, str]:
+    """Every display name Bucketeer has given the key user of `row`: current, then the
+    format used before P6-2 (`Bucketeer key <label> for <owner> (<bucket>)`)."""
+    return (key_display_name(row["owner_ad_username"], bucket_short, row["access"]),
+            f"Bucketeer key {row['label']} for {row['owner_ad_username']} ({bucket_short})")
+
+
 def key_uid(owner_uid: str, label: str) -> tuple[str, str]:
     """(full RGW uid, bare uid) of the key user for `label`; 422 when it is not a valid uid."""
     tenant, bare = split_uid(owner_uid)
@@ -282,7 +295,7 @@ async def create_key(name: str, body: CreateBody, request: Request, response: Re
         sid = sid_for(row["id"])
         step, statement_tried = "create the key user", False
         user_state = "maybe"  # none: croit refused (not ours); maybe: unknown; ours: created
-        display = f"Bucketeer key {body.label} for {acct.username} ({short})"
+        display = key_display_name(acct.username, short, body.access)
         try:
             try:
                 await croit.create_user(kb, display, None, tenant or None)
@@ -325,8 +338,11 @@ async def create_key(name: str, body: CreateBody, request: Request, response: Re
 
 async def _rollback(request: Request, acct: RgwAccount, row: dict, short: str, sid: str,
                     statement_tried: bool, user_state: str = "ours", display: str = "") -> bool:
-    """Undo a failed create. True when nothing of the key is left (row revoked as failed)."""
+    """Undo a failed create. True when nothing of the key is left (row revoked as failed).
+    A user of unknown origin is deleted only when its display name is ours: `display` or
+    either name `key_display_names` gives for the row (the current and the old format)."""
     croit, db = request.app.state.croit, request.app.state.db
+    displays = {display, *key_display_names(row, short)} - {""}
     clean = True
     if statement_tried:
         try:
@@ -337,7 +353,7 @@ async def _rollback(request: Request, acct: RgwAccount, row: dict, short: str, s
     try:
         if user_state == "maybe":  # e.g. a timeout: delete only a user that is ours
             user = await croit.get_user(row["rgw_uid"])
-            if user is not None and str(user.get("name")) != display:
+            if user is not None and str(user.get("name")) not in displays:
                 user_state = "none"
         if user_state != "none":
             await _delete_key_user(croit, row["rgw_uid"])
@@ -527,8 +543,7 @@ async def _cleanup_row(app, row: dict) -> str:
             return "needs_cleanup"
     except CroitClientError:
         return "retry"
-    display = f"Bucketeer key {row['label']} for {row['owner_ad_username']} ({short})"
-    clean = await _rollback(shim, shim, row, short, sid_for(row["id"]), True, "maybe", display)
+    clean = await _rollback(shim, shim, row, short, sid_for(row["id"]), True, "maybe")
     await _audit(shim, "system", "bucket_key.cleanup", str(row["id"]), uid=row["rgw_uid"],
                  bucket=row["bucket_name"], result="rolled_back" if clean else "needs_cleanup")
     return "done" if clean else "needs_cleanup"

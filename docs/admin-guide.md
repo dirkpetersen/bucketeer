@@ -50,12 +50,41 @@ How the charge is calculated:
   read) costs nothing. **Days measured** shows this for each month.
 - The current price applies to all months shown. 1 TiB = 2^40 bytes.
 
+## Bucket tags
+
+Every bucket carries its own record as `bucketeer-*` tags, so its facts survive outside
+Bucketeer's database:
+
+| Tag | Value |
+|---|---|
+| `bucketeer-budget` | budget number |
+| `bucketeer-bucket` | bucket name (`tenant:bucket` with a tenant) |
+| `bucketeer-owner` | owner's S3 user (`tenant:uid` with a tenant) |
+| `bucketeer-owner-email` | owner's email from AD |
+| `bucketeer-creator` | who created it in Bucketeer |
+| `bucketeer-created` | creation date (UTC) |
+| `bucketeer-quota` | bucket quota in whole TiB (rounded up), or `unlimited` |
+| `bucketeer-product` | product, `Tier-3-S3` on premises |
+| `bucketeer-location` | `onprem` |
+
+Bucketeer writes them with the owner's own key when a bucket is created, when its budget
+number or quota changes, and when a failed write is retried. Users see them read-only in
+the tag editor; they leave 41 of the 50 tags a bucket can have for users. Tags are a
+record, not proof: an owner can change them with their own keys, and nothing that
+decides access reads them.
+
+For buckets that existed before, use **Write Bucketeer tags** on the **Buckets** tab. It
+writes the tags to every bucket with its owner's key and reports how many were updated,
+already up to date, skipped (owner suspended, unknown or without an S3 key) and failed.
+It changes nothing else and is safe to run again. Facts Bucketeer doesn't know (for
+example the creation date of a bucket made outside Bucketeer) are left out.
+
 ## Other tabs
 
 | Tab | What it does |
 |---|---|
 | Users | Quotas, suspend and restore. Suspending a user also suspends their bucket keys. |
-| Buckets | Usage, bucket quotas, budget numbers (with a check against the format), chargeback CSV. |
+| Buckets | Usage, bucket quotas, budget numbers (with a check against the format), chargeback CSV, Write Bucketeer tags. |
 | Bucket keys | All keys scoped to one bucket; revoke them. Admins never see a secret. |
 | Audit | Who did what and when; filter and export CSV. |
 | Offboarding | Daily check against AD. Starts in report-only mode; switch to enforce when you trust it. |

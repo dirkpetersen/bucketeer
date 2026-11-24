@@ -10,6 +10,7 @@ import pytest
 from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 
+from bucketeer.bucket_facts import KEYS as FACT_KEYS
 from bucketeer.db import Database
 from bucketeer.ldapauth import AdAuthenticator
 from bucketeer.main import create_app
@@ -76,12 +77,17 @@ class Env:
     def moto_buckets(self):
         return {b["Name"] for b in self.moto().list_buckets()["Buckets"]}
 
-    def tags(self, bucket):
+    def all_tags(self, bucket):
         try:
             tagset = self.moto().get_bucket_tagging(Bucket=bucket)["TagSet"]
         except ClientError:
             return {}
         return {t["Key"]: t["Value"] for t in tagset}
+
+    def tags(self, bucket):
+        """The tags without Bucketeer's fact tags (the budget tag and user tags stay)."""
+        return {k: v for k, v in self.all_tags(bucket).items()
+                if k == "bucketeer-budget" or k not in FACT_KEYS}
 
     def audit(self, prefix="bucket."):
         return [a for a in self.db.audit.query(limit=1000) if a["action"].startswith(prefix)]

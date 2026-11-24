@@ -351,7 +351,8 @@ async def set_user_quota(uid: str, body: QuotaBody, admin: Admin, croit: Croit, 
 
 
 @router.put("/buckets/{bucket}/quota")
-async def set_bucket_quota(bucket: str, body: QuotaBody, admin: Admin, croit: Croit, db: Db):
+async def set_bucket_quota(bucket: str, body: QuotaBody, request: Request, admin: Admin,
+                           croit: Croit, db: Db):
     bucket = _bucket_name(bucket)
     args = _quota_args(body, bucket=True)
     before = _quota((await _fetch_bucket(croit, bucket)).get("bucket_quota"), zero_unlimited=True)
@@ -360,16 +361,34 @@ async def set_bucket_quota(bucket: str, body: QuotaBody, admin: Admin, croit: Cr
     except CroitClientError as e:
         raise croit_http_error(e) from e
     try:
-        after = _quota((await _fetch_bucket(croit, bucket)).get("bucket_quota"),
-                       zero_unlimited=True)
+        stats = await _fetch_bucket(croit, bucket)
+        after = _quota(stats.get("bucket_quota"), zero_unlimited=True)
     except HTTPException:
         await _audit(db, admin, "admin.bucket.quota", "bucket", bucket,
                      {"before": before, "after": None, "requested": args,
                       "readback_failed": True})
         raise
-    details = {"before": before, "after": after}
+    tag_ok = await _sync_quota_tag(request, bucket, stats)
+    details = {"before": before, "after": after, "tag_synced": tag_ok}
     await _audit(db, admin, "admin.bucket.quota", "bucket", bucket, details)
-    return {"bucket": bucket, "quota": after}
+    return {"bucket": bucket, "quota": after, "tagSynced": tag_ok}
+
+
+async def _sync_quota_tag(request: Request, bucket: str, stats: dict) -> bool:
+    """Mirror the new quota into the bucket's `bucketeer-quota` tag with the OWNER's key
+    (best effort; a failure marks the row unsynced for the owner's reconcile)."""
+    from . import bucket_facts  # it imports this module
+
+    db = request.app.state.db
+    owner = stats.get("owner") or ""
+    ok = False
+    if owner:
+        ok, _ = await bucket_facts.sync(request.app, owner, bucket, stats=stats)
+    try:
+        await db.run(db.buckets.set_tag_synced, bucket, ok)
+    except Exception:
+        log.exception("could not record the tag state of %s", bucket)
+    return ok
 
 
 # -- suspend / unsuspend -----------------------------------------------------------

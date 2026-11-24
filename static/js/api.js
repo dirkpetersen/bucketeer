@@ -147,6 +147,7 @@ export const auditExportUrl = (params) => `/api/admin/audit/export.csv?${auditQu
 export const adminRevokeBucketKey = (id) => api(`/admin/bucket-keys/${Number(id)}`, { method: "DELETE" });
 export const setUserQuota = (uid, quota) =>
   api(`/admin/users/${enc(uid)}/quota`, { method: "PUT", json: quota });
+export const writeAllBucketTags = () => api("/admin/buckets/write-tags", { method: "POST" });
 export const setBucketQuota = (bucket, quota) =>
   api(`/admin/buckets/${enc(bucket)}/quota`, { method: "PUT", json: quota });
 export const getOffboarding = () => api("/admin/offboarding");

@@ -77,6 +77,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "DELETE /api/admin/bucket-keys/{key_id}": ("admin.bucket_key.revoke",),
     "PUT /api/admin/users/{uid}/quota": ("admin.user.quota",),
     "PUT /api/admin/buckets/{bucket}/quota": ("admin.bucket.quota",),
+    "POST /api/admin/buckets/write-tags": ("admin.buckets.write_tags",),
     "POST /api/admin/users/{uid}/suspend": ("admin.user.suspend",),
     "POST /api/admin/users/{uid}/unsuspend": ("admin.user.unsuspend",),
     "POST /api/admin/offboarding/run": ("offboarding.run",),
@@ -409,6 +410,8 @@ def run(tmp_path_factory, moto_server):
         "/api/admin/users/alice/quota", json=quota, headers=H))
     r.step("PUT /api/admin/buckets/{bucket}/quota", lambda: b.put(
         "/api/admin/buckets/alice-data/quota", json=quota, headers=H))
+    r.step("POST /api/admin/buckets/write-tags", lambda: b.post(
+        "/api/admin/buckets/write-tags", headers=H))
     r.step("POST /api/admin/users/{uid}/suspend", lambda: b.post(
         "/api/admin/users/alice/suspend", headers=H))
     r.step("POST /api/admin/users/{uid}/unsuspend", lambda: b.post(

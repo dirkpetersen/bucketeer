@@ -3,17 +3,20 @@
 The server never looks at `advancedMode`; authorization is the same as for every bucket route
 (`require_active_rgw_user`, own bucket verified in croit, the user's OWN S3 key, CSRF on PUT).
 
-- `GET` -> `{tags: [{key, value, managed}], etag}`; managed tags (`bucketeer-*`, any case) come
-  first and are read only (the budget number lives in `bucketeer-budget`, edit it with
-  `PUT /api/buckets/{name}/budget`). No tag set (NoSuchTagSet) -> `[]`. `etag` is a SHA-256 of
-  the canonical tag list (managed ones included).
+- `GET` -> `{tags: [{key, value, managed}], etag, maxUserTags}`; managed tags (`bucketeer-*`,
+  any case) come first and are read only (the budget number lives in `bucketeer-budget`, edit
+  it with `PUT /api/buckets/{name}/budget`; the others are `bucket_facts`). No tag set
+  (NoSuchTagSet) -> `[]`. `etag` is a SHA-256 of the canonical tag list (managed ones
+  included). `maxUserTags` = 50 minus the managed tags present and the fact tags not yet
+  written.
 - `PUT {tags: [{key, value}], etag}` replaces the set of NON-managed tags; every managed tag is
   kept as it is. An empty list removes the user tags. Answers the GET shape plus `changed`.
   Validation failures -> 422 `{detail, errors: [{tag (1-based|null), field, message}]}`:
   key 1-128 and value 0-256 characters of letters, digits, space and `+ - = . _ : / @`
   (Unicode letters allowed, no control characters), unique keys (case sensitive), no `aws:`
   prefix, no `bucketeer-` prefix (case-insensitive, managed tags are not editable here), at
-  most 50 tags in total counting the managed ones.
+  most 50 tags in total counting the managed ones: room is always kept for the nine
+  `bucket_facts.KEYS` (written or not), so users get at most 41.
 - The etag is re-checked INSIDE `s3docs.bucket_lock`: 409 `{etagMismatch: true, current}`.
 - Audit `bucket.tags` (before/after user tags only; only when changed).
 """
@@ -29,7 +32,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from . import s3docs
+from . import bucket_facts, s3docs
 from .auth import SessionUser, require_user
 from .buckets import _audit, _full, _own_buckets, _own_name
 from .rgw_user import RgwAccount, require_active_rgw_user
@@ -81,8 +84,13 @@ def etag_of(rows: list[dict]) -> str:
     return hashlib.sha256(json.dumps(flat, separators=(",", ":")).encode()).hexdigest()
 
 
+def reserved_count(rows: list[dict]) -> int:
+    """Tags Bucketeer keeps room for: the managed ones present plus every fact tag."""
+    return len({r["key"] for r in rows if r["managed"]} | set(bucket_facts.KEYS))
+
+
 def view(rows: list[dict]) -> dict[str, Any]:
-    return {"tags": rows, "etag": etag_of(rows)}
+    return {"tags": rows, "etag": etag_of(rows), "maxUserTags": MAX_TAGS - reserved_count(rows)}
 
 
 def normalize(raw: list[dict], managed_count: int = 0,
@@ -163,7 +171,8 @@ def _apply(s3, bucket: str, raw: list[dict], etag: str) -> dict:
         if etag_of(current) != etag:
             raise EtagMismatch(current)
         managed = [r for r in current if r["managed"]]
-        new = normalize(raw, len(managed),
+        # room is kept for every Bucketeer fact tag, written or not (PLAN 1: 9 leave 41)
+        new = normalize(raw, reserved_count(current),
                         {(r["key"], r["value"]) for r in current if not r["managed"]})
         keep = [{"Key": r["key"], "Value": r["value"]} for r in managed]
         if _user(current) != [{"key": t["Key"], "value": t["Value"]} for t in new]:

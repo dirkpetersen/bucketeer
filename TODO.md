@@ -273,7 +273,7 @@ the item lands.
   migration; clear startup error naming the failing migration; upgrade tests from every
   past `user_version` with sample rows (generated from `MIGRATIONS[:n]` in
   `tests/test_db_upgrade.py`).
-- [ ] P6-2 Bucket facts as tags (PLAN 1): `bucketeer-bucket|owner|owner-email|creator|
+- [x] P6-2 Bucket facts as tags (PLAN 1): `bucketeer-bucket|owner|owner-email|creator|
   created|quota|product|location` written with the owner's key on create, adopt, budget
   or quota change and reconcile (`tag_synced` = all managed tags); values outside the
   tag alphabet left out with a warning; admin action "Write Bucketeer tags to all

@@ -122,17 +122,40 @@ def test_duplicate_keys_case_sensitive(env):
     assert put(env, [t("a", "1"), t("A", "2")], et).status_code == 200
 
 
-def test_fifty_tag_limit_counts_managed(env):
+def test_fifty_tag_limit_keeps_room_for_every_fact_tag(env):
+    """Nine Bucketeer tags (written or not) leave 41 for the user (PLAN 1)."""
     seed_budget(env)
-    et = get(env)["etag"]
-    r = put(env, [t(f"k{i}") for i in range(50)], et)
+    j = get(env)
+    assert j["maxUserTags"] == 41
+    r = put(env, [t(f"k{i}") for i in range(42)], j["etag"])
     assert r.status_code == 422 and r.json()["errors"][0]["tag"] is None
-    assert "49" in r.json()["detail"]
+    assert "41" in r.json()["detail"]
     assert stored(env, "alice-data") == {"bucketeer-budget": "WT-123"}
-    assert put(env, [t(f"k{i}") for i in range(49)], et).status_code == 200
-    assert len(stored(env, "alice-data")) == 50
-    # without a managed tag all 50 fit; 51 do not
-    assert put(env, [t(f"k{i}") for i in range(51)], get(env)["etag"]).status_code == 422
+    assert put(env, [t(f"k{i}") for i in range(41)], j["etag"]).status_code == 200
+    assert len(stored(env, "alice-data")) == 42
+    # an extra, unknown bucketeer- tag takes room too
+    env.moto().put_bucket_tagging(Bucket="alice-data", Tagging={"TagSet": [
+        {"Key": "bucketeer-budget", "Value": "x"}, {"Key": "bucketeer-other", "Value": "y"}]})
+    j = get(env)
+    assert j["maxUserTags"] == 40
+    assert put(env, [t(f"k{i}") for i in range(41)], j["etag"]).status_code == 422
+
+
+def test_fact_tags_are_read_only(env):
+    """The fact tags written on create are managed: listed first, kept on save, refused as
+    input."""
+    r = env.alice.post("/api/buckets", json={"name": "alice-new", "budgetNumber": "WT-1"},
+                       headers=H)
+    assert r.status_code == 201, r.text
+    j = env.alice.get(url("alice-new")).json()
+    keys = [x["key"] for x in j["tags"]]
+    assert "bucketeer-owner" in keys and all(x["managed"] for x in j["tags"])
+    r = put(env, [t("team", "x")], j["etag"], name="alice-new")
+    assert r.status_code == 200, r.text
+    after = stored(env, "alice-new")
+    assert after["team"] == "x" and after["bucketeer-owner"] == "alice"
+    r = put(env, [t("bucketeer-owner", "mallory")], r.json()["etag"], name="alice-new")
+    assert r.status_code == 422 and stored(env, "alice-new")["bucketeer-owner"] == "alice"
 
 
 def test_non_object_body(env):

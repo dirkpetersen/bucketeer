@@ -1,6 +1,6 @@
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
-import { adminBucketKeys, adminBuckets, adminRevokeBucketKey, adminUsers, setBucketQuota, setUserQuota, suspendUser, unsuspendUser } from "../api.js";
+import { adminBucketKeys, adminBuckets, adminRevokeBucketKey, adminUsers, setBucketQuota, setUserQuota, suspendUser, unsuspendUser, writeAllBucketTags } from "../api.js";
 import { formatBytes, formatCount, quotaText } from "../format.js";
 import { toast } from "../components/toast.js";
 import { confirmDialog } from "../components/confirm-dialog.js";
@@ -178,6 +178,32 @@ export function renderAdmin() {
     render();
   }
 
+  // Write the bucketeer-* fact tags to every bucket (each with its owner's own key).
+  async function writeTags() {
+    const ok = await confirmDialog({
+      title: "Write Bucketeer tags to all buckets?",
+      message: "Every bucket gets its owner, bucket name, budget number, quota, product and location as bucketeer-* tags, written with the owner's own key. Other tags are kept. Buckets of suspended owners or owners without a key are skipped. Safe to repeat.",
+      confirmLabel: "Write tags",
+    });
+    if (!ok) return;
+    tagsBtn.disabled = true;
+    tagsBtn.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), "Writing tags…");
+    try {
+      const r = await writeAllBucketTags();
+      const parts = [`${formatCount(r.updated)} updated`, `${formatCount(r.unchanged)} already up to date`];
+      if (r.skipped) parts.push(`${formatCount(r.skipped)} skipped`);
+      if (r.failed) parts.push(`${formatCount(r.failed)} failed`);
+      const msg = `Bucketeer tags: ${parts.join(", ")}${r.truncated ? " (stopped at the limit; run it again)" : ""}.`;
+      if (r.failed) toast.error(`${msg} Failed: ${r.details.failed.slice(0, 5).map((f) => f.bucket).join(", ")}${r.failed > 5 ? ", …" : ""}`);
+      else toast.show(msg);
+    } catch (err) {
+      if (err.status !== 401) toast.error(err.message);
+    } finally {
+      tagsBtn.disabled = false;
+      tagsBtn.replaceChildren(icon("tag"), "Write Bucketeer tags");
+    }
+  }
+
   // --- static frame ---
   const statsEl = h("div", { class: "stats" });
   const search = h("input", { class: "input search-input", type: "search", placeholder: "Search users", "aria-label": "Search", autocomplete: "off", spellcheck: "false" });
@@ -187,8 +213,10 @@ export function renderAdmin() {
   const refreshBtn = h("button", { class: "btn btn-icon", type: "button", "aria-label": "Refresh", title: "Refresh" }, icon("refresh"));
   const exportEl = h("a", { class: "btn", href: "/api/admin/export/chargeback.csv", download: "", title: "One row per bucket: bucket, tenant, owner, budget number and status, objects, bytes, GiB, quota, created. Opens in Excel." }, "Export CSV");
   const exportNote = h("p", { class: "export-note", text: "Export CSV lists every bucket (not just the filtered ones): bucket, tenant, owner, budget number and status, objects, bytes, GiB, quota and creation date, for chargeback. UTF-8, opens in Excel." });
+  const tagsBtn = h("button", { class: "btn", type: "button", title: "Write owner, bucket, budget, quota, product and location as bucketeer-* tags to every bucket, with each owner's own key." }, icon("tag"), "Write Bucketeer tags");
+  tagsBtn.addEventListener("click", writeTags);
   const filtersEl = h("div", { class: "admin-filters" },
-    h("div", { class: "search" }, icon("search", "icon search-ic"), search), sortSel, dirBtn, onlyBtn, exportEl);
+    h("div", { class: "search" }, icon("search", "icon search-ic"), search), sortSel, dirBtn, onlyBtn, exportEl, tagsBtn);
   const countEl = h("span", { class: "count", "aria-live": "polite" });
   const tableHost = h("div", { class: "table-host" });
   const settings = renderSettings();
@@ -325,6 +353,7 @@ export function renderAdmin() {
     }
     const d = state.data[tab];
     exportEl.hidden = tab !== "buckets";
+    tagsBtn.hidden = tab !== "buckets";
     onlyBtn.textContent = tab === "users" ? "Suspended only" : tab === "keys" ? "Show revoked" : "Missing budget number";
     onlyBtn.setAttribute("aria-pressed", String(state.only[tab]));
     onlyBtn.classList.toggle("on", state.only[tab]);

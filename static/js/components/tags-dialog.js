@@ -18,6 +18,7 @@ const CHARS = /^[\p{L}\p{N}_ +\-=.:/@]*$/u; // letters, digits, space and + - = 
 const copy = (rows) => rows.map((r) => ({ key: r.key, value: r.value }));
 const sameTags = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const MANAGED_HINT = { "bucketeer-budget": "Edit the budget number on the bucket (More, Change budget number)." };
+const FACT_HINT = "Bucketeer's record of this bucket, kept up to date automatically.";
 
 // The same rules as the server, for instant feedback while typing.
 // A tag equal to one already stored is not flagged for character/length/aws: rules (the storage
@@ -72,7 +73,8 @@ export async function tagsDialog({ bucket }) {
     try { await navigator.clipboard.writeText(mine.value); toast.show("Copied your tags."); } catch { toast.error("Could not copy. Select the text and copy it."); }
   });
 
-  const total = () => managed.length + tags.length;
+  // Bucketeer keeps room for all of its own tags, written or not (the server says how many are left).
+  const room = () => state.maxUserTags ?? MAX_TAGS - managed.length;
   const dirty = () => !sameTags(tags, original);
   const anyError = () => tags.some((r) => Object.keys(checkRow(r, tags, original)).length);
 
@@ -95,9 +97,9 @@ export async function tagsDialog({ bucket }) {
   function update() {
     save.disabled = busy || !dirty();
     revert.disabled = busy || !dirty();
-    addBtn.disabled = busy || total() >= MAX_TAGS;
+    addBtn.disabled = busy || tags.length >= room();
     empty.hidden = tags.length > 0;
-    count.textContent = `${total()} of ${MAX_TAGS} tags`;
+    count.textContent = `${tags.length} of ${room()} tags`;
     paintErrors();
   }
 
@@ -120,7 +122,7 @@ export async function tagsDialog({ bucket }) {
     managedList.replaceChildren(...managed.map((t) => h("li", { class: "tg-m" },
       icon("lock", "icon tg-lock"),
       h("code", { class: "tg-m-k", text: t.key }), h("code", { class: "tg-m-v", text: t.value }),
-      h("span", { class: "tg-m-h", text: MANAGED_HINT[t.key] || "Managed by Bucketeer. It cannot be edited here." }))));
+      h("span", { class: "tg-m-h", text: MANAGED_HINT[t.key] || (/^bucketeer-/.test(t.key) ? FACT_HINT : "Managed by Bucketeer. It cannot be edited here.") }))));
     managedList.hidden = !managed.length;
     mlabel.hidden = !managed.length;
     list.replaceChildren(...tags.map(row));

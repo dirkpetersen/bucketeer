@@ -22,12 +22,14 @@ or capitals never matches anything, so a user cannot address another tenant's bu
   adds a `warning`; adopted buckets are not touched); budget number: required unless
   the session user is an admin (`budget.validate_budget_number`); placement: only from
   the admin-allowed list. The bucket is created through croit, the SQLite row written,
-  and the `bucketeer-budget` tag set with the USER's own S3 key (`s3client`). If the tag
-  call fails the bucket is kept, the row gets `tag_synced = 0`, and the answer carries a
-  `warning`; `POST /api/buckets/reconcile` (called by the UI when the list shows
-  `tagPending`) retries those. Name taken anywhere in the cluster -> 409.
-- `POST /api/buckets/reconcile` -> `{synced: [...], pending: [...]}`: writes the tag for
-  the user's rows with `tag_synced = 0`. A POST because it changes state.
+  and the managed tags (`bucket_facts`: budget, bucket, owner, owner email, creator,
+  created, quota, product, location) set with the USER's own S3 key (`s3client`). If the
+  tag call fails (or the quota is unreadable) the bucket is kept, the row gets
+  `tag_synced = 0`, and the answer carries a `warning`; `POST /api/buckets/reconcile`
+  (called by the UI when the list shows `tagPending`) retries those. Name taken anywhere
+  in the cluster -> 409.
+- `POST /api/buckets/reconcile` -> `{synced: [...], pending: [...]}`: writes the managed
+  tags for the user's rows with `tag_synced = 0`. A POST because it changes state.
 - `DELETE /api/buckets/{name}` `{confirmName?}`: ownership is verified in croit's list for
   the user's uid (404 otherwise). An empty bucket is deleted directly. A non-empty one
   answers 409 `{requiresConfirmation: true, objects, bytes}` unless `confirmName` equals
@@ -59,7 +61,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
-from . import bucket_delete, s3docs
+from . import bucket_delete, bucket_facts, s3docs
 from .admin import croit_http_error
 from .auth import SessionUser, require_user
 from .bucket_ops import S3OpError, http_error, ops_for
@@ -87,7 +89,7 @@ from .rgw_user import RgwAccount, require_active_rgw_user, split_uid
 
 log = logging.getLogger("bucketeer.buckets")
 
-BUDGET_TAG = "bucketeer-budget"
+BUDGET_TAG = bucket_facts.BUDGET
 VERSIONING_LOOKUPS = 100  # buckets per list whose versioning state is fetched
 _SHORT_NAME = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]\Z")
 
@@ -182,16 +184,6 @@ async def _audit(request: Request, actor: str, action: str, target: str, **detai
     await db.run(db.audit.add, actor, action, "bucket", target, details)
 
 
-def _write_budget_tag(s3, bucket: str, value: str | None) -> None:
-    """Set the managed budget tag; None removes it (an administrator cleared the number)."""
-    if value is None:
-        s3docs.update_bucket_tagging(s3, bucket, lambda tags: s3docs.remove_tags(tags, BUDGET_TAG))
-        return
-    s3docs.update_bucket_tagging(
-        s3, bucket, lambda tags: s3docs.upsert_tags(tags, [{"Key": BUDGET_TAG, "Value": value}])
-    )
-
-
 async def _audit_unsure(request: Request, actor: str, action: str, target: str, acct,
                         exc: Exception, **details) -> None:
     """Audit a failed croit mutation whose outcome is unknown (timeout, failed task, croit
@@ -225,15 +217,13 @@ async def _try_noncurrent_rule(request: Request, uid: str, short: str, days: int
     return False
 
 
-async def _try_tag(request: Request, uid: str, short: str, value: str | None) -> bool:
-    try:
-        await request.app.state.s3.call(uid, _write_budget_tag, short, value)
-        return True
-    except HTTPException as e:
-        log.warning("budget tag not written for %s: %s", short, e.detail)
-    except Exception as e:  # botocore errors, timeouts: the bucket stays, the tag is retried
-        log.warning("budget tag not written for %s: %s", short, type(e).__name__)
-    return False
+async def _try_tag(request: Request, uid: str, full: str, user: SessionUser,
+                   **over: Any) -> bool:
+    """Write the bucket's managed tags (`bucket_facts`) with the user's own key. The session
+    user is the owner here, so their AD mail is the owner's. False = retry later."""
+    ok, _ = await bucket_facts.sync(request.app, uid, full, owner_email=user.email,
+                                    creator=user.username, **over)
+    return ok
 
 
 def _object_lock_on(s3, bucket: str) -> bool:
@@ -461,19 +451,19 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
         try:
             await db.run(db.buckets.delete, full)  # a leftover row of an earlier bucket
             await db.run(db.buckets.create, full, acct.uid, budget, user.username,
-                         budget is None)  # tag_synced stays 0 until the tag is written
+                         False)  # tag_synced stays 0 until the tags are written
         except Exception:
             log.exception("could not record bucket %s in SQLite", full)
             recorded = False
-        tag_ok = True
-        if budget is not None:
-            tag_ok = await _try_tag(request, acct.uid, name, budget)
-            if tag_ok and recorded:
-                try:
-                    await db.run(db.buckets.set_tag_synced, full, True)
-                except Exception:
-                    log.exception("could not mark the tag of %s as synced", full)
-                    tag_ok = False
+        # without a row the budget comes from the request (the tags hold the record)
+        tag_ok = await _try_tag(request, acct.uid, full, user,
+                                **({} if recorded else {"budget": budget}))
+        if tag_ok and recorded:
+            try:
+                await db.run(db.buckets.set_tag_synced, full, True)
+            except Exception:
+                log.exception("could not mark the tags of %s as synced", full)
+                tag_ok = False
         # Adopted buckets keep whatever lifecycle they have: we did not create them, so
         # we neither enable versioning nor add a rule.
         rule_days = body.noncurrentDays if (versioned and not adopted) else None
@@ -537,7 +527,7 @@ async def reconcile(request: Request, acct: Account, user: User):
             if m is None or m["tag_synced"]:
                 continue
             short = _short(m["name"])
-            if await _try_tag(request, acct.uid, short, m["budget_number"]):
+            if await _try_tag(request, acct.uid, m["name"], user):
                 await db.run(db.buckets.set_tag_synced, m["name"], True)
                 await _audit(request, user.username, "bucket.tag_sync", m["name"], uid=acct.uid)
                 synced.append(short)
@@ -576,12 +566,12 @@ async def set_budget(name: str, body: BudgetBody, request: Request, acct: Accoun
         else:
             await db.run(db.buckets.set_budget_number, full, budget)
             await db.run(db.buckets.set_tag_synced, full, False)
-        ok = await _try_tag(request, acct.uid, short, budget)
+        ok = await _try_tag(request, acct.uid, full, user)
         if ok:
             try:
                 await db.run(db.buckets.set_tag_synced, full, True)
             except Exception:
-                log.exception("could not mark the budget tag of %s as synced", full)
+                log.exception("could not mark the tags of %s as synced", full)
                 ok = False
     if old != budget:
         await _audit(request, user.username, "bucket.budget", full, uid=acct.uid,

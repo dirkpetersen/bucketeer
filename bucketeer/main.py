@@ -17,6 +17,7 @@ from . import (
     auth,
     billing,
     bucket_delete,
+    bucket_facts,
     bucket_keys,
     buckets,
     cors,
@@ -199,6 +200,7 @@ def create_app(
     api.include_router(buckets.router)
     api.include_router(bucket_keys.router)
     api.include_router(bucket_keys.admin_router)
+    api.include_router(bucket_facts.admin_router)
     api.include_router(audit_viewer.router)
     api.include_router(lifecycle.router)
     api.include_router(lifecycle_rules.router)

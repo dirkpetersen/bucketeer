@@ -99,7 +99,7 @@ def test_create_full_flow(env):
     # the RGW user: zero quota, no email, exactly one key (the reported one)
     u = env.croit_state.users["alice+backup"]
     assert u.user_quota == {"enabled": True, "maxSize": 0, "maxObjects": 0}
-    assert u.email == "" and u.name == "Bucketeer key backup for alice (alice-data)"
+    assert u.email == "" and u.name == "bucketeer key: alice / alice-data / ro"
     assert [x["access_key"] for x in u.keys] == [k["accessKey"]]
     # the policy: our statement, the foreign one untouched and first
     p = policy(env)
@@ -546,16 +546,25 @@ def test_failed_create_never_deletes_a_users_that_is_not_ours(env):
 
 
 def test_timeout_deletes_only_a_user_with_our_display_name(env):
-    name = "Bucketeer key backup for alice (alice-data)"
     boom = httpx.ReadTimeout("slow")
     _inject_create(env, lambda: env.croit_state.create_user("alice+backup", "A human"), boom)
     assert mk(env.alice).status_code in (502, 503)
     assert "alice+backup" in env.croit_state.users  # not ours: kept
     env.croit_state.delete_user("alice+backup")
-    _inject_create(env, lambda: env.croit_state.create_user("alice+again", name.replace(
-        "backup", "again")), boom)
-    assert mk(env.alice, label="again").status_code in (502, 503)
-    assert "alice+again" not in env.croit_state.users  # ours: cleaned up
+    _inject_create(env, lambda: env.croit_state.create_user(
+        "alice+again", "bucketeer key: alice / alice-data / rw"), boom)
+    assert mk(env.alice, label="again", access="readwrite").status_code in (502, 503)
+    assert "alice+again" not in env.croit_state.users  # ours (current name): cleaned up
+    # the name format before P6-2 is ours too
+    _inject_create(env, lambda: env.croit_state.create_user(
+        "alice+old", "Bucketeer key old for alice (alice-data)"), boom)
+    assert mk(env.alice, label="old").status_code in (502, 503)
+    assert "alice+old" not in env.croit_state.users
+    # the right format for another owner, bucket or access is not ours
+    _inject_create(env, lambda: env.croit_state.create_user(
+        "alice+other", "bucketeer key: alice / alice-data / rw"), boom)
+    assert mk(env.alice, label="other", access="read").status_code in (502, 503)
+    assert "alice+other" in env.croit_state.users
 
 
 def test_suspend_cascade_counts_a_missing_user_of_a_failed_row_as_done(env):

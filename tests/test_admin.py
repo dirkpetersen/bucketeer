@@ -195,7 +195,8 @@ def test_set_bucket_quota_and_audit(env):
                       json={"enabled": True, "maxSize": 2048, "maxObjects": 7}, headers=H)
     assert r.status_code == 200
     assert r.json() == {"bucket": "alice-data",
-                        "quota": {"enabled": True, "maxSize": 2048, "maxObjects": 7}}
+                        "quota": {"enabled": True, "maxSize": 2048, "maxObjects": 7},
+                        "tagSynced": False}  # no S3 here (see test_bucket_facts)
     (entry,) = env.audit()
     assert entry["action"] == "admin.bucket.quota" and entry["target"] == "alice-data"
     listed = {b["name"]: b for b in env.admin.get("/api/admin/buckets").json()["buckets"]}
