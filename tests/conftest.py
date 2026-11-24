@@ -150,3 +150,11 @@ def admin_ops():
     admins = {p.name: p for p in app.state.admin_ops.admins}
     return SimpleNamespace(app=app, croit_app=croit_app, state=croit_app.state.croit,
                            admin=admins["admin"], readonly=admins["readonly"])
+
+
+@pytest.fixture(autouse=True)
+def no_backup_schedule(monkeypatch):
+    """The nightly backup scheduler is tested explicitly (`backup.BackupService.run`)."""
+    from bucketeer import backup
+
+    monkeypatch.setattr(backup, "SCHEDULE_ON_START", False)

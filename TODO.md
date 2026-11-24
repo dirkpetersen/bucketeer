@@ -296,7 +296,7 @@ the item lands.
 - [x] P6-6 Billing contact and monthly email (PLAN 3): settings contact(s), send day
   1-28, on/off; mailer attachments; scheduler at 06:00 with catch-up and no double send;
   "Send now"; audit `billing.report_sent|report_failed`.
-- [ ] P6-7 Backup bucket on premises (PLAN 5): `BACKUP_BUCKET`; RGW user
+- [x] P6-7 Backup bucket on premises (PLAN 5): `BACKUP_BUCKET`; RGW user
   `bucketeer-backup` via Admin Ops (hidden like the service user); bucket with
   COMPLIANCE object lock, versioning, lifecycle; nightly tar.gz (SQLite `.backup`, `.env`,
   `meta.json`); admin "Backup" tab (time default 03:00, retention default 30, back up

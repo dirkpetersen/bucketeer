@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from bucketeer import bucket_delete
+from bucketeer import backup, bucket_delete
 from bucketeer.bucket_keys import cleanup_pending
 
 from .conftest import REQUIRED
@@ -85,6 +85,8 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "PUT /api/admin/offboarding/settings": ("admin.settings.offboarding",),
     "PUT /api/admin/billing/settings": ("admin.settings.billing",),
     "POST /api/admin/billing/report/send": ("billing.report_sent",),
+    "PUT /api/admin/backup/settings": ("admin.settings.backup",),
+    "POST /api/admin/backup/run": ("backup.run",),
     f"PUT {S}/naming": ("admin.settings.naming",),
     f"POST {S}/naming/test": (),
     f"PUT {S}/budget-number": ("admin.settings.budget_number",),
@@ -120,6 +122,7 @@ EVENTS = {
     "offboarding.aborted": "a run aborted by a threshold or an AD error (actor = trigger)",
     "offboarding.suspend": "enforce mode suspends a person who left AD",
     "offboarding.unsuspend": "login undoes the job's suspension (actor system)",
+    "backup.failed": "a backup run that could not write its archive",
     "rgw.user.create": "first S3 use of a new AD user creates the RGW user",
     "billing.report_failed": "no billing contact's mail server took the monthly sheet",
 }
@@ -127,7 +130,8 @@ EVENTS = {
 ACTION_RE = re.compile(r"^(?:[a-z][a-z_]*)(?:\.[a-z][a-z_]*)+$")
 ACTION_EXCEPTIONS = {"logout"}  # pre-dates the scheme; kept so old log rows still match
 TARGET_TYPES = {"user", "rgw_user", "bucket", "bucket_key", "access_key", "profile", "setting",
-                "uid_mapping", "notification_endpoint", "report", "offboarding_run", "subuser"}
+                "uid_mapping", "notification_endpoint", "report", "offboarding_run", "subuser",
+                "backup"}
 ACTORS = {"alice", "bob", "dave", "system", "mallory"}
 
 SECRET_PATTERNS = [
@@ -203,7 +207,9 @@ class FakeCloud:
 @pytest.fixture(scope="module")
 def run(tmp_path_factory, moto_server):
     httpx.post(f"{moto_server.endpoint}/moto-api/reset", timeout=10).raise_for_status()
-    env = Env(tmp_path_factory.mktemp("cov"), moto_server.endpoint)
+    tmp = tmp_path_factory.mktemp("cov")
+    env = Env(tmp, moto_server.endpoint, backup_bucket="bucketeer-cov0123")
+    saved_env_file, backup.ENV_FILE = backup.ENV_FILE, tmp / "no-such.env"
     r = Run(env)
     a, b = env.alice, env.bob
     ok = lambda resp: (resp.raise_for_status(), resp)[1]  # noqa: E731
@@ -495,7 +501,21 @@ def run(tmp_path_factory, moto_server):
                                               headers=H))
     env.app.state.cloud = None
     ok(b.get(S))
+
+    # backups: settings, a failed run, then a good one
+    r.step("PUT /api/admin/backup/settings", lambda: b.put(
+        "/api/admin/backup/settings", json={"time": "02:30"}, headers=H))
+    real_factory = env.app.state.backup.factory
+
+    def broken(*_a):
+        raise RuntimeError("S3 down")
+
+    env.app.state.backup.factory = broken
+    r.step("event", lambda: b.post("/api/admin/backup/run", headers=H))
+    env.app.state.backup.factory = real_factory
+    r.step("POST /api/admin/backup/run", lambda: ok(b.post("/api/admin/backup/run", headers=H)))
     yield r
+    backup.ENV_FILE = saved_env_file
     env.db.close()
 
 

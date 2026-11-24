@@ -26,4 +26,9 @@ if __name__ == "__main__":
         from bucketeer.ldapca import main as fetch_ca
 
         raise SystemExit(fetch_ca(sys.argv[1:]))
+    if "--restore-backup" in sys.argv:
+        from bucketeer.backup import restore_main
+
+        logging.basicConfig(level="INFO", format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        raise SystemExit(restore_main(sys.argv[1:]))
     main()

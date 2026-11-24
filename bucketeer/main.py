@@ -15,6 +15,7 @@ from . import (
     admin_settings,
     audit_viewer,
     auth,
+    backup,
     billing,
     billing_report,
     bucket_delete,
@@ -114,6 +115,11 @@ def create_app(
         if _app.state.cloud is not None and cloud.CHECK_ON_START:  # never blocks startup
             cloud_check = asyncio.get_running_loop().create_task(
                 _app.state.cloud.monitor_loop())
+        if not settings.backup_bucket:
+            logging.getLogger("bucketeer.backup").warning("%s", _app.state.backup.describe_off())
+        backups = None
+        if backup.SCHEDULE_ON_START:  # nightly backup; never blocks startup or /health
+            backups = asyncio.get_running_loop().create_task(_app.state.backup.schedule_loop())
         schedule = None
         if offboarding.SCHEDULE_ON_START:  # background: never blocks startup or /health
             schedule = asyncio.get_running_loop().create_task(
@@ -128,6 +134,10 @@ def create_app(
             if schedule is not None:
                 schedule.cancel()
                 await asyncio.gather(schedule, return_exceptions=True)
+            if backups is not None:
+                backups.cancel()
+                await asyncio.gather(backups, return_exceptions=True)
+            await _app.state.backup.aclose()
             await _app.state.offboarding.aclose()
             if cleanup is not None:
                 cleanup.cancel()
@@ -167,6 +177,7 @@ def create_app(
 
     app.state.offboarding = offboarding.OffboardingService(app)
     app.state.rgw.on_login = app.state.offboarding.on_login
+    app.state.backup = backup.BackupService(app)
 
     app.state.endpoints = credentials.EndpointResolver(client, settings, clock)
     app.state.mailer = mailer.Mailer(settings)
@@ -237,6 +248,7 @@ def create_app(
     api.include_router(offboarding.router)
     api.include_router(billing.router)
     api.include_router(billing_report.router)
+    api.include_router(backup.router)
     app.include_router(api)
     app.include_router(credentials.setup_router)  # POST /setup/{token}: the token is the credential
 

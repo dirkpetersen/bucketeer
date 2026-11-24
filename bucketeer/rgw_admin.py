@@ -51,7 +51,8 @@ Service user: the identity behind `RGW_ADMIN_ACCESS_KEY` is an ordinary RGW user
 names it; `list_users`/`list_user_names`/`list_buckets` leave it and its buckets out, and the
 app refuses it as a login, mapping target, share/ACL recipient and admin suspend/quota target
 (`rgw_user.is_service_uid`, bare uid, case-insensitive, any tenant). While the lookup fails,
-those paths fail closed (unavailable/503). `CroitClient.service_uid()` is None.
+those paths fail closed (unavailable/503). `CroitClient.service_uid()` is None. The backup
+user (`croit.BACKUP_UID`) is left out of the same lists on both clients.
 `list_users` reads concurrently (bounded per client and loop) and cancels the rest on the
 first failure. Only a 404 with RGW's `NoSuchUser`/`NoSuchBucket` code means "gone"; any other
 404 (wrong `RGW_ADMIN_URL`) is a 502.
@@ -91,7 +92,14 @@ from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
 from .config import Settings
-from .croit import REDACTED, CroitError, CroitUnavailable, normalize_permission, subuser_name
+from .croit import (
+    REDACTED,
+    CroitError,
+    CroitUnavailable,
+    is_backup_uid,
+    normalize_permission,
+    subuser_name,
+)
 
 log = logging.getLogger(__name__)
 
@@ -386,7 +394,8 @@ class RgwAdminClient:
         """Every uid except the service user's (it is not a Bucketeer-managed account)."""
         mine = await self.service_uid()
         return [u for u in await self._raw_uids()
-                if u.rpartition("$")[2].lower() != mine.rpartition("$")[2].lower()]
+                if u.rpartition("$")[2].lower() != mine.rpartition("$")[2].lower()
+                and not is_backup_uid(u)]
 
     async def _raw_uids(self) -> list[str]:
         uids: list[str] = []
@@ -707,7 +716,8 @@ class RgwAdminClient:
 
     async def _fetch_buckets(self) -> list[dict]:
         mine = await self.service_uid()
-        rows = [b for b in await self._stats_list([]) if b["owner"] != mine]
+        rows = [b for b in await self._stats_list([])
+                if b["owner"] != mine and not is_backup_uid(b["owner"])]
         # Reef caveat: `stats=true` without `uid` may omit tenant buckets. Ask per tenant user
         # (bounded by the shared semaphore) and add what is missing; a failure fails the call.
         tenant_uids = [u for u in await self._all_uids() if "$" in u]

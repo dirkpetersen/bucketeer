@@ -218,3 +218,18 @@
   .bl-prod-head { display: none; }
   .bl-prod-cell[data-label]::before { content: attr(data-label); font-size: var(--fs-xs); color: var(--text-muted); }
 }
+
+/* Backup tab (views/admin-backup.js) */
+.bu-facts { display: grid; gap: var(--sp-3) var(--sp-5); grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); margin: 0; padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
+.bu-fact { display: grid; gap: var(--sp-1); min-width: 0; }
+.bu-fact dt { color: var(--text-muted); font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.bu-fact dd { margin: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.bu-fact code, .bu-key { font-family: var(--font-mono); font-size: var(--fs-xs); background: var(--surface); padding: 0.1rem 0.4rem; border-radius: var(--r-sm); overflow-wrap: anywhere; }
+.bu-fact .chip, .bu-tbl .chip { text-transform: none; letter-spacing: 0; }
+.bu-last { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); font-variant-numeric: tabular-nums; }
+.bu-time { max-width: 10.5rem; font-variant-numeric: tabular-nums; }
+.bu-days { max-width: 10.5rem; }
+.bu-span { grid-column: 1 / -1; max-width: 70ch; }
+.bu-env { margin: 0; padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--border); overflow-x: auto; font-family: var(--font-mono); font-size: var(--fs-sm); }
+.bu-tbl th, .bu-tbl td { padding-inline: var(--sp-3); font-variant-numeric: tabular-nums; }
+.bu-err { color: var(--danger); font-size: var(--fs-sm); overflow-wrap: anywhere; }
