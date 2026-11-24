@@ -5,6 +5,7 @@ so the policy DOCUMENT is asserted, and ownership at the Bucketeer layer.
 """
 
 import json
+import logging
 
 import pytest
 
@@ -579,3 +580,105 @@ def test_invitation_is_queued_not_awaited(env):
 def test_email_off_by_default(env):
     r = share(env.alice, "erin")
     assert r.status_code == 201 and r.json()["emailed"] is None
+
+
+# -- name search (type-ahead, owner decision 2026-11-24) ---------------------------------
+
+
+def people(env, q, client=None):
+    r = (client or env.alice).get("/api/people/search", params={"q": q})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+@pytest.fixture
+def named(env):
+    f = env.fake
+    f.add("jsmith", groups={USERS_GROUP}, display="Jane Smith", mail="jane.smith@example.org")
+    f.add("jdoe", groups={TEAM_GROUP}, display="John Doe", mail="john.doe@example.org")
+    f.add("jsmithers", groups={USERS_GROUP}, display="Jane Smithers",
+          mail="jane.smithers@example.org", uac="514")  # disabled
+    f.add("jsmart", groups=set(), display="Jane Smart", mail="jane.smart@example.org")  # no group
+    return env
+
+
+@pytest.mark.parametrize("q", ["smi", "Smith", "jane", "JANE SM", "sm jane", "jsm",
+                               "jane.smith@", "Jane Smith"])
+def test_search_finds_people_by_first_last_user_or_email(named, q):
+    res = people(named, q)
+    assert res == {"people": [{"username": "jsmith", "displayName": "Jane Smith",
+                               "email": "jane.smith@example.org", "isYou": False}],
+                   "truncated": False}
+
+
+def test_search_hides_disabled_and_ineligible_people(named):
+    # Smithers is disabled, Smart is not in the required group; Doe is, through nesting
+    assert [p["username"] for p in people(named, "j")["people"]] == []  # too short
+    names = [p["username"] for p in people(named, "jo")["people"]]
+    assert names == ["jdoe"]
+    assert "jsmart" not in [p["username"] for p in people(named, "jane")["people"]]
+    assert "jsmithers" not in [p["username"] for p in people(named, "jane")["people"]]
+
+
+def test_search_marks_yourself_and_sorts_by_name(named):
+    res = people(named, "alice")["people"]
+    assert [(p["username"], p["isYou"]) for p in res] == [("alice", True), ("alice2", False)]
+
+
+def test_search_too_short_does_not_ask_the_directory(named):
+    before = len(named.fake.events)
+    assert people(named, " a ") == {"people": [], "truncated": False}
+    assert len(named.fake.events) == before
+
+
+@pytest.mark.parametrize("q", ["*", "**", "*)(uid=*", "a*"])
+def test_search_typed_wildcards_are_literal(named, q):
+    assert people(named, q)["people"] == []
+    flt = [e[2] for e in named.fake.events if e[0] == "search"][-1] if len(q) >= 2 else ""
+    if flt:
+        assert "*)(uid" not in flt and "\\2a" in flt
+
+
+def test_search_is_capped_and_says_so(named):
+    for n in range(12):
+        named.fake.add(f"test{n:02}", groups={USERS_GROUP}, display=f"Tess T{n:02}",
+                       mail=f"t{n}@example.org")
+    res = people(named, "tess")
+    assert len(res["people"]) == 10 and res["truncated"] is True
+
+
+def test_search_is_rate_limited_per_user(named, monkeypatch):
+    monkeypatch.setattr(sharing, "SEARCH_RATE_LIMIT", 2)
+    people(named, "jane")
+    people(named, "jane")
+    r = named.alice.get("/api/people/search", params={"q": "jane"})
+    assert r.status_code == 429 and "Retry-After" in r.headers
+    # the exact lookups keep their own budget
+    assert named.alice.get("/api/buckets/alice-data/share-lookup",
+                           params={"q": "erin"}).status_code == 200
+
+
+def test_search_directory_down_is_503(named):
+    named.fake.down = set(named.settings.ldap_url)
+    r = named.alice.get("/api/people/search", params={"q": "jane"})
+    assert r.status_code == 503
+
+
+def test_picked_person_is_shared_through_the_exact_lookup(named):
+    (p,) = people(named, "jane smith")["people"]
+    r = share(named.alice, p["username"])
+    assert r.status_code == 201 and r.json()["recipient"] == "jsmith"
+
+
+# -- log lines --------------------------------------------------------------------------
+
+
+def test_share_and_refusal_are_logged(env, caplog):
+    with caplog.at_level(logging.INFO, logger="bucketeer.sharing"):
+        assert share(env.alice, "erin").status_code == 201
+        assert share(env.alice, "nobody").status_code == 404
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any(m.startswith("bucket.share ") and "by alice" in m and "recipient=erin" in m
+               for m in msgs), msgs
+    assert any("bucket.share alice-data by alice refused (404)" in m and "recipient=nobody" in m
+               for m in msgs), msgs

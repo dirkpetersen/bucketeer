@@ -9,13 +9,18 @@ Recipients are exactly the people who could log in (Q8): the owner types a usern
 the server finds that person with the login filter (`AdAuthenticator.lookup_user`: service
 bind, escaped search, exactly one match, required group when set; NO password bind). Any
 failure (unknown, ambiguous, not eligible) is one uniform 404. Lookups are rate limited per
-owner (`LOOKUP_LIMIT` per `LOOKUP_WINDOW`) so the endpoint cannot enumerate the directory; it is
-an exact lookup, never a search. A recipient without an S3 account gets one created on the spot
-through `RgwResolver.resolve` exactly as their first login would (mapping wins, case-insensitive
-match, `uid_taken` refusal, default quota, never an email).
+owner (`LOOKUP_LIMIT` per `LOOKUP_WINDOW`). The name search below is separate and also
+rate limited; it shows eligible people only. A recipient without an S3 account gets one
+created on the spot through `RgwResolver.resolve` exactly as their first login would
+(mapping wins, case-insensitive match, `uid_taken` refusal, default quota, never an email).
 
 Routes (owner side: `require_active_rgw_user`, own bucket verified in croit, `no-store`):
 - `GET  /api/buckets/{name}/share-lookup?q=` -> `{username, displayName, isYou}`
+- `GET  /api/people/search?q=` -> `{people: [{username, displayName, email, isYou}],
+  truncated}`: type-ahead by username, first/last/display name or email (every word a prefix;
+  enabled accounts in the required group; at most 10; under 2 characters -> empty). Owner
+  decision 2026-11-24. Its own per-user limit (`SEARCH_RATE_LIMIT`); a pick is still shared
+  through the exact lookup above.
 - `GET  /api/buckets/{name}/shares` -> `{shares: [{id, recipient, displayName, uid, access,
   createdAt|null, status}], checked}`; `status`: `active`, `out_of_sync` (statement missing or
   not exactly the canonical one, e.g. widened Principal: repair with PUT),
@@ -35,6 +40,7 @@ Audit (target_type bucket, tenant-qualified name): `bucket.share`, `bucket.share
 `bucket.unshare`. A deleted bucket's shares are marked revoked (`revoke_for_deleted_bucket`).
 """
 
+import contextlib
 import logging
 import time
 from collections import deque
@@ -48,7 +54,7 @@ from . import s3docs
 from .auth import SessionUser, require_user
 from .bucket_keys import _bucket_lock, _bucket_name, _full, _own_bucket
 from .croit import CroitClientError
-from .ldapauth import InvalidCredentials, LdapUnavailable
+from .ldapauth import SEARCH_MIN_CHARS, InvalidCredentials, LdapUnavailable
 from .rgw_user import (
     CREATION_FAILED,
     MSG_UNAVAILABLE,
@@ -66,6 +72,7 @@ log = logging.getLogger("bucketeer.sharing")
 
 LOOKUP_LIMIT = 30  # lookups (and share requests) per owner ...
 LOOKUP_WINDOW = 900  # ... per 15 minutes
+SEARCH_RATE_LIMIT = 150  # name searches (type-ahead) per owner per LOOKUP_WINDOW
 MSG_NOT_FOUND = ("No eligible person found with that username or email address. "
                  "They must be able to sign in to Bucketeer.")
 SHARE_PREFIX = s3docs.PREFIX + "share-"
@@ -90,17 +97,18 @@ class AccessBody(BaseModel):
 # -- helpers ---------------------------------------------------------------------------
 
 
-def _throttle(request: Request, owner: str) -> None:
+def _throttle(request: Request, owner: str, kind: str = "share_lookups",
+              limit: int = LOOKUP_LIMIT) -> None:
     """Per-owner sliding window; 429 when exceeded. In memory, resets on restart."""
     state = request.app.state
-    if not hasattr(state, "share_lookups"):
-        state.share_lookups = {}
+    if not hasattr(state, kind):
+        setattr(state, kind, {})
     clock = getattr(state.throttle, "clock", time.time)
     now = clock()
-    dq: deque[float] = state.share_lookups.setdefault(owner, deque())
+    dq: deque[float] = getattr(state, kind).setdefault(owner, deque())
     while dq and dq[0] <= now - LOOKUP_WINDOW:
         dq.popleft()
-    if len(dq) >= LOOKUP_LIMIT:
+    if len(dq) >= limit:
         retry = max(int(dq[0] + LOOKUP_WINDOW - now) + 1, 1)
         raise HTTPException(429, "Too many lookups. Try again later.",
                             headers={"Retry-After": str(retry)})
@@ -203,6 +211,8 @@ def _view(row: dict, status: str = "active") -> dict[str, Any]:
 
 async def _audit(request: Request, actor: str, action: str, full: str, **details) -> None:
     db = request.app.state.db
+    log.info("%s %s by %s: %s", action, full, actor,
+             " ".join(f"{k}={v}" for k, v in details.items() if v is not None))
     try:
         await db.run(db.audit.add, actor, action, "bucket", full, details)
     except Exception:
@@ -246,6 +256,18 @@ async def _owned(request: Request, acct: RgwAccount, name: str,
     return short, full
 
 
+@contextlib.contextmanager
+def _log_refusal(what: str, full_or_name: str, actor: str, **ctx):
+    """Log a refused or failed share change (no audit entry is written for those)."""
+    try:
+        yield
+    except HTTPException as e:
+        extra = " ".join(f"{k}={v}" for k, v in ctx.items() if v is not None)
+        log.info("%s %s by %s refused (%s): %s%s", what, full_or_name, actor, e.status_code,
+                 e.detail, f" [{extra}]" if extra else "")
+        raise
+
+
 # -- owner side -------------------------------------------------------------------------
 
 
@@ -256,6 +278,28 @@ async def share_lookup(name: str, q: str, request: Request, response: Response, 
     person = await _find_person(request, acct.username, q)
     return {"username": person.username, "displayName": person.display_name,
             "isYou": person.username.lower() == acct.username.lower()}
+
+
+@router.get("/people/search")
+async def people_search(q: str, request: Request, response: Response, acct: Account):
+    """Type-ahead for picking a share or ACL recipient (owner decision 2026-11-24: search by
+    first and last name too). Suggestions only; sharing re-checks the pick with the exact
+    lookup. Rate limited per user (`SEARCH_RATE_LIMIT`), at most `ldapauth.SEARCH_LIMIT`."""
+    response.headers["Cache-Control"] = "no-store"
+    q = q.strip()[:200]
+    if len("".join(q.split())) < SEARCH_MIN_CHARS:
+        return {"people": [], "truncated": False}
+    _throttle(request, acct.username, "people_searches", SEARCH_RATE_LIMIT)
+    try:
+        people, truncated = await request.app.state.authenticator.search_people(q)
+    except LdapUnavailable:
+        raise HTTPException(503, "The directory is temporarily unavailable. "
+                                 "Try again shortly.") from None
+    me = acct.username.lower()
+    return {"people": [{"username": p.username, "displayName": p.display_name,
+                        "email": p.email, "isYou": p.username.lower() == me}
+                       for p in people],
+            "truncated": truncated}
 
 
 def _canonical(short: str, row: dict) -> dict | None:
@@ -308,6 +352,13 @@ async def list_shares(name: str, request: Request, response: Response, acct: Acc
 @router.post("/buckets/{name}/shares")
 async def create_share(name: str, body: ShareBody, request: Request, response: Response,
                        acct: Account, user: User, background: BackgroundTasks):
+    with _log_refusal("bucket.share", name, user.username, recipient=body.login,
+                      access=body.access):
+        return await _create_share(name, body, request, response, acct, user, background)
+
+
+async def _create_share(name: str, body: ShareBody, request: Request, response: Response,
+                        acct: RgwAccount, user: SessionUser, background: BackgroundTasks):
     response.headers["Cache-Control"] = "no-store"
     db = request.app.state.db
     short, full = await _owned(request, acct, name, user.username)
@@ -382,6 +433,13 @@ async def create_share(name: str, body: ShareBody, request: Request, response: R
 @router.put("/buckets/{name}/shares/{share_id}")
 async def update_share(name: str, share_id: int, body: AccessBody, request: Request,
                        response: Response, acct: Account, user: User):
+    with _log_refusal("bucket.share_update", name, user.username, share=share_id,
+                      access=body.access):
+        return await _update_share(name, share_id, body, request, response, acct, user)
+
+
+async def _update_share(name: str, share_id: int, body: AccessBody, request: Request,
+                        response: Response, acct: RgwAccount, user: SessionUser):
     response.headers["Cache-Control"] = "no-store"
     db = request.app.state.db
     short, full = await _owned(request, acct, name, user.username)
@@ -407,6 +465,12 @@ async def update_share(name: str, share_id: int, body: AccessBody, request: Requ
 @router.delete("/buckets/{name}/shares/{share_id}")
 async def delete_share(name: str, share_id: str, request: Request, response: Response,
                        acct: Account, user: User):
+    with _log_refusal("bucket.unshare", name, user.username, share=share_id):
+        return await _delete_share(name, share_id, request, response, acct, user)
+
+
+async def _delete_share(name: str, share_id: str, request: Request, response: Response,
+                        acct: RgwAccount, user: SessionUser):
     response.headers["Cache-Control"] = "no-store"
     db = request.app.state.db
     short, full = await _owned(request, acct, name, user.username)

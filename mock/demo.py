@@ -99,6 +99,24 @@ class DemoDirectory:
         """Recipient lookup for sharing (no password), like `AdAuthenticator.lookup_user`."""
         return self._find(login)
 
+    async def search_people(self, text: str, limit: int = 10):
+        """Name search like `AdAuthenticator.search_people`: every word starts the username,
+        a name part or the email; disabled people and those who left the group are hidden."""
+        words = [w.lower() for w in text.split()[:4]]
+        if len("".join(words)) < 2:
+            return [], False
+        found = []
+        for u in self.users.values():
+            key = u.username.lower()
+            if key in self.disabled or key in self.left_group:
+                continue
+            fields = [key, u.email.lower(), u.display_name.lower(),
+                      *u.display_name.lower().split()]
+            if all(any(f.startswith(w) for f in fields) for w in words):
+                found.append(u)
+        found.sort(key=lambda u: (u.display_name.lower(), u.username))
+        return found[:limit], len(found) > limit
+
     async def account_statuses(self, usernames) -> dict[str, str]:
         """Offboarding job lookup, like `AdAuthenticator.account_statuses`: `ok`,
         `disabled`, `not_in_group` or `not_found`. Edit `disabled` / `left_group` to demo."""

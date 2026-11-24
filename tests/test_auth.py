@@ -54,16 +54,42 @@ class FakeLdap:
         # same mail as alice: ambiguous when logging in by mail
         self.add("alice2", groups={USERS_GROUP}, display="Alice Two", mail="alice@example.org")
 
-    def add(self, sam, groups, display, mail, password=SECRET_PW):
+    def add(self, sam, groups, display, mail, password=SECRET_PW, uac="512"):
         dn = f"CN={sam},OU=Users,DC=example,DC=org"
+        first, _, last = display.partition(" ")
         self.users[dn] = {
             "sAMAccountName": sam,
             "mail": mail,
             "userPrincipalName": f"{sam}@example.org",
             "displayName": display,
+            "givenName": first,
+            "sn": last,
+            "userAccountControl": uac,
             "password": password,
             "groups": groups,
         }
+
+    def _people_search(self, flt, attributes, size_limit):
+        """The name-search filter of `ldapauth.people_filter`: every `(|(a=v*)...)` group must
+        match some attribute by prefix, enabled accounts only, required group (nested).
+        Like ldap3, a size limit returns the first entries (no exception). None = not one."""
+        val = r"((?:[^()\\]|\\[0-9a-fA-F]{2})*)"
+        groups = [re.findall(rf"\(([A-Za-z]+)={val}\*\)", m.group(1))
+                  for m in re.finditer(rf"\(\|((?:\([A-Za-z]+={val}\*\))+)\)", flt)]
+        if not groups:
+            return None  # not a name search
+        chain = re.search(rf"\(memberOf:{re.escape(MATCHING_RULE_IN_CHAIN)}:={val}\)", flt)
+        assert ldapauth.DISABLED_FILTER in flt
+        found = []
+        for dn, u in self.users.items():
+            if int(u["userAccountControl"]) & 2:
+                continue
+            if chain and not self.member_of(dn, _unescape(chain.group(1))):
+                continue
+            if all(any(str(u.get(a, "")).lower().startswith(_unescape(v).lower())
+                       for a, v, *_ in pairs) for pairs in groups):
+                found.append(LdapEntry(dn, {a: u.get(a, "") for a in attributes}))
+        return found[:size_limit] if size_limit else found
 
     def binds(self):
         return [e for e in self.events if e[0] == "bind"]
@@ -105,6 +131,9 @@ class _FakeSession:
     def search(self, base, flt, attributes, *, scope="subtree", size_limit=0):
         f = self.fake
         f.events.append(("search", base, flt, scope))
+        people = f._people_search(flt, attributes, size_limit)
+        if people is not None:
+            return people
         chain = re.fullmatch(rf"\(memberOf:{re.escape(MATCHING_RULE_IN_CHAIN)}:=(.*)\)", flt)
         if chain:
             assert scope == "base" and base in f.users

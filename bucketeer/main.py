@@ -86,6 +86,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         ldapca.startup_report(settings)
+        logging.getLogger("bucketeer.mailer").info("%s", _app.state.mailer.describe())
         owned = db is None
         if owned:
             # DATA_DIR is relative to the working directory (repo root).

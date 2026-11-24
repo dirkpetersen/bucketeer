@@ -43,6 +43,34 @@ log = logging.getLogger(__name__)
 MATCHING_RULE_IN_CHAIN = "1.2.840.113556.1.4.1941"
 
 
+SEARCH_LIMIT = 10  # people per name search
+SEARCH_MIN_CHARS = 2
+SEARCH_MAX_WORDS = 4
+# AD "LDAP_MATCHING_RULE_BIT_AND" on userAccountControl bit 2 = account disabled.
+DISABLED_FILTER = "(!(userAccountControl:1.2.840.113556.1.4.803:=2))"
+
+
+def people_filter(s: Settings, text: str) -> str | None:
+    """The LDAP filter of a name search, or None when the text is too short.
+
+    Every typed word is escaped (a `*` the user types is a literal, never a wildcard) and must
+    be the START of the username, first name (givenName), last name (sn), display name or
+    email. Enabled people only, required group (nested) when set."""
+    words = text.split()[:SEARCH_MAX_WORDS]
+    if len("".join(words)) < SEARCH_MIN_CHARS:
+        return None
+    attrs = dict.fromkeys([s.ldap_username_attribute, "givenName", "sn",
+                           s.ldap_display_name_attribute, s.ldap_email_attribute])
+    parts = ["(objectCategory=person)(objectClass=user)", DISABLED_FILTER]
+    for w in words:
+        v = escape_filter_chars(w[:64])
+        parts.append("(|" + "".join(f"({a}={v}*)" for a in attrs) + ")")
+    if s.ldap_required_group_dn:
+        parts.append(f"(memberOf:{MATCHING_RULE_IN_CHAIN}:="
+                     f"{escape_filter_chars(s.ldap_required_group_dn)})")
+    return "(&" + "".join(parts) + ")"
+
+
 class InvalidCredentials(Exception):
     """Login refused. `reason` is for server-side logs only, never for users."""
 
@@ -241,6 +269,16 @@ class AdAuthenticator:
         Raises InvalidCredentials (`.reason` for logs only) or LdapUnavailable."""
         return await asyncio.to_thread(self._lookup, login)
 
+    async def search_people(self, text: str, limit: int = SEARCH_LIMIT
+                            ) -> tuple[list[AuthUser], bool]:
+        """Name search for picking a share recipient: people whose username, first name,
+        last name, display name or email START with each word typed (all words must match).
+        Only enabled accounts and, when set, members of the required group (nested).
+        Returns (people sorted by name, truncated). Fewer than 2 characters: ([], False).
+        Suggestions only: the share itself still goes through `lookup_user`.
+        Raises LdapUnavailable."""
+        return await asyncio.to_thread(self._search_people, text, limit)
+
     async def account_statuses(self, usernames: Sequence[str]) -> dict[str, str]:
         """For the offboarding job: the state of each account, found by the username
         attribute (exact, escaped; NOT the login filter): `ok`, `disabled`
@@ -345,6 +383,35 @@ class AdAuthenticator:
             email=entry.attrs.get(s.ldap_email_attribute, "").strip(),
             is_admin=False,  # not looked at: lookups only identify people
         )
+
+    def _search_people(self, text: str, limit: int) -> tuple[list[AuthUser], bool]:
+        s = self.s
+        flt = people_filter(s, text)
+        if flt is None:
+            return [], False
+        uattr, dattr, eattr = (s.ldap_username_attribute, s.ldap_display_name_attribute,
+                               s.ldap_email_attribute)
+        svc, _ = self._service_session()
+        try:
+            try:
+                entries = svc.search(s.ldap_base_dn, flt, [uattr, dattr, eattr],
+                                     size_limit=limit + 1)
+            except SizeLimitExceeded:
+                return [], True
+        finally:
+            svc.close()
+        people, seen = [], set()
+        for e in entries:
+            name = e.attrs.get(uattr, "").strip()
+            if not name or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            people.append(AuthUser(username=name,
+                                   display_name=e.attrs.get(dattr, "").strip(),
+                                   email=e.attrs.get(eattr, "").strip(), is_admin=False))
+        truncated = len(people) > limit
+        people.sort(key=lambda p: ((p.display_name or p.username).lower(), p.username.lower()))
+        return people[:limit], truncated
 
     def _account_statuses(self, usernames: list[str]) -> dict[str, str]:
         s = self.s

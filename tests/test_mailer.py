@@ -1,6 +1,8 @@
 """Share invitation email: message content, header safety, SMTP settings."""
 
 import asyncio
+import logging
+import smtplib
 
 import pytest
 from pydantic import ValidationError
@@ -45,6 +47,34 @@ def test_send_failure_returns_false(monkeypatch):
         raise OSError("down")
     monkeypatch.setattr(on, "_send", boom)
     assert asyncio.run(on.send_share_invite("a@b.c", "A", "d", "read")) is False
+
+
+def test_every_outcome_is_logged(monkeypatch, caplog):
+    off = Mailer(Settings(_env_file=None, **REQUIRED))
+    on = mailer(smtp_password="hunter2-secret")
+    sent = []
+    with caplog.at_level(logging.INFO, logger="bucketeer.mailer"):
+        asyncio.run(off.send_share_invite("a@b.c", "A", "data", "read"))
+        monkeypatch.setattr(on, "_send", sent.append)
+        asyncio.run(on.send_share_invite("erin@example.org", "A", "data", "read"))
+
+        def refused(msg):
+            raise smtplib.SMTPRecipientsRefused({"x@example.org": (554, b"relay denied")})
+        monkeypatch.setattr(on, "_send", refused)
+        asyncio.run(on.send_share_invite("x@example.org", "A", "data", "read"))
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("not sent: email is off (SMTP_FROM empty)" in m for m in msgs), msgs
+    assert any("email sent to erin@example.org for bucket data" in m for m in msgs), msgs
+    (fail,) = [m for m in msgs if "failed" in m]
+    assert "SMTPRecipientsRefused" in fail and "relay denied" in fail
+    assert "hunter2" not in " ".join(msgs) and len(sent) == 1
+
+
+def test_describe_for_the_startup_log():
+    assert "OFF" in Mailer(Settings(_env_file=None, **REQUIRED)).describe()
+    line = mailer(smtp_port=25, smtp_security="starttls").describe()
+    assert "ON" in line and "smtp.example.org:25 security=starttls" in line
+    assert "MX" in mailer(smtp_host="").describe()
 
 
 def test_sender_turns_email_on_and_needs_url():

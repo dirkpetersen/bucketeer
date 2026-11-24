@@ -3,10 +3,12 @@ import { icon } from "../icons.js";
 import { createBucketShare, listBucketShares, lookupShareRecipient, revokeBucketShare, updateBucketShare } from "../api.js";
 import { toast } from "./toast.js";
 import { confirmDialog, nameSpan } from "./confirm-dialog.js";
+import { personPicker } from "./person-picker.js";
 
 // shareDialog({ bucket }) -> Promise<{ error? } | { changed: boolean }>
-// Share one bucket with an AD colleague: type a username or email, confirm the person the
-// server found (exact lookup, no directory search), choose read-only or read and write.
+// Share one bucket with an AD colleague: type a name, username or email and pick from the
+// matching people (`person-picker.js`), or press Find for an exact username/email lookup;
+// confirm the person, choose read-only or read and write.
 // Lists current shares with change-access and revoke. The server decides who is eligible.
 let seq = 0;
 const ACCESS = { read: "Read-only", readwrite: "Read and write" };
@@ -108,7 +110,7 @@ export async function shareDialog({ bucket }) {
 
   // -- add form: step 1 find, step 2 confirm --
   const login = h("input", { class: "input", id: `${id}-l`, type: "text", autocomplete: "off", autocapitalize: "off", spellcheck: "false",
-    maxlength: "256", placeholder: "username or name@example.org", "aria-describedby": `${id}-lh` });
+    maxlength: "256", placeholder: "Name, username or email", "aria-describedby": `${id}-lh` });
   const error = h("p", { class: "qd-error", role: "alert", hidden: true });
   const showError = (m) => { error.textContent = m; error.hidden = !m; };
   const find = h("button", { class: "btn", type: "submit" }, icon("search"), "Find");
@@ -172,20 +174,27 @@ export async function shareDialog({ bucket }) {
     }
   }
 
+  const picker = personPicker({
+    id, input: login,
+    onPick: (p) => { showError(""); login.value = p.displayName || p.username; showFound(p); },
+    onUnauthorized: () => dlg.close(),
+  });
   login.addEventListener("input", () => { showError(""); if (found) clearFound(); });
   const form = h("form", { class: "bkd-form", novalidate: true },
     h("h3", { text: "Share with a person" }),
-    h("p", { class: "cd-msg", text: "Type the username or email address of a colleague. You choose whether they can only read or also change files." }),
-    h("div", { class: "field" }, h("label", { for: login.id, text: "Username or email" }),
+    h("p", { class: "cd-msg", text: "Start typing a colleague's name, username or email and pick them from the list. You choose whether they can only read or also change files." }),
+    h("div", { class: "field" }, h("label", { for: login.id, text: "Person" }),
       h("div", { class: "shd-find" }, login, find),
-      h("p", { class: "set-hint", id: `${id}-lh`, text: "Only people who can sign in to Bucketeer can be added. Their access uses their own S3 keys." })),
+      ...picker.nodes,
+      h("p", { class: "set-hint", id: `${id}-lh`, text: "Only people who can sign in to Bucketeer are listed. Their access uses their own S3 keys." })),
     error, confirmBox);
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (busy) return;
     const q = login.value.trim();
-    if (!q) { showError("Enter a username or email address."); login.focus(); return; }
+    if (!q) { showError("Enter a name, username or email address."); login.focus(); return; }
     busy = true;
+    picker.close();
     clearFound();
     showError("");
     find.disabled = true;
@@ -196,7 +205,9 @@ export async function shareDialog({ bucket }) {
       else showFound(p);
     } catch (err) {
       if (err.status === 401) { dlg.close(); return; }
-      showError(err.message || "Could not look that person up.");
+      // No exact username/email match: a name like "Jane Doe" is found by the search instead.
+      if (err.status === 404 && (await picker.searchNow()) > 0) showError("");
+      else showError(err.message || "Could not look that person up.");
     } finally {
       busy = false;
       find.disabled = false;
@@ -217,7 +228,7 @@ export async function shareDialog({ bucket }) {
   dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });
 
   return new Promise((resolve) => {
-    dlg.addEventListener("close", () => { dlg.remove(); resolve({ changed }); });
+    dlg.addEventListener("close", () => { picker.dispose(); dlg.remove(); resolve({ changed }); });
     document.body.append(dlg);
     dlg.showModal();
     login.focus();

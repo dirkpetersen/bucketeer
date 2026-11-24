@@ -36,6 +36,15 @@ class Mailer:
     def enabled(self) -> bool:
         return bool(self.s.smtp_from)
 
+    def describe(self) -> str:
+        """One line for the startup log: is email on, and through which server."""
+        s = self.s
+        if not self.enabled:
+            return "share invitation email is OFF (SMTP_FROM is empty)"
+        via = (f"{s.smtp_host}:{s.smtp_port} security={s.smtp_security}" if s.smtp_host
+               else "the recipient domain's MX, port 25")
+        return f"share invitation email is ON, from {s.smtp_from} via {via}"
+
     def _build(self, to: str, owner_name: str, bucket: str, access: str) -> EmailMessage:
         s = self.s
         owner = _clean(owner_name) or "A colleague"
@@ -97,14 +106,20 @@ class Mailer:
 
     async def send_share_invite(self, to: str, owner_name: str, bucket: str, access: str):
         if not self.enabled:
+            log.info("share invitation for bucket %s not sent: email is off (SMTP_FROM empty)",
+                     _clean(bucket, 63))
             return None
         to = (to or "").strip()
         if not to or any(c in to for c in "\r\n<>,;\" "):
-            log.info("no usable email address for a share invitation")
+            log.info("share invitation for bucket %s not sent: the recipient has no usable "
+                     "email address in AD", _clean(bucket, 63))
             return False
         try:
             await asyncio.to_thread(self._send, self._build(to, owner_name, bucket, access))
-            return True
-        except Exception as e:  # never fail the share; the text may hold a server name only
-            log.warning("share invitation email failed: %s", type(e).__name__)
+        except Exception as e:  # never fail the share
+            # SMTP errors carry the server's reply (e.g. "554 relay denied"), never our password
+            log.warning("share invitation email to %s for bucket %s failed: %s: %s", to,
+                        _clean(bucket, 63), type(e).__name__, _clean(str(e), 200))
             return False
+        log.info("share invitation email sent to %s for bucket %s", to, _clean(bucket, 63))
+        return True

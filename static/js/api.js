@@ -184,6 +184,7 @@ export const revokeBucketKey = (id) => api(`/bucket-keys/${Number(id)}`, { metho
 // Sharing a bucket with people. lookup -> {username, displayName, isYou} (exact match, rate
 // limited); shares -> {shares: [{id, recipient, displayName, uid, access, createdAt, status}], checked}.
 const shareBase = (bucket) => `/buckets/${encodeURIComponent(bucket)}/shares`;
+export const searchPeople = (q) => api(`/people/search?q=${encodeURIComponent(q)}`);
 export const lookupShareRecipient = (bucket, q) => api(`/buckets/${encodeURIComponent(bucket)}/share-lookup?q=${encodeURIComponent(q)}`);
 export const listBucketShares = (bucket) => api(shareBase(bucket));
 export const createBucketShare = (bucket, login, access) => api(shareBase(bucket), { method: "POST", json: { login, access } });
