@@ -31,4 +31,8 @@ if __name__ == "__main__":
 
         logging.basicConfig(level="INFO", format="%(asctime)s %(levelname)s %(name)s: %(message)s")
         raise SystemExit(restore_main(sys.argv[1:]))
+    if "--rebuild-from-ceph" in sys.argv:
+        from bucketeer.rebuild import main as rebuild
+
+        raise SystemExit(rebuild(sys.argv[1:]))
     main()

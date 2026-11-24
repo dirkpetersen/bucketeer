@@ -279,7 +279,7 @@ the item lands.
   tag alphabet left out with a warning; admin action "Write Bucketeer tags to all
   buckets"; tag editor keeps them read-only; bucket-key users get display names
   `bucketeer key: <owner> / <bucket> / <ro|rw>`.
-- [ ] P6-3 `python3 app.py --rebuild-from-ceph [--fill-gaps]` (PLAN 1, 6): rebuild
+- [x] P6-3 `python3 app.py --rebuild-from-ceph [--fill-gaps]` (PLAN 1, 6): rebuild
   `buckets`, `bucket_keys`, `shares` from tags, key users and policy statements; fill-gaps
   mode never overwrites; prints and audits `system.rebuild`.
 - [ ] P6-4 Product catalog and bucket quotas (PLAN 0, 2): admin catalog (name, price per

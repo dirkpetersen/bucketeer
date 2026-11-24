@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from bucketeer import backup, bucket_delete
+from bucketeer import backup, bucket_delete, rebuild
 from bucketeer.bucket_keys import cleanup_pending
 
 from .conftest import REQUIRED
@@ -125,13 +125,14 @@ EVENTS = {
     "backup.failed": "a backup run that could not write its archive",
     "rgw.user.create": "first S3 use of a new AD user creates the RGW user",
     "billing.report_failed": "no billing contact's mail server took the monthly sheet",
+    "system.rebuild": "python3 app.py --rebuild-from-ceph (actor system)",
 }
 
 ACTION_RE = re.compile(r"^(?:[a-z][a-z_]*)(?:\.[a-z][a-z_]*)+$")
 ACTION_EXCEPTIONS = {"logout"}  # pre-dates the scheme; kept so old log rows still match
 TARGET_TYPES = {"user", "rgw_user", "bucket", "bucket_key", "access_key", "profile", "setting",
                 "uid_mapping", "notification_endpoint", "report", "offboarding_run", "subuser",
-                "backup"}
+                "backup", "database"}
 ACTORS = {"alice", "bob", "dave", "system", "mallory"}
 
 SECRET_PATTERNS = [
@@ -514,6 +515,8 @@ def run(tmp_path_factory, moto_server):
     r.step("event", lambda: b.post("/api/admin/backup/run", headers=H))
     env.app.state.backup.factory = real_factory
     r.step("POST /api/admin/backup/run", lambda: ok(b.post("/api/admin/backup/run", headers=H)))
+    # rebuilding rows from Ceph (command line; fill-gaps adds nothing here)
+    r.step("event", lambda: asyncio.run(rebuild.rebuild_from_ceph(env.app, True)))
     yield r
     backup.ENV_FILE = saved_env_file
     env.db.close()

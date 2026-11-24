@@ -293,7 +293,8 @@ async def export_chargeback(admin: Admin, croit: Croit, db: Db):
     for v in views:
         q = v["quota"]
         quota = q["maxSize"] if q["enabled"] else None
-        created = (meta.get(v["name"]) or {}).get("created_at")
+        m = meta.get(v["name"]) or {}
+        created = m.get("created_at") if m.get("creation_known", 1) else None
         number = v["budgetNumber"]
         w.writerow([csv_safe(c) for c in (
             v["name"], v["tenant"], v["owner"], (users.get(v["owner"]) or {}).get("name") or "",

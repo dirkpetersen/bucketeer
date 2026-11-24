@@ -52,6 +52,7 @@ BACKFILLS: list[tuple[int, str, dict, dict]] = [
     (4, "bucket_keys", {"id": 7}, {"state": "active", "access_key": None}),
     (5, "bucket_keys", {"id": 7}, {"statement_pending_cleanup": 0}),
     (14, "user_profiles", {"ad_username": "alice"}, {"location": None}),
+    (15, "buckets", {"name": "alice-data"}, {"creation_known": 1}),
 ]
 
 
