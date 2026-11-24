@@ -3,8 +3,9 @@ import { icon } from "../icons.js";
 import { api } from "../api.js";
 import { toast } from "../components/toast.js";
 
-// Admin "Billing" tab: price per TiB-month, fiscal year start, and the monthly
-// charges per user or per bucket for the last 12 months plus fiscal year to date.
+// Admin "Billing" tab: product catalog (Tier-3-S3 price = the billing price), fiscal year
+// start, the monthly chargeback .xlsx (download, send now, contacts and monthly email), and
+// the monthly charges per user or per bucket for the last 12 months plus fiscal year to date.
 // The server computes every figure; this view only shows them.
 
 const FY = [[1, "January 1"], [4, "April 1"], [7, "July 1"], [10, "October 1"]];
@@ -35,23 +36,42 @@ export function renderBilling() {
   };
   const monthLabel = (m) => new Date(`${m}-15T00:00:00`).toLocaleDateString(undefined, { month: "short", year: "2-digit" });
 
+  function productRows(s) {
+    return s.products.map((p) => {
+      const id = `bl-p-${p.id}`;
+      const name = h("input", { class: "input mono-input", id: `${id}-name`, type: "text", maxlength: "40", value: p.name, autocomplete: "off", "aria-label": `Name of ${p.name}` });
+      const price = h("input", { class: "input", id: `${id}-price`, type: "number", min: "0", step: "0.01", value: String(p.pricePerTiBMonth), "aria-label": `Price per TiB-month of ${p.name}` });
+      const text = h("input", { class: "input", id: `${id}-text`, type: "text", maxlength: "200", value: p.advertised, "aria-label": `Advertised text of ${p.name}` });
+      const row = h("div", { class: "bl-prod", role: "row" },
+        h("div", { class: "bl-prod-cell", role: "cell", "data-label": "Product" }, name,
+          h("small", { class: "set-hint", text: p.id === "tier3" ? "On premises, billed on the quota" : "Cloud, billed at the real AWS cost" })),
+        h("div", { class: "bl-prod-cell", role: "cell", "data-label": `Price per TiB-month (${s.currency})` }, price),
+        h("div", { class: "bl-prod-cell", role: "cell", "data-label": "Advertised text" }, text));
+      return { el: row, value: () => ({ id: p.id, name: name.value.trim(), pricePerTiBMonth: Number(price.value), advertised: text.value.trim() }) };
+    });
+  }
+
   function settingsCard() {
     const s = data.settings;
-    const price = h("input", { class: "input", id: "bl-price", type: "number", min: "0", step: "0.01", value: String(s.pricePerTiBMonth) });
     const cur = h("input", { class: "input mono-input bl-cur", id: "bl-cur", type: "text", maxlength: "3", value: s.currency, autocomplete: "off" });
     const fy = h("select", { class: "input", id: "bl-fy" }, FY.map(([v, t]) => h("option", { value: String(v), selected: v === s.fiscalYearStart, text: t })));
+    const products = productRows(s);
     const save = h("button", { class: "btn btn-primary", type: "submit", text: "Save" });
     const form = h("form", { class: "bl-form", novalidate: true },
-      h("div", { class: "field" }, h("label", { for: "bl-price", text: "Price per TiB per month" }), price),
       h("div", { class: "field" }, h("label", { for: "bl-cur", text: "Currency" }), cur),
       h("div", { class: "field" }, h("label", { for: "bl-fy", text: "Fiscal year starts" }), fy),
+      h("div", { class: "bl-prods", role: "table", "aria-label": "Products" },
+        h("div", { class: "bl-prod bl-prod-head", role: "row" },
+          ["Product", `Price per TiB-month (${s.currency})`, "Advertised text"].map((t) => h("span", { role: "columnheader", text: t }))),
+        products.map((p) => p.el)),
+      h("p", { class: "set-hint bl-wide", text: "The Tier-3-S3 price is the price used for the monthly charges below. Cloud products are billed at the real AWS cost; their price and text are what users see as an estimate." }),
       h("div", { class: "set-actions" }, save));
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       save.disabled = true;
       try {
         await api("/admin/billing/settings", { method: "PUT", json: {
-          pricePerTiBMonth: Number(price.value), currency: cur.value.trim(), fiscalYearStart: Number(fy.value) } });
+          products: products.map((p) => p.value()), currency: cur.value.trim(), fiscalYearStart: Number(fy.value) } });
         toast.show("Billing settings saved.");
         await load();
       } catch (err) {
@@ -65,6 +85,76 @@ export function renderBilling() {
         h("span", { class: "chip", text: data.fiscalYear.label })),
       h("p", { class: "set-lead", text: "Bucketeer records the size of every bucket each hour (the last reading of a day counts). A month's charge is the average stored TiB over the days of that month times the price. Days before recording started, or when the cluster could not be read, are not charged. The current price applies to all months shown." }),
       form);
+  }
+
+  const fmtWhen = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+  function sheetCard() {
+    const s = data.settings;
+    const rep = data.report;
+    const month = h("input", { class: "input mono-input", id: "bl-month", type: "month", value: rep.lastMonth, max: data.months[data.months.length - 1], required: true, pattern: "[0-9]{4}-[0-9]{2}" });
+    const download = h("a", { class: "btn", download: "" }, icon("download"), "Download .xlsx");
+    const sync = () => { download.href = `/api/admin/billing/chargeback.xlsx?month=${encodeURIComponent(month.value)}`; };
+    month.addEventListener("input", sync);
+    sync();
+    const sendNow = h("button", { class: "btn", type: "button", disabled: !data.email.enabled || !s.contacts.length }, icon("bell"), "Send now");
+    sendNow.addEventListener("click", async () => {
+      sendNow.disabled = true;
+      try {
+        const r = await api("/admin/billing/report/send", { method: "POST", json: { month: month.value } });
+        toast.show(r.failed.length ? `Sent to ${r.sent.join(", ")}; not to ${r.failed.join(", ")}.` : `Sheet for ${month.value} sent to ${r.sent.join(", ")}.`);
+        await load();
+      } catch (err) {
+        if (err.status !== 401) toast.error(err.message);
+        sendNow.disabled = false;
+      }
+    });
+
+    const contacts = h("textarea", { class: "input mono-input bl-contacts", id: "bl-contacts", rows: "3", spellcheck: "false", "aria-describedby": "bl-contacts-hint" });
+    contacts.value = s.contacts.join("\n");
+    const day = h("select", { class: "input", id: "bl-day" }, Array.from({ length: 28 }, (_, i) => h("option", { value: String(i + 1), selected: i + 1 === s.sendDay, text: String(i + 1) })));
+    const on = h("input", { type: "checkbox", id: "bl-on", checked: s.sendEnabled, disabled: !data.email.enabled && !s.sendEnabled });
+    const save = h("button", { class: "btn btn-primary", type: "submit", text: "Save" });
+    const form = h("form", { class: "bl-form", novalidate: true },
+      h("div", { class: "field bl-wide" }, h("label", { for: "bl-contacts", text: "Billing contacts" }), contacts,
+        h("small", { class: "set-hint", id: "bl-contacts-hint", text: "One email address per line, at most 10." })),
+      h("div", { class: "field" }, h("label", { for: "bl-day", text: "Send on day of the month" }), day),
+      h("label", { class: "qd-check set-check", for: "bl-on" }, on,
+        h("span", {}, h("b", { text: "Email last month's sheet" }), h("small", { text: "On the send day at 06:00 server time" }))),
+      h("div", { class: "set-actions" }, save));
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      save.disabled = true;
+      try {
+        await api("/admin/billing/settings", { method: "PUT", json: {
+          contacts: contacts.value.split(/[\s,;]+/).filter(Boolean), sendDay: Number(day.value), sendEnabled: on.checked } });
+        toast.show("Email settings saved.");
+        await load();
+      } catch (err) {
+        if (err.status !== 401) toast.error(err.message);
+      } finally {
+        save.disabled = false;
+      }
+    });
+
+    const last = rep.last;
+    const status = h("div", { class: "bl-status" },
+      rep.nextSend ? h("p", { class: "set-hint", text: `Next email: ${fmtWhen(rep.nextSend)}.` }) : null,
+      rep.lastSentMonth ? h("p", { class: "set-hint", text: `Last scheduled sheet sent: ${rep.lastSentMonth}.` }) : null,
+      last ? h("p", { class: last.ok ? "set-ok" : "set-err", text: last.ok
+        ? `${last.trigger === "manual" ? "Sent by hand" : "Sent"} ${fmtWhen(last.at)}: ${last.month} to ${last.sent.join(", ")}${last.failed.length ? ` (failed: ${last.failed.join(", ")})` : ""}.`
+        : `Sending ${last.month} failed ${fmtWhen(last.at)}. The server log has the mail server's answer.` }) : null);
+
+    return h("section", { class: "card set-card", "aria-labelledby": "bl-x" },
+      h("div", { class: "set-head" }, h("h2", { id: "bl-x", text: "Chargeback sheet" }),
+        h("span", { class: "chip", text: s.sendEnabled ? `Emailed on day ${s.sendDay}` : "Email off" })),
+      h("p", { class: "set-lead", text: "One row per bucket and month for finance. On-premises buckets are billed on their quota: the month's daily average in TiB, rounded up. A bucket without a quota is billed on its measured size. Buckets without a budget number, or owners without an email address, are listed on the Problems sheet." }),
+      h("div", { class: "bl-month" },
+        h("div", { class: "field" }, h("label", { for: "bl-month", text: "Month" }), month),
+        h("div", { class: "bl-tools" }, download, sendNow)),
+      data.email.enabled ? null : h("div", { class: "set-warn", role: "note" }, icon("alert"),
+        h("span", { text: "Email is off (SMTP_FROM is empty in the server settings), so the sheet can only be downloaded." })),
+      form, status);
   }
 
   function tableCard() {
@@ -102,7 +192,7 @@ export function renderBilling() {
   }
 
   function paint() {
-    host.replaceChildren(settingsCard(), tableCard());
+    host.replaceChildren(settingsCard(), sheetCard(), tableCard());
   }
 
   return { el: host, load };

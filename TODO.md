@@ -289,11 +289,11 @@ the item lands.
   days, admins exempt, 409 with what is left and when); `quota_changes` table; RGW user
   quota set unlimited (new and, once, existing accounts; bucket-key users keep zero);
   "Default quota" becomes "Default bucket quota"; audit `bucket.quota`.
-- [ ] P6-5 Chargeback .xlsx (PLAN 3): daily quota reading next to `usage_daily`;
+- [x] P6-5 Chargeback .xlsx (PLAN 3): daily quota reading next to `usage_daily`;
   on-prem quantity = daily average quota TiB rounded up; 10-column sheet + "Problems"
   sheet; `openpyxl`; `csv_safe` cells; Billing tab month picker download; audit
   `admin.export.billing_xlsx`.
-- [ ] P6-6 Billing contact and monthly email (PLAN 3): settings contact(s), send day
+- [x] P6-6 Billing contact and monthly email (PLAN 3): settings contact(s), send day
   1-28, on/off; mailer attachments; scheduler at 06:00 with catch-up and no double send;
   "Send now"; audit `billing.report_sent|report_failed`.
 - [ ] P6-7 Backup bucket on premises (PLAN 5): `BACKUP_BUCKET`; RGW user

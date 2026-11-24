@@ -1,4 +1,6 @@
-"""Share invitation email (CLAUDE.md "Sharing"). Optional: with `SMTP_FROM` empty nothing is sent.
+"""Share invitation email (CLAUDE.md "Sharing") and the monthly billing report with its
+.xlsx attachment (`send_with_attachment`, CLAUDE.md "Billing"). Optional: with `SMTP_FROM`
+empty nothing is sent.
 
 With `SMTP_HOST` empty and `SMTP_FROM` set, the mail server is the recipient domain's MX record
 (lowest preference first, then the next ones; no MX = the domain's own address), port 25,
@@ -40,10 +42,11 @@ class Mailer:
         """One line for the startup log: is email on, and through which server."""
         s = self.s
         if not self.enabled:
-            return "share invitation email is OFF (SMTP_FROM is empty)"
+            return ("share invitation and billing report email is OFF (SMTP_FROM is empty)")
         via = (f"{s.smtp_host}:{s.smtp_port} security={s.smtp_security}" if s.smtp_host
                else "the recipient domain's MX, port 25")
-        return f"share invitation email is ON, from {s.smtp_from} via {via}"
+        return (f"share invitation and billing report email is ON, from {s.smtp_from} "
+                f"via {via}")
 
     def _build(self, to: str, owner_name: str, bucket: str, access: str) -> EmailMessage:
         s = self.s
@@ -103,6 +106,46 @@ class Mailer:
             if s.smtp_username:
                 smtp.login(s.smtp_username, s.smtp_password.get_secret_value())
             smtp.send_message(msg)
+
+    def _build_report(self, to: str, subject: str, body: str, filename: str,
+                      data: bytes, mime: str) -> EmailMessage:
+        msg = EmailMessage()
+        msg["From"] = self.s.smtp_from
+        msg["To"] = to
+        msg["Subject"] = _clean(subject, 150)
+        msg.set_content(body)
+        maintype, subtype = mime.split("/", 1)
+        msg.add_attachment(data, maintype=maintype, subtype=subtype,
+                           filename=_clean(filename, 100))
+        return msg
+
+    async def send_with_attachment(self, recipients: list[str], subject: str, body: str,
+                                   filename: str, data: bytes, mime: str, what: str
+                                   ) -> tuple[list[str], list[str]] | None:
+        """One message per recipient (MX delivery is per domain anyway), each with the
+        attachment. Returns (sent, failed) addresses, or None while email is off. Never
+        raises; `what` names the message in the log lines ("billing report 2026-10")."""
+        if not self.enabled:
+            log.info("%s not sent: email is off (SMTP_FROM empty)", what)
+            return None
+        sent, failed = [], []
+        for to in recipients:
+            to = (to or "").strip()
+            if not to or any(c in to for c in "\r\n<>,;\" "):
+                log.info("%s not sent to an unusable address", what)
+                failed.append(to)
+                continue
+            try:
+                await asyncio.to_thread(
+                    self._send, self._build_report(to, subject, body, filename, data, mime))
+            except Exception as e:  # noqa: BLE001  logged; the caller audits the outcome
+                log.warning("%s email to %s failed: %s: %s", what, to, type(e).__name__,
+                            _clean(str(e), 200))
+                failed.append(to)
+                continue
+            log.info("%s email sent to %s", what, to)
+            sent.append(to)
+        return sent, failed
 
     async def send_share_invite(self, to: str, owner_name: str, bucket: str, access: str):
         if not self.enabled:

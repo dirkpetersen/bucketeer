@@ -113,3 +113,30 @@ def test_mx_sorted_by_preference(monkeypatch):
     monkeypatch.setattr("bucketeer.mailer.dns.resolver.resolve",
                         lambda d, t, lifetime: [R(20, "b.example.org."), R(10, "a.example.org.")])
     assert mailer()._mx_hosts("x@example.org") == ["a.example.org", "b.example.org"]
+
+
+def test_report_with_attachment(monkeypatch, caplog):
+    on = mailer()
+    sent = []
+
+    def send(msg):
+        if msg["To"] == "bad@example.org":
+            raise smtplib.SMTPRecipientsRefused({"bad@example.org": (550, b"no such user")})
+        sent.append(msg)
+    monkeypatch.setattr(on, "_send", send)
+    with caplog.at_level(logging.INFO, logger="bucketeer.mailer"):
+        res = asyncio.run(on.send_with_attachment(
+            ["f@example.org", "bad@example.org", "x@y.z\r\nBcc: e@f.g"], "Chargeback\nOctober",
+            "Attached.", "sheet.xlsx", b"PK\x03\x04data",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "billing report"))
+    assert res == (["f@example.org"], ["bad@example.org", "x@y.z\r\nBcc: e@f.g"])
+    (msg,) = sent
+    assert "\n" not in msg["Subject"] and msg["To"] == "f@example.org"
+    (att,) = list(msg.iter_attachments())
+    assert att.get_filename() == "sheet.xlsx" and att.get_content() == b"PK\x03\x04data"
+    assert att.get_content_type().endswith("spreadsheetml.sheet")
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("billing report email sent to f@example.org" in m for m in msgs)
+    assert any("no such user" in m for m in msgs)
+    off = Mailer(Settings(_env_file=None, **REQUIRED))
+    assert asyncio.run(off.send_with_attachment(["a@b.c"], "s", "b", "f", b"", "a/b", "x")) is None

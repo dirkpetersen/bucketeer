@@ -200,3 +200,21 @@
   .bl-tbl tfoot th, .bl-tbl tfoot td { display: flex; justify-content: space-between; gap: var(--sp-4); padding: var(--sp-1) 0; border: 0; }
   .bl-tbl tfoot td::before { content: attr(data-label); color: var(--text-muted); }
 }
+
+/* Billing tab: product catalog, chargeback sheet and monthly email */
+.bl-wide, .bl-prods { grid-column: 1 / -1; }
+.bl-prods { display: grid; border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.bl-prod { display: grid; gap: var(--sp-3); grid-template-columns: minmax(10rem, 1fr) minmax(8rem, 0.7fr) minmax(12rem, 2fr); align-items: start; padding: var(--sp-3) var(--sp-4); background: var(--surface); }
+.bl-prod + .bl-prod { border-top: 1px solid var(--border); }
+.bl-prod-head { background: var(--surface-2); font-size: var(--fs-xs); font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.bl-prod-cell { display: grid; gap: var(--sp-1); min-width: 0; }
+.bl-month { display: flex; flex-wrap: wrap; align-items: end; gap: var(--sp-3); }
+.bl-month .field { min-width: 11rem; }
+.bl-contacts { resize: vertical; min-height: 5rem; }
+.bl-status { display: grid; gap: var(--sp-1); }
+.bl-status:empty { display: none; }
+@media (max-width: 47.99em) {
+  .bl-prod { grid-template-columns: 1fr; }
+  .bl-prod-head { display: none; }
+  .bl-prod-cell[data-label]::before { content: attr(data-label); font-size: var(--fs-xs); color: var(--text-muted); }
+}
