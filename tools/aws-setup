@@ -1,0 +1,304 @@
+#!/usr/bin/env bash
+# aws-setup: prepare an AWS account for Bucketeer's cloud storage (PLAN.md feature 4).
+#
+# Run it once, and again after an upgrade, as an AWS administrator (not as Bucketeer).
+# It is idempotent: existing policies get a new default version, existing users are kept.
+#
+# It creates:
+#   * BucketeerUserBoundary  permissions boundary every per-person IAM user must carry:
+#                            the most an s3-<username> user can ever do (object access to
+#                            <prefix>* buckets, nothing else).
+#   * BucketeerAdmin         policy for Bucketeer's own identity:
+#                            - IAM users s3-* under path /bucketeer/, created ONLY with the
+#                              boundary above (so Bucketeer can't hand out more rights)
+#                            - bucket set-up on <prefix>* buckets (tags, versioning,
+#                              lifecycle, policy, encryption, public access block, object
+#                              lock for the backup bucket, Intelligent-Tiering config),
+#                              no object read or write
+#                            - CloudWatch S3 metrics (daily bucket sizes, monitoring)
+#                            - Cost Explorer (billing check) and cost allocation tags
+#   * IAM user s3-bucketeer-admin (path /bucketeer-admin/, outside what it can manage)
+#     with BucketeerAdmin attached, and, with --create-key, one access key.
+#
+# Needs: aws CLI v2 and credentials of an IAM administrator (AWS_PROFILE works).
+#
+# Usage:
+#   tools/aws-setup [--prefix bucketeer-] [--region us-west-2] [--create-key]
+#                   [--activate-tags] [--print]
+#
+#   --prefix         bucket name prefix Bucketeer may manage (default bucketeer-);
+#                    must match CLOUD_BUCKET_PREFIX in Bucketeer's .env
+#   --region         default region written into the hints (default us-west-2)
+#   --create-key     create an access key for s3-bucketeer-admin and print it ONCE;
+#                    refused when the user already has 2 keys
+#   --activate-tags  activate the bucketeer-* cost allocation tags in Cost Explorer;
+#                    AWS only knows a tag key after a resource carried it (up to 24 h),
+#                    and in an AWS Organization this must run in the management account
+#   --print          print both policies as JSON and change nothing
+#
+# Exit codes: 0 ok, 1 error, 2 bad usage.
+set -euo pipefail
+
+PREFIX="bucketeer-"
+REGION="us-west-2"
+CREATE_KEY=0
+ACTIVATE_TAGS=0
+PRINT_ONLY=0
+
+ADMIN_USER="s3-bucketeer-admin"
+ADMIN_PATH="/bucketeer-admin/"
+USER_PATH="/bucketeer/"
+ADMIN_POLICY="BucketeerAdmin"
+BOUNDARY_POLICY="BucketeerUserBoundary"
+TAG_KEYS=(bucketeer-bucket bucketeer-owner bucketeer-budget bucketeer-product bucketeer-location)
+
+die() { echo "aws-setup: $*" >&2; exit 1; }
+usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --prefix) PREFIX="${2:-}"; shift 2 ;;
+    --region) REGION="${2:-}"; shift 2 ;;
+    --create-key) CREATE_KEY=1; shift ;;
+    --activate-tags) ACTIVATE_TAGS=1; shift ;;
+    --print) PRINT_ONLY=1; shift ;;
+    -h|--help) usage ;;
+    *) echo "aws-setup: unknown option $1" >&2; usage ;;
+  esac
+done
+
+# A bucket prefix that is too short would let Bucketeer touch unrelated buckets.
+[[ "$PREFIX" =~ ^[a-z0-9][a-z0-9-]{2,30}-$ ]] \
+  || die "--prefix must be 4-32 lowercase letters, digits or hyphens and end with '-'"
+[[ "$REGION" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]$ ]] || die "--region looks wrong: $REGION"
+
+if [ "$PRINT_ONLY" = 1 ]; then
+  ACCOUNT="${AWS_ACCOUNT_ID:-123456789012}"
+else
+  command -v aws >/dev/null || die "the aws CLI (v2) is not installed"
+  ACCOUNT=$(aws sts get-caller-identity --query Account --output text) \
+    || die "no working AWS credentials (set AWS_PROFILE or run 'aws configure')"
+fi
+[[ "$ACCOUNT" =~ ^[0-9]{12}$ ]] || die "unexpected account id: $ACCOUNT"
+
+BOUNDARY_ARN="arn:aws:iam::${ACCOUNT}:policy${USER_PATH}${BOUNDARY_POLICY}"
+ADMIN_POLICY_ARN="arn:aws:iam::${ACCOUNT}:policy${ADMIN_PATH}${ADMIN_POLICY}"
+USERS_ARN="arn:aws:iam::${ACCOUNT}:user${USER_PATH}s3-*"
+BUCKETS_ARN="arn:aws:s3:::${PREFIX}*"
+OBJECTS_ARN="arn:aws:s3:::${PREFIX}*/*"
+
+# The most a person's IAM user may ever do. Their inline policy (written by Bucketeer)
+# narrows it to their own buckets; this boundary stops anything wider, even if
+# Bucketeer's identity were misused.
+boundary_policy() {
+  cat <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListOwnBuckets",
+      "Effect": "Allow",
+      "Action": ["s3:ListAllMyBuckets"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "BucketeerBuckets",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketLocation", "s3:ListBucket", "s3:ListBucketVersions",
+        "s3:ListBucketMultipartUploads", "s3:GetBucketVersioning",
+        "s3:GetBucketTagging", "s3:GetLifecycleConfiguration", "s3:DeleteBucket"
+      ],
+      "Resource": "${BUCKETS_ARN}"
+    },
+    {
+      "Sid": "BucketeerObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAttributes",
+        "s3:GetObjectTagging", "s3:GetObjectVersionTagging",
+        "s3:PutObject", "s3:PutObjectTagging",
+        "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:DeleteObjectTagging",
+        "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts",
+        "s3:RestoreObject"
+      ],
+      "Resource": "${OBJECTS_ARN}"
+    }
+  ]
+}
+EOF
+}
+
+admin_policy() {
+  cat <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CreatePersonUsersOnlyWithBoundary",
+      "Effect": "Allow",
+      "Action": ["iam:CreateUser", "iam:PutUserPermissionsBoundary"],
+      "Resource": "${USERS_ARN}",
+      "Condition": {"StringEquals": {"iam:PermissionsBoundary": "${BOUNDARY_ARN}"}}
+    },
+    {
+      "Sid": "ManagePersonUsers",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetUser", "iam:DeleteUser", "iam:TagUser", "iam:UntagUser",
+        "iam:ListUserTags", "iam:CreateAccessKey", "iam:DeleteAccessKey",
+        "iam:UpdateAccessKey", "iam:ListAccessKeys", "iam:GetAccessKeyLastUsed",
+        "iam:PutUserPolicy", "iam:GetUserPolicy", "iam:DeleteUserPolicy",
+        "iam:ListUserPolicies", "iam:ListAttachedUserPolicies", "iam:ListGroupsForUser"
+      ],
+      "Resource": "${USERS_ARN}"
+    },
+    {
+      "Sid": "ListUsers",
+      "Effect": "Allow",
+      "Action": ["iam:ListUsers"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NeverWidenItself",
+      "Effect": "Deny",
+      "Action": [
+        "iam:DeleteUserPermissionsBoundary", "iam:AttachUserPolicy",
+        "iam:CreatePolicy", "iam:CreatePolicyVersion", "iam:DeletePolicy",
+        "iam:DeletePolicyVersion", "iam:SetDefaultPolicyVersion",
+        "iam:CreateLoginProfile", "iam:UpdateLoginProfile", "iam:AddUserToGroup"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SetUpBucketeerBuckets",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket", "s3:DeleteBucket", "s3:ListBucket", "s3:GetBucketLocation",
+        "s3:GetBucketTagging", "s3:PutBucketTagging",
+        "s3:GetBucketVersioning", "s3:PutBucketVersioning",
+        "s3:GetLifecycleConfiguration", "s3:PutLifecycleConfiguration",
+        "s3:GetBucketPolicy", "s3:PutBucketPolicy", "s3:DeleteBucketPolicy",
+        "s3:GetBucketPublicAccessBlock", "s3:PutBucketPublicAccessBlock",
+        "s3:GetEncryptionConfiguration", "s3:PutEncryptionConfiguration",
+        "s3:GetBucketOwnershipControls", "s3:PutBucketOwnershipControls",
+        "s3:GetBucketObjectLockConfiguration", "s3:PutBucketObjectLockConfiguration",
+        "s3:GetIntelligentTieringConfiguration", "s3:PutIntelligentTieringConfiguration"
+      ],
+      "Resource": "${BUCKETS_ARN}"
+    },
+    {
+      "Sid": "ListAllBuckets",
+      "Effect": "Allow",
+      "Action": ["s3:ListAllMyBuckets"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NoObjectAccess",
+      "Effect": "Deny",
+      "Action": [
+        "s3:GetObject", "s3:GetObjectVersion", "s3:PutObject", "s3:DeleteObject",
+        "s3:DeleteObjectVersion", "s3:BypassGovernanceRetention",
+        "s3:PutObjectRetention", "s3:PutObjectLegalHold"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "MonitorBucketSizes",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics",
+        "cloudwatch:ListMetrics"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ReadCostsAndCostTags",
+      "Effect": "Allow",
+      "Action": [
+        "ce:GetCostAndUsage", "ce:GetCostAndUsageWithResources", "ce:GetCostForecast",
+        "ce:GetDimensionValues", "ce:GetTags", "ce:ListCostAllocationTags",
+        "ce:UpdateCostAllocationTagsStatus"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+EOF
+}
+
+if [ "$PRINT_ONLY" = 1 ]; then
+  echo "# ${BOUNDARY_POLICY} (account ${ACCOUNT}, prefix ${PREFIX})"
+  boundary_policy
+  echo "# ${ADMIN_POLICY}"
+  admin_policy
+  exit 0
+fi
+
+# Create a managed policy, or give an existing one a new default version (IAM keeps at
+# most 5 versions, so the oldest non-default one is deleted first when needed).
+ensure_policy() {
+  local name="$1" path="$2" arn="$3" doc="$4"
+  if aws iam get-policy --policy-arn "$arn" >/dev/null 2>&1; then
+    local versions
+    # shellcheck disable=SC2016  # backticks are JMESPath literals, not shell
+    versions=$(aws iam list-policy-versions --policy-arn "$arn" \
+      --query 'Versions[?IsDefaultVersion==`false`].VersionId' --output text)
+    if [ "$(wc -w <<<"$versions")" -ge 4 ]; then
+      local oldest
+      oldest=$(tr '\t' '\n' <<<"$versions" | sort -V | head -n1)
+      aws iam delete-policy-version --policy-arn "$arn" --version-id "$oldest"
+    fi
+    aws iam create-policy-version --policy-arn "$arn" --policy-document "$doc" \
+      --set-as-default >/dev/null
+    echo "updated policy ${name}"
+  else
+    aws iam create-policy --policy-name "$name" --path "$path" \
+      --description "Bucketeer (tools/aws-setup)" --policy-document "$doc" >/dev/null
+    echo "created policy ${name}"
+  fi
+}
+
+ensure_policy "$BOUNDARY_POLICY" "$USER_PATH" "$BOUNDARY_ARN" "$(boundary_policy)"
+ensure_policy "$ADMIN_POLICY" "$ADMIN_PATH" "$ADMIN_POLICY_ARN" "$(admin_policy)"
+
+if aws iam get-user --user-name "$ADMIN_USER" >/dev/null 2>&1; then
+  echo "user ${ADMIN_USER} exists"
+else
+  aws iam create-user --user-name "$ADMIN_USER" --path "$ADMIN_PATH" \
+    --tags Key=bucketeer-role,Value=admin >/dev/null
+  echo "created user ${ADMIN_USER}"
+fi
+aws iam attach-user-policy --user-name "$ADMIN_USER" --policy-arn "$ADMIN_POLICY_ARN"
+echo "attached ${ADMIN_POLICY} to ${ADMIN_USER}"
+
+if [ "$CREATE_KEY" = 1 ]; then
+  count=$(aws iam list-access-keys --user-name "$ADMIN_USER" \
+    --query 'length(AccessKeyMetadata)' --output text)
+  [ "$count" -lt 2 ] || die "${ADMIN_USER} already has 2 access keys; delete one first"
+  read -r key secret < <(aws iam create-access-key --user-name "$ADMIN_USER" \
+    --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text)
+  cat <<EOF
+
+Put these into Bucketeer's live .env (appmo env bucketeer). The secret is shown only now.
+CLOUD_REGION=${REGION}
+CLOUD_BUCKET_PREFIX=${PREFIX}
+CLOUD_ADMIN_ACCESS_KEY=${key}
+CLOUD_ADMIN_SECRET_KEY=${secret}
+EOF
+fi
+
+if [ "$ACTIVATE_TAGS" = 1 ]; then
+  args=()
+  for k in "${TAG_KEYS[@]}"; do args+=("TagKey=${k},Status=Active"); done
+  if aws ce update-cost-allocation-tags-status \
+      --cost-allocation-tags-status "${args[@]}" >/dev/null 2>&1; then
+    echo "activated cost allocation tags: ${TAG_KEYS[*]}"
+  else
+    echo "aws-setup: could not activate the cost allocation tags yet. AWS lists a tag" >&2
+    echo "  key only after a resource carried it (up to 24 h); in an AWS Organization" >&2
+    echo "  run --activate-tags in the management account. Re-run later." >&2
+  fi
+fi
+
+echo "done (account ${ACCOUNT}, bucket prefix ${PREFIX})"

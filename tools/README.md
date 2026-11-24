@@ -191,3 +191,23 @@ Plain `http://` is fine for a loopback address. Leave `CROIT_CA_CERT_FILE` and
   gateway's `CROIT_API_TOKEN`, run `croit-gate --check` (with the env file
   loaded), restart the gateway, then delete the old token in croit. Bucketeer
   is unaffected.
+
+## aws-setup
+
+Prepares an AWS account for Bucketeer's cloud storage (see `PLAN.md`, feature 4).
+Unlike the croit tools it is a bash script around the aws CLI v2, run by an AWS
+administrator (`AWS_PROFILE` works), never by Bucketeer.
+
+```bash
+tools/aws-setup --print                       # show both policies, change nothing
+tools/aws-setup --create-key                  # policies + user s3-bucketeer-admin + one key
+tools/aws-setup --activate-tags               # later: turn on the cost allocation tags
+tools/aws-setup --prefix osu-bkt- --region us-west-2
+```
+
+It creates the permissions boundary `BucketeerUserBoundary` (the most any per-person
+`s3-<username>` user can do), the policy `BucketeerAdmin` (IAM users under
+`/bucketeer/` only with that boundary; bucket set-up on `<prefix>*` buckets without object
+access; CloudWatch S3 metrics; Cost Explorer and the cost allocation tags, `bucketeer-bucket` first, since cloud buckets are billed by it) and the user
+`s3-bucketeer-admin` under `/bucketeer-admin/`. It is idempotent: a re-run gives the
+policies a new default version. `--create-key` prints the `.env` lines once.
