@@ -403,6 +403,30 @@ class Database:
             log.info("removed old pre-upgrade copy %s", old)
         return dest
 
+    def snapshot(self, dest: str | Path) -> None:
+        """Consistent copy of the whole database into the new file `dest` (sqlite backup API,
+        one self-contained file without WAL), e.g. for the nightly backup."""
+        out = sqlite3.connect(dest)
+        try:
+            with self._lock:
+                self._conn.backup(out)
+            out.execute("PRAGMA journal_mode = DELETE")
+        finally:
+            out.close()
+
+    def remove_upgrade_copies(self) -> list[Path]:
+        """Delete the pre-upgrade copies next to the file (after a successful backup run,
+        which holds the same data). Returns what was removed."""
+        if self.path == ":memory:":
+            return []
+        src = Path(self.path)
+        gone = []
+        for p in src.parent.iterdir():
+            if p.name.startswith(src.name) and _COPY_NAME.fullmatch(p.name[len(src.name):]):
+                p.unlink(missing_ok=True)
+                gone.append(p)
+        return gone
+
     @contextmanager
     def tx(self) -> Iterator[sqlite3.Connection]:
         """Lock plus a write transaction; rolls back on error."""

@@ -127,6 +127,20 @@ class Settings(BaseSettings):
     s3_ca_cert_file: str = ""
     s3_tls_verify: bool = True
 
+    # Backups (bucketeer/backup.py): the bucket the nightly archive goes to. Empty = off.
+    backup_bucket: str = ""
+
+    @field_validator("backup_bucket")
+    @classmethod
+    def _check_backup_bucket(cls, v: str) -> str:
+        v = v.strip()
+        if v:
+            from .policy_settings import check_dns_name
+
+            if errors := check_dns_name(v):
+                raise ValueError("BACKUP_BUCKET: " + " ".join(errors))
+        return v
+
     @field_validator("aws_profile_name")
     @classmethod
     def _check_profile(cls, v: str) -> str:

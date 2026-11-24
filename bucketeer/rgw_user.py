@@ -39,7 +39,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from .auth import SessionUser, require_user
-from .croit import CroitClient, CroitClientError, CroitError, CroitUnavailable
+from .croit import CroitClient, CroitClientError, CroitError, CroitUnavailable, is_backup_uid
 from .db import Database
 from .policy_settings import effective_default_quota, quota_croit_args
 
@@ -118,7 +118,10 @@ async def is_service_uid(croit, uid: str) -> bool:
     around it. Raises the client's error when the service uid cannot be determined: callers
     let that fail the request (fail closed) instead of assuming "no".
 
-    "Reserved" uids (RESERVED_UIDS) are fixed names; this one depends on the cluster."""
+    "Reserved" uids (RESERVED_UIDS) are fixed names; this one depends on the cluster. The
+    backup bucket's owner (`croit.BACKUP_UID`) counts as a service user too, on both backends."""
+    if is_backup_uid(uid):
+        return True
     mine = await croit.service_uid()
     return bool(mine) and uid.rpartition("$")[2].lower() == mine.rpartition("$")[2].lower()
 

@@ -9,6 +9,7 @@ import { renderSettings } from "./admin-settings.js";
 import { renderAudit } from "./admin-audit.js";
 import { renderOffboarding } from "./admin-offboarding.js";
 import { renderBilling } from "./admin-billing.js";
+import { renderBackup } from "./admin-backup.js";
 
 // Administration: all users and buckets, quota editing, suspend/unsuspend.
 // The server enforces the role on every call; this view is only shown to admins.
@@ -195,12 +196,14 @@ export function renderAdmin() {
   const audit = renderAudit();
   const offboarding = renderOffboarding();
   const billing = renderBilling();
+  const backup = renderBackup();
   let billingLoaded = false;
+  let backupLoaded = false;
   let auditLoaded = false;
   let offboardingLoaded = false;
-  const PANELS = { audit, settings, offboarding, billing }; // tabs that are panels, not tables
-  const TAB_KEYS = ["users", "buckets", "keys", "audit", "offboarding", "billing", "settings"];
-  const tabs = [["users", "Users", "users"], ["buckets", "Buckets", "bucket"], ["keys", "Bucket keys", "key"], ["audit", "Audit", "shield"], ["offboarding", "Offboarding", "logout"], ["billing", "Billing", "tag"], ["settings", "Settings", "sliders"]].map(([key, label, ic]) =>
+  const PANELS = { audit, settings, offboarding, billing, backup }; // tabs that are panels, not tables
+  const TAB_KEYS = ["users", "buckets", "keys", "audit", "offboarding", "billing", "backup", "settings"];
+  const tabs = [["users", "Users", "users"], ["buckets", "Buckets", "bucket"], ["keys", "Bucket keys", "key"], ["audit", "Audit", "shield"], ["offboarding", "Offboarding", "logout"], ["billing", "Billing", "tag"], ["backup", "Backup", "lock"], ["settings", "Settings", "sliders"]].map(([key, label, ic]) =>
     h("button", { class: "tab", type: "button", role: "tab", id: `tab-${key}`, "aria-controls": "admin-panel", on: { click: () => switchTab(key) } },
       icon(ic), label, h("span", { class: "tab-count", id: `tc-${key}` })));
   const tablist = h("div", { class: "tabs", role: "tablist", "aria-label": "Administration" }, tabs);
@@ -222,6 +225,7 @@ export function renderAdmin() {
     if (key === "audit" && !auditLoaded) { auditLoaded = true; audit.load(); }
     if (key === "offboarding" && !offboardingLoaded) { offboardingLoaded = true; offboarding.load(); }
     if (key === "billing" && !billingLoaded) { billingLoaded = true; billing.load(); }
+    if (key === "backup" && !backupLoaded) { backupLoaded = true; backup.load(); }
     render();
   }
   search.addEventListener("input", () => { state.q = search.value.trim().toLowerCase(); render(); });

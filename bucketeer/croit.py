@@ -56,6 +56,16 @@ def normalize_permission(raw: object) -> str | None:
 def subuser_name(raw: object) -> str:
     """The subuser's own name from `uid:name` (the uid may carry `tenant$`, never `:`)."""
     return str(raw or "").rpartition(":")[2]
+# The RGW user that owns the backup bucket (bucketeer/backup.py). Like the Admin Ops service
+# user it is not a person: hidden from user and bucket lists on both backends and refused as a
+# login, mapping, share or ACL target (`rgw_user.is_service_uid`), whatever the tenant or case.
+BACKUP_UID = "bucketeer-backup"
+
+
+def is_backup_uid(uid: object) -> bool:
+    return str(uid or "").rpartition("$")[2].lower() == BACKUP_UID
+
+
 DEFAULT_POLL_INTERVAL = 1.0
 DEFAULT_TASK_TIMEOUT = 300.0
 OUTPUT_TAIL = 500  # characters of task output kept in a CroitTaskFailed
@@ -328,15 +338,21 @@ class CroitClient:
     async def list_users(self, uids: list[str] | None = None, *,
                          fresh: bool = False) -> list[dict]:
         """All users, or only `uids`. The spec marks `uid` as required. `fresh` is
-        accepted for parity with `RgwAdminClient` (which caches) and ignored here."""
-        return await self._request("GET", "/s3/users", params={"uid": uids} if uids else None)
+        accepted for parity with `RgwAdminClient` (which caches) and ignored here. The backup
+        user is left out of the full list."""
+        users = await self._request("GET", "/s3/users", params={"uid": uids} if uids else None)
+        if uids or not isinstance(users, list):
+            return users
+        return [u for u in users if not (isinstance(u, dict) and is_backup_uid(u.get("uid")))]
 
     def invalidate_lists(self) -> None:
         """No-op (parity with `RgwAdminClient.invalidate_lists`; nothing is cached here)."""
 
     async def list_user_names(self) -> list[str]:
-        """Every RGW uid (`tenant$uid` with a tenant), a cheap list of strings."""
-        return await self._request("GET", "/s3/user-names")
+        """Every RGW uid (`tenant$uid` with a tenant), a cheap list of strings (not the
+        backup user's)."""
+        names = await self._request("GET", "/s3/user-names")
+        return [n for n in names if not is_backup_uid(n)] if isinstance(names, list) else names
 
     async def get_user(self, uid: str) -> dict | None:
         """The user, or None. croit's filter may return more or other users than
@@ -503,7 +519,11 @@ class CroitClient:
     # -- buckets --
 
     async def list_buckets(self) -> list[dict]:
-        return await self._request("GET", "/s3/buckets")
+        """Every bucket except the backup user's."""
+        rows = await self._request("GET", "/s3/buckets")
+        if not isinstance(rows, list):
+            return rows
+        return [b for b in rows if not (isinstance(b, dict) and is_backup_uid(b.get("owner")))]
 
     async def get_bucket(self, name: str, owner: str | None = None) -> dict:
         """Details read over S3: `acl`, `cors`, `versioning`."""
