@@ -317,7 +317,8 @@ async def list_buckets(request: Request, acct: Account):
         out.append({
             "name": _short(full),
             "tenant": b.get("tenant") or "",
-            "createdAt": (m or {}).get("created_at"),
+            "createdAt": (m or {}).get("created_at") if (m or {}).get("creation_known", 1)
+            else None,
             "objects": objects,
             "bytes": size,
             "quota": _quota(b.get("bucket_quota")),
@@ -562,7 +563,10 @@ async def set_budget(name: str, body: BudgetBody, request: Request, acct: Accoun
         if row is not None and old == budget and row["tag_synced"]:
             return {"name": short, "budgetNumber": budget, "changed": False, "tagSynced": True}
         if row is None:
-            await db.run(db.buckets.create, full, acct.uid, budget, user.username, False)
+            # a bucket older than this row: its creator and creation date are unknown here,
+            # so neither is recorded nor written as a tag (whatever the bucket has stays)
+            await db.run(db.buckets.create, full, acct.uid, budget, None, False,
+                         creation_known=False)
         else:
             await db.run(db.buckets.set_budget_number, full, budget)
             await db.run(db.buckets.set_tag_synced, full, False)

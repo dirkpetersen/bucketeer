@@ -245,6 +245,12 @@ MIGRATIONS: list[Migration] = [
     ALTER TABLE user_profiles ADD COLUMN location TEXT
         CHECK (location IS NULL OR location IN ('onprem', 'cloud'));
     """,
+    # v15: 0 = created_at / created_by are not the bucket's real creation (the row was made
+    # later, e.g. by a budget edit of a bucket older than the portal, or rebuilt from Ceph
+    # without a `bucketeer-created` tag): never written as creator/created tags or shown.
+    """
+    ALTER TABLE buckets ADD COLUMN creation_known INTEGER NOT NULL DEFAULT 1;
+    """,
 ]
 
 _MISSING: Any = object()
@@ -581,13 +587,21 @@ class Buckets(_Repo):
         budget_number: str | None = None,
         by: str | None = None,
         tag_synced: bool = True,
+        creation_known: bool = True,
+        created_at: str | None = None,
     ) -> None:
+        """`creation_known=False`: the bucket existed before this row (its creator and
+        creation date are unknown here); `created_at` overrides the current time."""
         with self.db.tx() as c:
             c.execute(
                 "INSERT INTO buckets (name, owner_uid, budget_number, created_at, "
-                "created_by, tag_synced) VALUES (?, ?, ?, ?, ?, ?)",
-                (name, owner_uid, budget_number, now(), by, int(tag_synced)),
+                "created_by, tag_synced, creation_known) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (name, owner_uid, budget_number, created_at or now(), by, int(tag_synced),
+                 int(creation_known)),
             )
+
+    def count(self) -> int:
+        return int(self.db.query_one("SELECT COUNT(*) AS n FROM buckets")["n"])
 
     def set_tag_synced(self, name: str, synced: bool) -> bool:
         with self.db.tx() as c:
@@ -637,6 +651,9 @@ class Shares(_Repo):
 
     def get(self, share_id: int) -> dict[str, Any] | None:
         return self.db.query_one("SELECT * FROM shares WHERE id = ?", (share_id,))
+
+    def count(self) -> int:
+        return int(self.db.query_one("SELECT COUNT(*) AS n FROM shares")["n"])
 
     def live_for(self, bucket_name: str, recipient_uid: str) -> dict[str, Any] | None:
         return self.db.query_one(
@@ -701,6 +718,26 @@ class BucketKeys(_Repo):
                  access_key),
             )
             return self.get(cur.lastrowid)  # type: ignore[return-value]
+
+    def restore(self, key_id: int, rgw_uid: str, owner_ad_username: str, bucket_name: str,
+                access: str, label: str, access_key: str | None,
+                suspended: bool = False) -> dict[str, Any]:
+        """Insert a key rebuilt from Ceph with its old id (so its Sid `bucketeer-key-<id>`
+        still matches), state active; a suspended one counts as suspended directly.
+        Raises sqlite3.IntegrityError when the id or the live uid is taken."""
+        stamp = now()
+        with self.db.tx() as c:
+            c.execute(
+                "INSERT INTO bucket_keys (id, rgw_uid, owner_ad_username, bucket_name, access, "
+                "label, created_at, state, access_key, suspended_at, suspended_by) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)",
+                (key_id, rgw_uid, owner_ad_username, bucket_name, access, label, stamp,
+                 access_key, stamp if suspended else None, "direct" if suspended else None),
+            )
+        return self.get(key_id)  # type: ignore[return-value]
+
+    def count(self) -> int:
+        return int(self.db.query_one("SELECT COUNT(*) AS n FROM bucket_keys")["n"])
 
     def set_state(self, key_id: int, state: str, access_key: str | None = None) -> bool:
         """pending -> active / failed (creation progress); `access_key` is kept when None."""

@@ -122,7 +122,44 @@ For buckets that existed before, use **Write Bucketeer tags** on the **Buckets**
 writes the tags to every bucket with its owner's key and reports how many were updated,
 already up to date, skipped (owner suspended, unknown or without an S3 key) and failed.
 It changes nothing else and is safe to run again. Facts Bucketeer doesn't know (for
-example the creation date of a bucket made outside Bucketeer) are left out.
+example the creation date of a bucket made outside Bucketeer) are left out. When an
+owner sets a budget number on such a bucket, Bucketeer still does not write a creator or
+creation date for it: whatever the bucket already has stays.
+
+## Rebuild after losing the database { #rebuild }
+
+If `data/bucketeer.sqlite3` is lost or damaged and there is no backup, rebuild what the
+cluster still knows. Stop the service, then run from the app directory:
+
+```bash
+.venv/bin/python3 app.py --rebuild-from-ceph            # full: only into an empty database
+.venv/bin/python3 app.py --rebuild-from-ceph --fill-gaps # add only what is missing
+```
+
+The full rebuild refuses a database that already has buckets, bucket keys or shares;
+`--force` runs it anyway. Neither mode changes or deletes a row that exists. Each
+bucket is read with its owner's own key, and the owner always comes from Ceph, never
+from a tag. The command prints what it added, what it skipped and any problems, exits
+with 1 if it could not run, and writes `system.rebuild` to the audit log. One bucket that
+can't be read never stops the run.
+
+What comes back:
+
+| Table | From |
+|---|---|
+| Buckets | the `bucketeer-*` tags: budget number, creator, creation date. A bucket without them gets no row, as before Bucketeer knew it. |
+| Bucket keys | the key users (`owner+label`) and their `bucketeer-key-<id>` policy statements: same id, owner (from the key user's display name), bucket, access, the public half of the key, suspended or not. |
+| Shares | the `bucketeer-share-*` policy statements whose person still has an S3 account. |
+
+A tag owner that differs from Ceph's is reported, and that bucket's tags are rewritten
+at the owner's next visit.
+
+What doesn't come back: the audit log, settings and uid mappings, user profiles (default
+budget numbers, Advanced mode), revoked keys and shares (so a deleted key's label can be
+used again), offboarding runs, usage readings for billing, bucket delete jobs and setup
+links. Shares come back only for people whose AD name equals their S3 user name or who
+have a uid mapping; others are listed as problems
+(set their uid mapping, then run `--fill-gaps` again).
 
 ## Backup
 

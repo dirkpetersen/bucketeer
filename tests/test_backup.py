@@ -345,8 +345,10 @@ def test_restore_roundtrip(env, env_file, tmp_path, monkeypatch, capsys):
         asyncio.run(backup.restore(settings, "../etc/passwd", client=client))
 
     details = asyncio.run(backup.restore(settings, rec["key"], client=client))
-    assert details["catchUp"] == "unavailable"
-    assert "isn't available" in capsys.readouterr().out
+    # the real catch-up (bucketeer.rebuild, fill-gaps) ran against the restored database
+    assert details["catchUp"] == "done", details
+    assert details["catchUpResult"]["mode"] == "fill_gaps"
+    assert "Catch-up from Ceph: done" in capsys.readouterr().out
     restored = Database(data_dir / DB_FILENAME)
     try:
         assert restored.settings.get("marker") == "from-the-backup"

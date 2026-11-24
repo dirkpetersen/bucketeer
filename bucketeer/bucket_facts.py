@@ -181,7 +181,8 @@ async def sync(app, uid: str, full: str, *, owner_email: str | None = None,
                creator: str | None = None, stats: dict | None = None,
                lookup: bool = True, budget: Any = _ROW) -> tuple[bool, bool]:
     """Write the facts of one bucket with the owner's own key. Budget, creator and creation
-    date come from the SQLite row (`creator` only fills a missing one; `budget` overrides
+    date come from the SQLite row (`creator` only fills a missing one, and neither is written
+    for a row with `creation_known` 0, made after the bucket; `budget` overrides
     the row, e.g. when it could not be written). Returns (ok, changed); ok is False when
     the write failed or the quota could not be read (the caller keeps `tag_synced = 0` and
     reconcile retries). Never raises."""
@@ -201,8 +202,10 @@ async def sync(app, uid: str, full: str, *, owner_email: str | None = None,
             budget=(row or {}).get("budget_number") if budget is _ROW else budget,
             set_budget=row is not None or budget is not _ROW,
             owner_email=owner_email,
-            creator=(row or {}).get("created_by") or creator,
-            created=(row or {}).get("created_at"),
+            # a row made after the bucket (`creation_known` 0) leaves both tags as they are
+            creator=((row.get("created_by") or creator) if row.get("creation_known", 1)
+                     else None) if row else creator,
+            created=row.get("created_at") if row and row.get("creation_known", 1) else None,
             quota=quota_value(stats.get("bucket_quota")) if stats is not None else None,
         )
         changed = await app.state.s3.call(uid, write, _short(full), facts)
