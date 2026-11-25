@@ -58,16 +58,20 @@ export function renderBackup() {
       ? (st.objectLock ? `${st.mode ?? "No default"} · ${st.retentionDays ?? "?"} days` : "Not enabled")
       : "Created on the first run";
     const last = data.lastRun;
+    const cloud = data.destination === "cloud";
     return h("dl", { class: "bu-facts" },
-      fact("Bucket", h("code", { text: data.bucket })),
-      fact("Location", "On premises"),
-      fact("Owner", h("code", { text: data.user })),
+      fact("Bucket", data.bucket ? h("code", { text: data.bucket }) : "Named and created on the first run"),
+      fact("Location", cloud ? `Cloud (AWS, ${data.region ?? "?"})` : "On premises"),
+      fact(cloud ? "Writer" : "Owner", h("code", { text: data.user }),
+        cloud ? h("span", { class: "set-hint", text: " IAM user, a new access key for each run, deleted after it" }) : null),
       fact("Object lock", st.exists && st.objectLock && st.mode === "COMPLIANCE" ? chip(lockText, "chip-ok") : lockText),
       fact("Versioning", st.exists ? (st.versioning ?? "unknown") : "Created on the first run"),
       fact("Last backup", last
         ? h("span", { class: "bu-last" }, outcome(last), h("span", { text: `${when(last.startedAt)}${last.bytes != null ? ` · ${formatBytes(last.bytes)}` : ""}` }))
         : "None yet"),
-      fact("Next run", data.nextRun ? when(data.nextRun) : "Not scheduled"));
+      fact("Next run", data.nextRun ? when(data.nextRun) : "Not scheduled"),
+      cloud ? fact("On premises", h("code", { text: data.onpremBucket ?? "" }), " (earlier backups stay there)")
+        : (data.awsBucket ? fact("In AWS", h("code", { text: data.awsBucket }), " (earlier backups stay there)") : null));
   }
 
   function settingsCard() {
@@ -121,18 +125,19 @@ export function renderBackup() {
       runs.length
         ? h("div", { class: "tbl-wrap" }, h("table", { class: "tbl bu-tbl" },
           h("caption", { class: "visually-hidden", text: "Backup runs, newest first" }),
-          h("thead", {}, h("tr", {}, ["Started", "By", "Outcome", "Size", "Archive"].map((t, i) =>
-            h("th", { scope: "col", class: i === 3 ? "num" : "", text: t })))),
+          h("thead", {}, h("tr", {}, ["Started", "By", "Where", "Outcome", "Size", "Archive"].map((t, i) =>
+            h("th", { scope: "col", class: i === 4 ? "num" : "", text: t })))),
           h("tbody", {}, runs.map((r) => h("tr", {},
             h("td", { "data-label": "Started", text: when(r.startedAt) }),
             h("td", { "data-label": "By", text: r.trigger === "schedule" ? "Schedule" : r.actor }),
+            h("td", { "data-label": "Where", text: r.destination === "cloud" ? "AWS" : "On premises" }),
             h("td", { "data-label": "Outcome" }, outcome(r)),
             h("td", { class: "num", "data-label": "Size", text: r.bytes != null ? formatBytes(r.bytes) : "—" }),
             h("td", { "data-label": "Archive" }, r.error
               ? h("span", { class: "bu-err", text: r.error })
               : h("code", { class: "bu-key", text: r.key ?? "" })))))))
         : h("p", { class: "set-empty", text: "No backups yet. The first one runs at the backup time, or now with Back up now." }),
-      h("p", { class: "set-hint", text: "To restore, stop Bucketeer and run python3 app.py --restore-backup latest (or an archive name) in its folder. See the admin guide." }));
+      h("p", { class: "set-hint", text: "To restore, stop Bucketeer and run python3 app.py --restore-backup latest (or an archive name) in its folder; add --from cloud or --from onprem to choose the place (default: where the newest backup went). See the admin guide." }));
   }
 
   function paint() {

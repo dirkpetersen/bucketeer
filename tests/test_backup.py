@@ -348,7 +348,9 @@ def test_restore_roundtrip(env, env_file, tmp_path, monkeypatch, capsys):
     # the real catch-up (bucketeer.rebuild, fill-gaps) ran against the restored database
     assert details["catchUp"] == "done", details
     assert details["catchUpResult"]["mode"] == "fill_gaps"
-    assert "Catch-up from Ceph: done" in capsys.readouterr().out
+    assert set(details["catchUpResult"]) == {"mode", "added", "skipped", "problems",
+                                             "problemReasons", "problemItems"}
+    assert "Rebuild from Ceph (fill gaps):" in capsys.readouterr().out  # rebuild.summary
     restored = Database(data_dir / DB_FILENAME)
     try:
         assert restored.settings.get("marker") == "from-the-backup"
@@ -385,3 +387,15 @@ def test_restore_roundtrip(env, env_file, tmp_path, monkeypatch, capsys):
 def test_restore_command_usage():
     assert backup.restore_main(["--restore-backup"]) == 2
     assert backup.restore_main(["--restore-backup", "--force"]) == 2
+
+
+def test_catch_up_digest_keeps_counts_and_fifty_problems():
+    report = {"mode": "fill_gaps", "added": {"buckets": 3}, "skipped": [{}] * 7,
+              "problems": [{"table": "buckets", "item": f"b{i}", "reason": "no_owner",
+                            "detail": "x" * 100} for i in range(500)]}
+    got = backup.catch_up_digest(report)
+    assert got["problems"] == 500 and got["skipped"] == 7 and got["added"] == {"buckets": 3}
+    assert got["problemReasons"] == {"no_owner": 500} and len(got["problemItems"]) == 50
+    assert got["problemItems"][0] == "buckets b0" and len(json.dumps(got)) < 2000
+    assert backup.catch_up_digest({"buckets": 0}) == {"buckets": 0}
+    assert len(backup.catch_up_digest(["y" * 50] * 100)) == 2000

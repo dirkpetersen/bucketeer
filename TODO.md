@@ -319,8 +319,9 @@ the item lands.
   bucket, its policy and the CUR 2.0 export, and lets the admin user read that bucket
   only; Bucketeer sums `line_item_unblended_cost` per bucket from the export; cloud rows
   in the sheet in cents, unknown lines on the Problems sheet, export total shown.
-- [ ] P6-12 Backups to AWS (PLAN 5): when the global location is Cloud, back up to an AWS
-  bucket with the same object-lock rules through a dedicated backup IAM user.
+- [x] P6-12 Backups to AWS (PLAN 5): when the global location is Cloud, back up to an AWS
+  bucket with the same object-lock rules through a dedicated backup IAM user (keys made and deleted per
+  run, `--restore-backup --from cloud`).
 
 ## Verify against a real croit cluster
 

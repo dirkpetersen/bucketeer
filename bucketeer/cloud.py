@@ -18,11 +18,18 @@ It never touches user data: objects are reached only with a person's own key (P6
   tests) re-checks hourly, every 5 min after a failure.
 - Naming helpers for later items: `user_name(username)` = `<CLOUD_USER_PREFIX><username>`
   (lowercased), `bucket_name(username, name)` = `<CLOUD_BUCKET_PREFIX><username>-<name>`.
-  `RESERVED_USERNAMES` would collide with the system users and are refused for cloud.
+  `reserved_usernames()` (`bucketeer-admin`, `bucketeer-backup`) would collide with the
+  system users: `user_name` refuses them (`CloudError` 409 `reserved`), so an AD account
+  named `bucketeer-backup` never reaches the backup IAM user.
+- Backups (P6-12, `backup.AwsDestination`): `backup_user_name()` =
+  `<CLOUD_USER_PREFIX>bucketeer-backup` (path `/bucketeer/`, with the boundary
+  `boundary_arn(account)`), `new_backup_bucket_name()` = `<CLOUD_BUCKET_PREFIX>backup-<12 hex>`,
+  `s3_with_key(access, secret)` a plain S3 client for the backup user's temporary key.
 """
 
 import asyncio
 import logging
+import secrets
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -46,6 +53,8 @@ for _name in ("botocore", "boto3", "urllib3"):
 
 USER_PATH = "/bucketeer/"  # per-person IAM users (tools/aws-setup grants only this path)
 RESERVED_USERNAMES = frozenset({"bucketeer-admin", "bucketeer-backup"})
+BACKUP_USER = "bucketeer-backup"  # after CLOUD_USER_PREFIX: the backup IAM user (P6-12)
+BOUNDARY_POLICY = "BucketeerUserBoundary"  # tools/aws-setup, under USER_PATH
 CHECK_ON_START = True
 NO_CLOUD = object()  # create_app(cloud_admin=NO_CLOUD): no cloud even when configured
 RECHECK_OK = 3600.0
@@ -71,6 +80,11 @@ class CloudUnavailable(CloudError):
 class NotConfigured(CloudError):
     def __init__(self):
         super().__init__(409, "not_configured", "Cloud storage is not set up")
+
+
+def reserved_usernames() -> frozenset[str]:
+    """AD usernames that never get cloud: they would name a system IAM user."""
+    return RESERVED_USERNAMES
 
 
 def _now() -> str:
@@ -148,7 +162,27 @@ class CloudAdmin:
     # -- naming ------------------------------------------------------------------------
 
     def user_name(self, username: str) -> str:
+        if username.lower() in reserved_usernames():
+            raise CloudError(409, "reserved",
+                             f"The username {username.lower()} is reserved for Bucketeer itself")
         return f"{self.user_prefix}{username.lower()}"
+
+    def backup_user_name(self) -> str:
+        return f"{self.user_prefix}{BACKUP_USER}"
+
+    def new_backup_bucket_name(self) -> str:
+        return f"{self.bucket_prefix}backup-{secrets.token_hex(6)}"
+
+    @staticmethod
+    def boundary_arn(account: str) -> str:
+        return f"arn:aws:iam::{account}:policy{USER_PATH}{BOUNDARY_POLICY}"
+
+    def s3_with_key(self, access: str, secret: str):
+        """An S3 client signed with another identity's key (the backup user's temporary
+        key). Not cached: the key lives for one operation."""
+        session = self._session_factory(aws_access_key_id=access, aws_secret_access_key=secret,
+                                        region_name=self.region)
+        return session.client("s3", config=self._config)
 
     def bucket_name(self, username: str, name: str) -> str:
         return f"{self.bucket_prefix}{username.lower()}-{name}"
