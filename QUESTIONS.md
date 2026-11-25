@@ -59,7 +59,7 @@ Each question has a recommendation. Answering "ok" accepts it.
   size from CloudWatch and quota from SQLite, and add a rebuild step that reads cloud
   bucket tags from AWS.
 
-**Answer:**
+**Answer:** yes (2026-11-25).
 
 ## Resolved
 
