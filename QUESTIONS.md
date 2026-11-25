@@ -18,12 +18,12 @@ Each question has a recommendation. Answering "ok" accepts it.
 - **Context:** the owner wrote "any osu specific details should be in PLAN.md". It may
   mean they should stay there, or that they should not be there (the repo is public).
   PLAN.md holds the product names `Tier-3-S3`, `Archive-S3`, `Cloud-S3`, the example
-  index `DN002480 AC02619` and the example email `Jane.Doe@oregonstate.edu`.
+  index `DN002480 AC02619` and the example email `Jane.Doe@university.edu`.
 - **Default being built:** keep them in PLAN.md as written. In code they are only
   defaults of admin settings (the product names) or examples, never hard-coded rules.
 - **Recommendation:** keep them; they are not secrets.
 
-**Answer:**
+**Answer:** keep the product names and the index example; names and emails use `@university.edu` (2026-11-25). Done in PLAN.md.
 
 ### Q17: Remove the first plan commit from the public history?
 

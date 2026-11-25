@@ -48,7 +48,7 @@ the same tags in AWS.
 | `bucketeer-budget` | budget number | `DN002480 AC02619` | exists already |
 | `bucketeer-bucket` | bucket name (`tenant:bucket` with a tenant) | `bucketeer-jdoe-scans` | the cost allocation key: one value per bucket, so Cost Explorer reports per bucket |
 | `bucketeer-owner` | owner uid; `tenant:uid` with a tenant | `jdoe`, `acme:jdoe` | `$` isn't allowed in tag values |
-| `bucketeer-owner-email` | owner's AD `mail` | `Jane.Doe@oregonstate.edu` | column A of the sheet; refreshed on reconcile |
+| `bucketeer-owner-email` | owner's AD `mail` | `Jane.Doe@university.edu` | column A of the sheet; refreshed on reconcile |
 | `bucketeer-creator` | AD username of the creator | `jdoe` | differs from the owner only when an admin creates it |
 | `bucketeer-created` | creation date, UTC | `2026-11-24` | |
 | `bucketeer-quota` | quota in whole TiB | `10` | readable copy of the quota; see below |
