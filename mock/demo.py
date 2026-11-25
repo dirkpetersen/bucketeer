@@ -3,7 +3,7 @@
 
     .venv/bin/python3 mock/demo.py [--port 8000] [--moto-port 18081] [--admin-ops-port 18082]
                                    [--backend rgw|croit] [--croit-port 18080]
-                                   [--keep-data] [--password demo]
+                                   [--keep-data] [--password demo] [--cloud] [--backup]
 
 Starts, all on 127.0.0.1 and in this one process: a moto S3 server, the RGW Admin Ops mock
 (mock/rgw_admin_mock.py) over the mock croit's state (mock/croit_mock.py, mirrored into moto
@@ -20,6 +20,10 @@ as a background job. The placement list is entered by hand there, so the demo pr
 with the mock's two placements (change it on the admin Settings tab). `--backend croit`
 runs the mock croit API over HTTP instead (`--admin-ops` additionally serves the Admin Ops
 mock next to it, for trying the RGW tooling by hand).
+
+`--cloud` adds a pretend AWS account (mock/demo_cloud.py: moto `mock_aws` in this process,
+injected with `create_app(cloud_admin=...)`), `--backup` sets BACKUP_BUCKET. Every start also
+seeds bucket quotas, budget numbers, a price and 75 days of billing readings.
 
 The developer's real `.env` and Settings environment variables are ignored on
 purpose, so the demo can never reach a real AD or croit.
@@ -150,7 +154,7 @@ def demo_settings(*, port: int, s3_url: str, data_dir: str, backend: str = "rgw"
                   croit_url: str = "", croit_token: str = "",
                   rgw_admin_url: str = "", rgw_admin_access_key: str = "",
                   rgw_admin_secret_key: str = "",
-                  session_secret: str | None = None) -> Settings:
+                  session_secret: str | None = None, **extra) -> Settings:
     """The backend is always passed on explicitly. `rgw` (default) needs the `rgw_admin_*`
     values, `croit` the `croit_*` ones; the other backend's are left out."""
     backend_settings = (
@@ -174,6 +178,7 @@ def demo_settings(*, port: int, s3_url: str, data_dir: str, backend: str = "rgw"
         s3_endpoint_url=s3_url,
         s3_addressing_style="path",  # moto on 127.0.0.1: no bucket subdomains
         **backend_settings,
+        **extra,  # --cloud (CLOUD_*), --backup (BACKUP_BUCKET)
     )
 
 
@@ -182,12 +187,52 @@ DEMO_PLACEMENT = {"default": "default-placement",
                   "allowed": ["default-placement", "nvme-placement"]}
 
 
+TIB = 2**40
+DEMO_BACKUP_BUCKET = "bucketeer-demo-backup"
+# Bucket quotas (TiB) the demo gives the seeded buckets, and the sizes its billing readings
+# pretend they had (moto holds only a few bytes): the Billing tab and the bucket list get data.
+DEMO_QUOTAS = {"alice-data": 2, "alice-empty": 1, "bob-shared": 5}
+DEMO_READINGS = {"alice-data": ("alice", 0.8), "alice-empty": ("alice", 0.0),
+                 "bob-shared": ("bob", 3.2)}
+DEMO_BILLING = {"pricePerTiBMonth": 8.0, "currency": "USD", "fiscalYearStart": 7}
+DEMO_BUDGETS = {"alice": "DN123456", "bob": "DN654321", "dana": "DN000001"}
+
+
 def seed_demo(state) -> None:
     """Extras on top of the mock's normal seed (alice, bob, acme$carol; no erin)."""
     state.put_key("bob", *BOB_EXTRA_KEY)
+    for name, tib in DEMO_QUOTAS.items():
+        if name in state.buckets:
+            state.set_quota(state.buckets[name].quota,
+                            {"enabled": True, "maxSize": tib * TIB, "maxObjects": -1})
 
 
-def build_demo_app(settings: Settings, croit=None, db=None, directory: DemoDirectory | None = None):
+def seed_demo_db(db, days: int = 75) -> None:
+    """Default budget numbers (erin has none: she sees the profile prompt), budget numbers
+    for two seeded buckets, a price per TiB-month and daily usage readings."""
+    from datetime import date, timedelta
+
+    from bucketeer import billing
+
+    for user, number in DEMO_BUDGETS.items():
+        db.profiles.set_default_budget_number(user, number)
+    for name, owner, number in (("alice-data", "alice", "DN123456"),
+                                ("bob-shared", "bob", "DN654321")):
+        if db.buckets.get(name) is None:
+            db.buckets.create(name, owner, number, by="demo", creation_known=False)
+    if db.settings.get(billing.KEY) is None:
+        db.settings.set(billing.KEY, DEMO_BILLING, by="demo")
+    today = date.today()
+    for back in range(days, 0, -1):
+        day = today - timedelta(days=back)
+        grow = 1 - back / (days * 2)  # sizes grow slowly towards today
+        db.usage.record(day.isoformat(), [
+            (name, owner, int(tib * grow * TIB), DEMO_QUOTAS[name] * TIB)
+            for name, (owner, tib) in DEMO_READINGS.items()])
+
+
+def build_demo_app(settings: Settings, croit=None, db=None, directory: DemoDirectory | None = None,
+                   cloud_admin=None):
     """With the rgw backend and a database passed in, pre-fill the manual placement list."""
     if db is not None and settings.admin_backend == "rgw":
         from bucketeer.policy_settings import PLACEMENT_KEY
@@ -195,7 +240,8 @@ def build_demo_app(settings: Settings, croit=None, db=None, directory: DemoDirec
         if db.settings.get(PLACEMENT_KEY) is None:
             db.settings.set(PLACEMENT_KEY, DEMO_PLACEMENT, by="demo")
     app = create_bucketeer(
-        settings, croit=croit, db=db, authenticator=directory or DemoDirectory()
+        settings, croit=croit, db=db, authenticator=directory or DemoDirectory(),
+        **({"cloud_admin": cloud_admin} if cloud_admin is not None else {}),
     )
     app.state.demo = True
     return app
@@ -230,6 +276,12 @@ def parse_args(argv=None):
     p.add_argument("--keep-data", action="store_true", help="keep the temporary DATA_DIR on exit")
     p.add_argument("--password", default=DEMO_PASSWORD,
                    help=f"demo password (default {DEMO_PASSWORD})")
+    p.add_argument("--cloud", action="store_true",
+                   help="pretend AWS account (moto mock_aws in this process): cloud keys, "
+                        "cloud buckets, cloud billing figures; see mock/demo_cloud.py")
+    p.add_argument("--backup", action="store_true",
+                   help=f"turn backups on (BACKUP_BUCKET={DEMO_BACKUP_BUCKET}); without it "
+                        "the Backup tab shows the off state")
     p.add_argument("--disabled", default="", metavar="USERS",
                    help="comma-separated demo users that start as disabled in the fake AD, "
                         "to try the offboarding job (e.g. --disabled bob)")
@@ -266,8 +318,21 @@ def main(argv=None) -> int:
     data_dir = tempfile.mkdtemp(prefix="bucketeer-demo-")
     aws_dir = Path(data_dir) / "aws"
     aws_dir.mkdir()
-    moto = croit_server = ops_server = db = None
+    moto = croit_server = ops_server = db = aws = None
+    extra: dict = {"backup_bucket": DEMO_BACKUP_BUCKET} if args.backup else {}
+    cloud_note = ""
     try:
+        if args.cloud:
+            import mock.demo_cloud as demo_cloud
+
+            aws = demo_cloud.start()  # before moto's S3 server is seeded: it resets moto
+            access, secret = demo_cloud.bootstrap()
+            demo_cloud.seed_billing_and_metrics()
+            extra.update(demo_cloud.cloud_settings(access, secret))
+            cloud_note = (f"  Cloud (AWS):    moto mock_aws in this process, region "
+                          f"{demo_cloud.REGION}, billing export in {demo_cloud.BILLING_BUCKET}\n"
+                          f"                  turn Advanced on and pick Cloud in the header; "
+                          f"alice's buckets \"scans\" and \"archive\" get sizes and costs\n")
         moto = start_moto("127.0.0.1", args.moto_port)
         bridge = S3Bridge(endpoint_url(moto))
         # The mock croit app always exists: its state is the "cluster" (users, keys, buckets)
@@ -303,7 +368,7 @@ def main(argv=None) -> int:
             settings = demo_settings(
                 port=args.port, s3_url=bridge.endpoint, data_dir=data_dir, backend="rgw",
                 rgw_admin_url=ops_url, rgw_admin_access_key=admin.access_key,
-                rgw_admin_secret_key=admin.secret_key)
+                rgw_admin_secret_key=admin.secret_key, **extra)
             backend_note = (f"  Admin backend:  rgw (RGW Admin Ops mock)\n"
                             f"                  RGW_ADMIN_URL={ops_url}\n"
                             f"                  service key {admin.access_key} "
@@ -314,7 +379,7 @@ def main(argv=None) -> int:
             croit_url = f"http://127.0.0.1:{args.croit_port}/api"
             settings = demo_settings(
                 port=args.port, s3_url=bridge.endpoint, data_dir=data_dir, backend="croit",
-                croit_url=croit_url, croit_token=ADMIN_TOKEN)
+                croit_url=croit_url, croit_token=ADMIN_TOKEN, **extra)
             backend_note = (f"  Admin backend:  croit (mock croit API)\n"
                             f"                  CROIT_URL={croit_url}\n"
                             f"                  admin API token: {ADMIN_TOKEN}\n")
@@ -325,8 +390,12 @@ def main(argv=None) -> int:
         directory = DemoDirectory(args.password)
         directory.disabled |= {n.strip().lower() for n in args.disabled.split(",") if n.strip()}
         db = Database(Path(data_dir) / DB_FILENAME)
-        app = build_demo_app(settings, db=db, directory=directory)
+        seed_demo_db(db)
+        cloud_admin = demo_cloud.make_cloud_admin(settings) if args.cloud else None
+        app = build_demo_app(settings, db=db, directory=directory, cloud_admin=cloud_admin)
 
+        backup_note = (f"on, BACKUP_BUCKET={DEMO_BACKUP_BUCKET}" if args.backup
+                       else "off (--backup turns them on)")
         print(f"""
 Bucketeer DEMO  (fake directory, mock cluster, moto S3; nothing here is real)
 
@@ -338,7 +407,8 @@ Bucketeer DEMO  (fake directory, mock cluster, moto S3; nothing here is real)
              erin   (Erin Evans, no S3 account yet: auto-created on first login)
              Log in by username, email (alice@{DOMAIN}) or UPN.
 
-{backend_note}  S3 endpoint:    {bridge.endpoint}  (moto)
+{backend_note}{cloud_note}  Backups:        {backup_note}
+  S3 endpoint:    {bridge.endpoint}  (moto)
   Data dir:       {data_dir} ({'kept' if args.keep_data else 'deleted on exit'})
 
   Use the keys without touching your real ~/.aws: reveal them in the UI, download
@@ -360,6 +430,8 @@ Ctrl+C stops everything.
             ops_server.should_exit = True
         if moto:
             moto.stop()
+        if aws:
+            aws.stop()
         if db:
             db.close()
         if args.keep_data:

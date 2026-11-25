@@ -200,7 +200,7 @@ function accountStatus() {
       }
       const show = (d, select) => paint("chip-ok", "Account ready",
         h("p", { class: "acct-line" }, "Signed in to S3 as ", h("code", { class: "acct-uid", text: a.uid }),
-          h("span", { class: "acct-sub", text: `Storage limit: ${quotaText(a.quota)}` })),
+          h("span", { class: "acct-sub", text: a.quota?.enabled ? `Storage limit: ${quotaText(a.quota)}` : "Storage limit: set per bucket (its quota)" })),
         setupPanel(d), advancedKeys(d, select, reload), subusersSection(d), cloudSection());
       // Re-read the key list after a change; the old panel (and any revealed secret) is dropped.
       const reload = async (select) => {

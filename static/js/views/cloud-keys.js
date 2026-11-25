@@ -1,4 +1,4 @@
-import { h } from "../dom.js";
+import { append, h } from "../dom.js";
 import { icon } from "../icons.js";
 import { copyText } from "../clipboard.js";
 import { createCloudKey, deleteCloudKey, getCloudCredentials, rotateCloudKey } from "../api.js";
@@ -155,7 +155,9 @@ export function cloudSection() {
     }));
     const selected = fresh?.accessKey || keys[0]?.accessKey;
     const cmd = testCommand(data.profile);
-    host.replaceChildren(
+    // append() skips the null/undefined of the optional parts; replaceChildren would print them.
+    host.replaceChildren();
+    append(host, [
       h("div", { class: "ck-head" },
         h("span", { class: "ck-badge", "aria-hidden": "true" }, icon("cloud")),
         h("div", {},
@@ -169,7 +171,7 @@ export function cloudSection() {
       h("div", { class: "cred-actions" }, add),
       selected && snippets(selected),
       selected && h("div", { class: "cred-test" }, h("span", { class: "label", text: "Test it" }),
-        h("div", { class: "cred-cmd" }, h("code", { text: cmd }), copyBtn(cmd, "Copy test command"))));
+        h("div", { class: "cred-cmd" }, h("code", { text: cmd }), copyBtn(cmd, "Copy test command")))]);
   };
 
   const load = async () => {

@@ -14,6 +14,14 @@
 .hdr .brand { margin-right: auto; text-decoration: none; color: var(--text); }
 .hdr .brand img { width: 1.875rem; height: 1.875rem; border-radius: 0.5rem; box-shadow: none; }
 .hdr .brand-name { font-size: var(--fs-lg); color: var(--text); }
+/* A phone header with the location switch, Advanced, theme and avatar has no room for the
+   wordmark: keep the logo and leave the name to screen readers. */
+@media (max-width: 30em) {
+  .hdr-in { gap: var(--sp-2); }
+  .hdr:has(.loc-switch:not([hidden])) .brand-name {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+}
 
 /* Advanced switch */
 .switch {
@@ -184,7 +192,7 @@ select.input { appearance: auto; }
 .creds-adv { display: grid; gap: var(--sp-4); }
 .creds-adv > .acct-sub { margin: 0; }
 @media (prefers-reduced-motion: reduce) { .sp-os-btn { transition: none; } }
-.acct-line .acct-sub { margin-left: var(--sp-2); }
+.acct-line .acct-sub { margin: 0; } /* the flex gap spaces it; a margin would indent it once it wraps */
 
 /* Skeletons */
 .skel { display: grid; gap: var(--sp-3); }
@@ -263,5 +271,9 @@ select.input { appearance: auto; }
 .ck-once-head > svg { flex: none; color: var(--accent-text); margin-top: 0.15rem; }
 .ck-once-head b { font-weight: 600; }
 .ck-secret { background: var(--surface); }
+/* Long keys must not widen the page on a phone: grid items may shrink, and the one-time
+   secret wraps (the person should see all of it before saving) instead of scrolling. */
+.ck-once > * { min-width: 0; }
+.ck-once .cred-key code { white-space: normal; overflow-wrap: anywhere; }
 @keyframes ck-in { from { opacity: 0; transform: translateY(-0.25rem); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .ck-once { animation: none; } }

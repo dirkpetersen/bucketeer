@@ -291,9 +291,14 @@
 
 /* Tag editor (builds on .pol, .lcd and .qd) */
 .tg { width: min(44rem, calc(100vw - 2 * var(--gutter))); }
-.tg-managed { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+/* Managed tags: one compact read-only list (key, value), not a card per tag. */
+.tg-mhead { display: grid; gap: var(--sp-1); }
+.tg-mhead[hidden] { display: none; }
+.tg-mhead p { margin: 0; }
+.tg-managed { list-style: none; margin: 0; padding: 0; display: grid; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); overflow: hidden; }
 .tg-managed[hidden] { display: none; }
-.tg-m { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: var(--sp-1) var(--sp-3); padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
+.tg-m { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: var(--sp-1) var(--sp-3); padding: var(--sp-2) var(--sp-3); }
+.tg-m + .tg-m { border-top: 1px solid var(--border); }
 .tg-lock { width: 1rem; height: 1rem; color: var(--text-muted); }
 .tg-m code { font-family: var(--font-mono); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .tg-m-v { color: var(--text-muted); }
@@ -476,6 +481,9 @@
 .qp-row .qp-step { min-width: 2.75rem; min-height: 2.75rem; justify-content: center; padding: 0; }
 .qp-box { position: relative; flex: 1 1 auto; min-width: 0; max-width: 12rem; }
 .qp-box .qp-input { width: 100%; padding-right: 3.25rem; font-variant-numeric: tabular-nums; text-align: right; }
+/* The − and + buttons step the value: no native spinner squeezed next to the number. */
+.qp-box .qp-input { appearance: textfield; -moz-appearance: textfield; }
+.qp-box .qp-input::-webkit-inner-spin-button, .qp-box .qp-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .qp-unit { position: absolute; inset-block: 0; right: var(--sp-3); display: flex; align-items: center;
   font-size: var(--fs-xs); font-weight: 650; letter-spacing: 0.06em; color: var(--text-muted); pointer-events: none; }
 .qp-cost { margin: 0; padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); background: var(--surface-2);
@@ -502,9 +510,10 @@
   border-radius: var(--r-md); background: var(--surface); overflow: hidden;
   transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
 .ccb-name:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
-.ccb-name .input { flex: 1 1 auto; min-width: 6rem; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
+.ccb-name .input { flex: 1 1 6rem; width: 0; min-width: 6rem; border: 0; border-radius: 0; box-shadow: none; background: transparent; }
 .ccb-name .input:focus { box-shadow: none; outline: none; }
-.ccb-prefix { display: flex; align-items: center; padding: 0 var(--sp-1) 0 var(--sp-3); font-family: var(--font-mono);
+/* Block (not flex) so a prefix too long for a phone ends in an ellipsis; the full name is shown below. */
+.ccb-prefix { display: block; align-content: center; flex: 0 1 auto; padding: 0 var(--sp-1) 0 var(--sp-3); font-family: var(--font-mono);
   font-size: var(--fs-sm); color: var(--text-muted); background: var(--surface-2); border-right: 1px solid var(--border);
   white-space: nowrap; max-width: 55%; overflow: hidden; text-overflow: ellipsis; }
 .ccb-full { margin: 0; font-family: var(--font-mono); font-size: var(--fs-xs); overflow-wrap: anywhere; }

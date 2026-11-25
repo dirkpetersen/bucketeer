@@ -19,6 +19,7 @@ CROIT_MOCK_S3=moto .venv/bin/python3 mock/croit_mock.py   # same, plus a moto S3
 CROIT_MOCK_ADMIN_OPS=1 .venv/bin/python3 mock/croit_mock.py   # croit mock plus the RGW Admin Ops mock on :18082 (RGW_ADMIN_URL, admin keys printed)
 .venv/bin/python3 mock/demo.py                # local demo on the DEFAULT rgw backend: moto + RGW Admin Ops mock (shared state, S3 bridge) + Bucketeer, fake users (demo password printed), http://127.0.0.1:8000; placements pre-filled
 .venv/bin/python3 mock/demo.py --backend croit   # the same demo on the croit backend (mock croit API on :18080; --admin-ops also serves the Admin Ops mock)
+.venv/bin/python3 mock/demo.py --cloud --backup   # plus a pretend AWS account (moto mock_aws in-process, mock/demo_cloud.py: cloud keys/buckets/billing figures) and backups on
 .venv/bin/ruff check .                         # lint
 .venv/bin/pytest                               # all tests
 .venv/bin/pytest tests/test_config.py::test_parsing   # single test

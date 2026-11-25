@@ -123,7 +123,7 @@ export function renderBilling() {
       const stat = (label, value, extra) => h("div", { class: "bl-stat" },
         h("span", { class: "bl-stat-label", text: label }), h("b", { class: "bl-stat-value", text: value }),
         extra ? h("small", { class: "bl-stat-note", text: extra }) : null);
-      const gap = Math.round((c.exportTotal - c.rowsTotal) * 100) / 100;
+      const gap = Math.round((c.exportTotal - c.rowsTotal) * 100) / 100 || 0; // never "-$0.00"
       box.replaceChildren(
         h("div", { class: "bl-cloud-head" },
           h("b", { text: `Cloud (AWS), ${m}` }),
@@ -181,7 +181,7 @@ export function renderBilling() {
         h("small", { class: "set-hint", id: "bl-contacts-hint", text: "One email address per line, at most 10." })),
       h("div", { class: "field" }, h("label", { for: "bl-day", text: "Send on day of the month" }), day,
         rep.cloudBilling && s.sendDay < rep.sendDay ? h("small", { class: "set-hint", text: `Cloud billing is on, so the email waits until day ${rep.sendDay}, when AWS has finished the month.` }) : null),
-      h("label", { class: "qd-check set-check", for: "bl-on" }, on,
+      h("label", { class: "qd-check set-check bl-switch", for: "bl-on" }, on,
         h("span", {}, h("b", { text: "Email last month's sheet" }), h("small", { text: "On the send day at 06:00 server time" }))),
       h("div", { class: "set-actions" }, save));
     form.addEventListener("submit", async (e) => {

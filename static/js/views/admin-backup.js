@@ -65,7 +65,7 @@ export function renderBackup() {
       fact(cloud ? "Writer" : "Owner", h("code", { text: data.user }),
         cloud ? h("span", { class: "set-hint", text: " IAM user, a new access key for each run, deleted after it" }) : null),
       fact("Object lock", st.exists && st.objectLock && st.mode === "COMPLIANCE" ? chip(lockText, "chip-ok") : lockText),
-      fact("Versioning", st.exists ? (st.versioning ?? "unknown") : "Created on the first run"),
+      fact("Versioning", st.exists ? ({ enabled: "On", suspended: "Paused", off: "Off" }[st.versioning] ?? st.versioning ?? "Unknown") : "Created on the first run"),
       fact("Last backup", last
         ? h("span", { class: "bu-last" }, outcome(last), h("span", { text: `${when(last.startedAt)}${last.bytes != null ? ` · ${formatBytes(last.bytes)}` : ""}` }))
         : "None yet"),
@@ -80,7 +80,7 @@ export function renderBackup() {
     const time = h("input", { class: "input bu-time", id: "bu-time", type: "time", step: "60", required: true, value: s.time });
     const days = h("input", { class: "input bu-days", id: "bu-days", type: "number", min: String(s.retentionDays), max: "36500", step: "1", value: String(s.retentionDays) });
     const save = h("button", { class: "btn", type: "submit", text: "Save" });
-    const now = h("button", { class: "btn btn-primary", type: "button", disabled: data.running }, icon("download"), data.running ? "Backing up…" : "Back up now");
+    const now = h("button", { class: "btn btn-primary", type: "button", disabled: data.running }, data.running ? h("span", { class: "spinner", "aria-hidden": "true" }) : icon("lock"), data.running ? "Backing up…" : "Back up now");
     const form = h("form", { class: "bl-form", novalidate: true },
       h("div", { class: "field" }, h("label", { for: "bu-time", text: "Backup time (server time)" }), time),
       h("div", { class: "field" }, h("label", { for: "bu-days", text: "Retention in days" }), days),
@@ -101,7 +101,7 @@ export function renderBackup() {
     });
     now.addEventListener("click", async () => {
       now.disabled = true;
-      now.replaceChildren(icon("download"), "Backing up…");
+      now.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), "Backing up…");
       try {
         const run = await api("/admin/backup/run", { method: "POST" });
         if (run.outcome === "ok") toast.show(`Backup written (${formatBytes(run.bytes)}).`);
@@ -137,7 +137,11 @@ export function renderBackup() {
               ? h("span", { class: "bu-err", text: r.error })
               : h("code", { class: "bu-key", text: r.key ?? "" })))))))
         : h("p", { class: "set-empty", text: "No backups yet. The first one runs at the backup time, or now with Back up now." }),
-      h("p", { class: "set-hint", text: "To restore, stop Bucketeer and run python3 app.py --restore-backup latest (or an archive name) in its folder; add --from cloud or --from onprem to choose the place (default: where the newest backup went). See the admin guide." }));
+      h("p", { class: "set-hint" }, "To restore, stop Bucketeer and run ",
+        h("code", { class: "bu-key", text: "python3 app.py --restore-backup latest" }),
+        " (or an archive name instead of latest) in its folder; add ", h("code", { class: "bu-key", text: "--from cloud" }),
+        " or ", h("code", { class: "bu-key", text: "--from onprem" }),
+        " to choose the place (default: where the newest backup went). See the admin guide."));
   }
 
   function paint() {

@@ -122,7 +122,10 @@ export async function tagsDialog({ bucket }) {
     managedList.replaceChildren(...managed.map((t) => h("li", { class: "tg-m" },
       icon("lock", "icon tg-lock"),
       h("code", { class: "tg-m-k", text: t.key }), h("code", { class: "tg-m-v", text: t.value }),
-      h("span", { class: "tg-m-h", text: MANAGED_HINT[t.key] || (/^bucketeer-/.test(t.key) ? FACT_HINT : "Managed by Bucketeer. It cannot be edited here.") }))));
+      // The common "kept up to date" note is said once above the list; only special rows get their own.
+      MANAGED_HINT[t.key] || !/^bucketeer-/.test(t.key)
+        ? h("span", { class: "tg-m-h", text: MANAGED_HINT[t.key] || "Managed by Bucketeer. It cannot be edited here." })
+        : null)));
     managedList.hidden = !managed.length;
     mlabel.hidden = !managed.length;
     list.replaceChildren(...tags.map(row));
@@ -133,7 +136,8 @@ export async function tagsDialog({ bucket }) {
   addBtn.addEventListener("click", () => { tags.push({ key: "", value: "" }); render(); list.lastElementChild.querySelector("input").focus(); });
   revert.addEventListener("click", () => { tags = copy(original); touched = new Set(); serverErrs = new Map(); conflict.hidden = true; render(); });
 
-  const mlabel = h("p", { class: "pol-lbl", text: "Managed by Bucketeer" });
+  const mlabel = h("div", { class: "tg-mhead" }, h("p", { class: "pol-lbl", text: "Managed by Bucketeer" }),
+    h("p", { class: "set-hint", text: `${FACT_HINT} They are read only here.` }));
   const form = h("form", { class: "pol-form tg-form", novalidate: true },
     conflict,
     mlabel, managedList,
