@@ -82,8 +82,9 @@ aws --profile s3-cloud s3 ls
   first. Your last key can't be deleted, only rotated.
 - **Setup command.** *Set up this computer* follows the Cloud / On Premises switch. On premises
   it installs `s3-onprem` only; in Cloud it installs the Cloud profile only, with a new AWS
-  key (if you already have two keys, the oldest is replaced). A new AWS key can take a minute
-  before it works everywhere, so if the test at the end fails, try again shortly.
+  key (if you already have two keys, the oldest is replaced). AWS needs a few seconds before
+  a new key works, so the test at the end waits for it (up to a minute) and shows dots
+  meanwhile.
 - If the card says to **ask an administrator**, an AWS user with your name already exists
   that Bucketeer did not make. An administrator has to remove it first.
 

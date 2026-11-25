@@ -232,8 +232,79 @@ def _done(names: list[str]) -> str:
     return "The AWS profiles " + " and ".join(f"'{n}'" for n in names) + " are installed."
 
 
-# A new AWS access key can take a few seconds to work everywhere.
-_CLOUD_LATE = "A new AWS key can take a minute to start working; try again shortly"
+# A new AWS access key is refused by S3 for a few seconds after CreateAccessKey (IAM is
+# eventually consistent), so the cloud test waits for it: up to KEY_WAIT_TRIES x
+# KEY_WAIT_SECONDS, and only while AWS answers with one of these codes. Any other error is
+# shown at once. On-premises keys already exist, so their test runs once.
+KEY_WAIT_TRIES = 12
+KEY_WAIT_SECONDS = 5
+KEY_NOT_ACTIVE = ("InvalidAccessKeyId", "SignatureDoesNotMatch")
+_WAITING = "AWS is still activating the new key; waiting up to a minute"
+_NOT_ACTIVE = "AWS has not activated the new key yet. Wait a minute, then run: {t}"
+_CLOUD_FAILED = "The test did not work. Try again in a minute: {t}. If it keeps failing, ask an administrator."
+_ONPREM_FAILED = "The test did not work. Check your network and VPN, then run: {t}"
+
+
+def _sh_test(t: str, is_cloud: bool) -> list[str]:
+    if not is_cloud:
+        return [f'    echo "Testing: {t}"',
+                f"    if {t} </dev/null; then",
+                '      echo "It works."',
+                "    else",
+                f'      echo "{_ONPREM_FAILED.format(t=t)}"',
+                "    fi"]
+    codes = "|".join(f"*{c}*" for c in KEY_NOT_ACTIVE)
+    return [f'    echo "Testing: {t}"',
+            "    n=0",
+            "    while :; do",
+            f"      if out=$({t} </dev/null 2>&1); then ok=1; else ok=0; fi",
+            "      waiting=0",
+            f'      if [ $ok -eq 0 ]; then case "$out" in {codes}) waiting=1 ;; esac; fi',
+            f"      if [ $waiting -eq 1 ] && [ $n -lt {KEY_WAIT_TRIES} ]; then",
+            f"        [ $n -gt 0 ] || printf '%s' '{_WAITING}'",
+            "        printf '.'",
+            f"        n=$((n + 1)); sleep {KEY_WAIT_SECONDS}; continue",
+            "      fi",
+            "      [ $n -eq 0 ] || echo",
+            "      if [ $ok -eq 1 ]; then",
+            "        [ -z \"$out\" ] || printf '%s\\n' \"$out\"",
+            '        echo "It works."',
+            "      else",
+            "        printf '%s\\n' \"$out\" >&2",
+            f'        if [ $waiting -eq 1 ]; then echo "{_NOT_ACTIVE.format(t=t)}"; '
+            f'else echo "{_CLOUD_FAILED.format(t=t)}"; fi',
+            "      fi",
+            "      break",
+            "    done"]
+
+
+def _ps_test(t: str, is_cloud: bool) -> list[str]:
+    args = " ".join(t.split()[1:])
+    if not is_cloud:
+        return [f'      Write-Host "Testing: {t}"',
+                f"      & aws {args}",
+                "      if ($LASTEXITCODE -eq 0) { Write-Host 'It works.' }",
+                f"      else {{ Write-Host '{_ONPREM_FAILED.format(t=t)}' }}"]
+    codes = "|".join(KEY_NOT_ACTIVE)
+    # "$_" turns Windows PowerShell's stderr ErrorRecords back into the plain lines aws wrote.
+    return [f'      Write-Host "Testing: {t}"',
+            "      $n = 0",
+            "      while ($true) {",
+            f'        $out = (& aws {args} 2>&1 | ForEach-Object {{ "$_" }}) -join $nl',
+            "        $ok = ($LASTEXITCODE -eq 0)",
+            f"        $waiting = (-not $ok) -and ($out -match '{codes}')",
+            f"        if ($waiting -and $n -lt {KEY_WAIT_TRIES}) {{",
+            f"          if ($n -eq 0) {{ Write-Host -NoNewline '{_WAITING}' }}",
+            "          Write-Host -NoNewline '.'",
+            f"          $n++; Start-Sleep -Seconds {KEY_WAIT_SECONDS}; continue",
+            "        }",
+            "        if ($n -gt 0) { Write-Host '' }",
+            "        if ($out.Trim()) { Write-Host $out.TrimEnd() }",
+            "        if ($ok) { Write-Host 'It works.' }",
+            f"        elseif ($waiting) {{ Write-Host '{_NOT_ACTIVE.format(t=t)}' }}",
+            f"        else {{ Write-Host '{_CLOUD_FAILED.format(t=t)}' }}",
+            "        break",
+            "      }"]
 
 
 def sh_script(v: SetupValues | None, cloud: CloudValues | None = None) -> str:
@@ -243,14 +314,7 @@ def sh_script(v: SetupValues | None, cloud: CloudValues | None = None) -> str:
     for name, cred, cfg, is_cloud in profiles:
         installs += [f"  install_section \"$CRED\" '{cred[0]}' '" + "\n".join(cred) + "'",
                      f"  install_section \"$CFG\" '{cfg[0]}' '" + "\n".join(cfg) + "'"]
-        t = _test_cmd(name)
-        hint = _CLOUD_LATE if is_cloud else "Check your network and VPN"
-        tests += [f'    echo "Testing: {t}"',
-                  f"    if {t} </dev/null; then",
-                  '      echo "It works."',
-                  "    else",
-                  f'      echo "The test did not work. {hint}, then run: {t}"',
-                  "    fi"]
+        tests += _sh_test(_test_cmd(name), is_cloud)
     return _fill(_SH, INSTALLS="\n".join(installs), TESTS="\n".join(tests),
                  DONE=_done([p[0] for p in profiles]),
                  TEST=" and ".join(_test_cmd(p[0]) for p in profiles))
@@ -264,12 +328,7 @@ def ps_script(v: SetupValues | None, cloud: CloudValues | None = None) -> str:
     for name, cred, cfg, is_cloud in profiles:
         installs += [f"    Install-Section $credFile '{cred[0]}' @({items(cred)})",
                      f"    Install-Section $cfgFile '{cfg[0]}' @({items(cfg)})"]
-        t = _test_cmd(name)
-        hint = _CLOUD_LATE if is_cloud else "Check your network and VPN"
-        tests += [f'      Write-Host "Testing: {t}"',
-                  f"      & aws {' '.join(t.split()[1:])}",
-                  "      if ($LASTEXITCODE -eq 0) { Write-Host 'It works.' }",
-                  f"      else {{ Write-Host 'The test did not work. {hint}, then run: {t}' }}"]
+        tests += _ps_test(_test_cmd(name), is_cloud)
     return _fill(_PS, INSTALLS="\n".join(installs), TESTS="\n".join(tests),
                  DONE=_done([p[0] for p in profiles]),
                  TEST=" and ".join(_test_cmd(p[0]) for p in profiles))

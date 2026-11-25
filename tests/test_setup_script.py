@@ -33,17 +33,21 @@ CLOUD_SECRET = "cl0udSECRETvalue0123456789ABCDEFGHIJKLmn"
 C = CloudValues("s3-cloud", "us-west-2", "AKIACLOUD0123456789X", CLOUD_SECRET)
 
 
-def run_sh(tmp_path, values=V, extra_env=None, aws=False, cloud=None):
+def run_sh(tmp_path, values=V, extra_env=None, aws=False, cloud=None, aws_script=None):
     script = tmp_path / "setup.sh"
     script.write_text(sh_script(values, cloud))
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     for tool in ("awk", "cp", "chmod", "mv", "mkdir", "date", "tail", "tr", "dirname", "cat"):
         shutil.copy(shutil.which(tool), bin_dir / tool)
-    if aws:
+    if aws or aws_script:
         fake = bin_dir / "aws"
-        fake.write_text(f'#!/bin/sh\necho "$@" > {tmp_path}/aws-args\n')
+        fake.write_text(aws_script or f'#!/bin/sh\necho "$@" > {tmp_path}/aws-args\n')
         fake.chmod(0o755)
+        # Records each wait instead of sleeping.
+        sleep = bin_dir / "sleep"
+        sleep.write_text(f'#!/bin/sh\necho "$1" >> {tmp_path}/slept\n')
+        sleep.chmod(0o755)
     env = {"PATH": str(bin_dir), "HOME": str(tmp_path), **(extra_env or {})}
     return subprocess.run(["/bin/sh", str(script)], env=env, capture_output=True, text=True, timeout=30)
 
@@ -168,3 +172,70 @@ def test_cloud_only_scripts_have_only_the_cloud_profile(tmp_path):
 def test_a_script_needs_a_profile():
     with pytest.raises(AssertionError):
         _profiles(None, None)
+
+
+KEY_ERROR = ("An error occurred (InvalidAccessKeyId) when calling the ListBuckets operation: "
+             "The AWS Access Key Id you provided does not exist in our records.")
+
+
+def flaky_aws(tmp_path, failures, error=KEY_ERROR):
+    """A fake aws that fails `failures` times with `error`, then lists one bucket."""
+    return (f"#!/bin/sh\nn=0\n[ -f {tmp_path}/calls ] && read n < {tmp_path}/calls\n"
+            f"n=$((n + 1)); echo $n > {tmp_path}/calls\n"
+            f"if [ $n -le {failures} ]; then echo '{error}' >&2; exit 254; fi\n"
+            "echo '2026-11-25 10:00:00 bucketeer-alice-data'\n")
+
+
+def waits(tmp_path):
+    f = tmp_path / "slept"
+    return f.read_text().split() if f.exists() else []
+
+
+def test_cloud_test_waits_for_a_new_key(tmp_path):
+    r = run_sh(tmp_path, values=None, cloud=C, aws_script=flaky_aws(tmp_path, 2))
+    assert r.returncode == 0, r.stderr
+    assert waits(tmp_path) == ["5", "5"]
+    assert "AWS is still activating the new key; waiting up to a minute..\n" in r.stdout
+    assert "bucketeer-alice-data\nIt works.\n" in r.stdout
+    # The refusals while waiting are not shown.
+    assert "InvalidAccessKeyId" not in r.stdout + r.stderr and CLOUD_SECRET not in r.stdout + r.stderr
+
+
+def test_cloud_test_gives_up_after_a_minute(tmp_path):
+    r = run_sh(tmp_path, values=None, cloud=C, aws_script=flaky_aws(tmp_path, 99))
+    assert r.returncode == 0, r.stderr
+    assert waits(tmp_path) == ["5"] * 12
+    assert (tmp_path / "calls").read_text().strip() == "13"
+    assert r.stderr.count("InvalidAccessKeyId") == 1
+    assert "AWS has not activated the new key yet. Wait a minute, then run: aws --profile s3-cloud s3 ls" in r.stdout
+    assert "It works." not in r.stdout
+
+
+def test_cloud_test_does_not_wait_on_other_errors(tmp_path):
+    r = run_sh(tmp_path, values=None, cloud=C, aws_script=flaky_aws(tmp_path, 99, "Could not connect to the endpoint URL"))
+    assert r.returncode == 0, r.stderr
+    assert waits(tmp_path) == [] and (tmp_path / "calls").read_text().strip() == "1"
+    assert "Could not connect" in r.stderr and "The test did not work. Try again in a minute" in r.stdout
+    assert "activating" not in r.stdout
+
+
+def test_cloud_test_without_waiting(tmp_path):
+    r = run_sh(tmp_path, values=None, cloud=C, aws_script=flaky_aws(tmp_path, 0))
+    assert r.returncode == 0, r.stderr
+    assert waits(tmp_path) == [] and "activating" not in r.stdout
+    assert "Testing: aws --profile s3-cloud s3 ls\n2026-11-25 10:00:00 bucketeer-alice-data\nIt works.\n" in r.stdout
+
+
+def test_onprem_test_runs_once(tmp_path):
+    # On-premises keys already exist: no waiting, whatever the error.
+    r = run_sh(tmp_path, aws_script=flaky_aws(tmp_path, 99))
+    assert r.returncode == 0, r.stderr
+    assert waits(tmp_path) == [] and (tmp_path / "calls").read_text().strip() == "1"
+    assert "Check your network and VPN" in r.stdout
+
+
+def test_ps_cloud_test_waits_for_a_new_key():
+    t = ps_script(None, C)
+    assert "& aws --profile s3-cloud s3 ls 2>&1" in t and "Start-Sleep -Seconds 5" in t
+    assert "-match 'InvalidAccessKeyId|SignatureDoesNotMatch'" in t and "$n -lt 12" in t
+    assert "Start-Sleep" not in ps_script(V)

@@ -440,7 +440,7 @@ def test_sh_script_cloud_section(tmp_path):
     cv = CloudValues("s3-cloud", "us-west-2", "AKIACLOUD0000000001", "cl0ud/Secret+Value=")
     assert cv.valid() and not CloudValues("s3-cloud", "us-west-2", "AK", "x'y").valid()
     text = sh_script(V, cv)
-    assert "[profile s3-cloud]" in text and "A new AWS key can take a minute" in text
+    assert "[profile s3-cloud]" in text and "AWS is still activating the new key" in text
     assert run_sh(tmp_path).returncode == 0  # on premises alone still works
 
 
