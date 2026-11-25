@@ -22,7 +22,8 @@ current month is "to date". The price in force applies to every month shown.
   `tier3` (Tier-3-S3) price. Switching `sendEnabled` on is 409 while email is off and 422
   without a contact; it records `sendFrom` in `billing_report`, so only send moments after it
   count. `GET` also returns `email: {enabled}` and `report: {lastSentMonth, last, nextSend,
-  lastMonth}`. The sheet and the monthly email are in `billing_report.py`.
+  lastMonth, sendDay (the one in force: at least 5 with cloud billing), cloudBilling}`.
+  The sheet and the monthly email are in `billing_report.py`.
 
 `sample()` also stores each bucket's size quota (`quota_bytes`, NULL = none) for the sheet.
 """
@@ -223,9 +224,14 @@ async def get_billing(request: Request, db: Db):
     state = await db.run(load_state, db)
     now = datetime.fromtimestamp(request.app.state.clock())
     out["email"] = {"enabled": request.app.state.mailer.enabled}
+    from .billing_report import send_settings
+    from .cloud_costs import billing_enabled
+
+    effective = send_settings(request.app, out["settings"])
     out["report"] = {"lastSentMonth": state.get("lastSentMonth"), "last": state.get("last"),
-                     "nextSend": next_send(now, out["settings"], state),
-                     "lastMonth": previous_month(now)}
+                     "nextSend": next_send(now, effective, state),
+                     "lastMonth": previous_month(now), "sendDay": effective["sendDay"],
+                     "cloudBilling": billing_enabled(request.app)}
     return out
 
 

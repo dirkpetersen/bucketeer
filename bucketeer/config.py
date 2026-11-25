@@ -180,6 +180,25 @@ class Settings(BaseSettings):
             raise ValueError("must be an AWS access key id (capital letters and digits)")
         return v
 
+    # Cloud billing (P6-11, cloud_costs.py): the bucket AWS delivers the CUR 2.0 data export
+    # to (tools/aws-setup --billing-export). Empty = no cloud rows in the chargeback sheet.
+    cloud_billing_bucket: str = ""
+
+    @field_validator("cloud_billing_bucket")
+    @classmethod
+    def _check_cloud_billing_bucket(cls, v: str) -> str:
+        v = v.strip()
+        if v:
+            from .policy_settings import check_dns_name
+
+            if errors := check_dns_name(v):
+                raise ValueError("CLOUD_BILLING_BUCKET: " + " ".join(errors))
+        return v
+
+    @property
+    def cloud_billing_configured(self) -> bool:
+        return bool(self.cloud_configured and self.cloud_billing_bucket)
+
     # Backups (bucketeer/backup.py): the bucket the nightly archive goes to. Empty = off.
     backup_bucket: str = ""
 

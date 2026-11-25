@@ -17,6 +17,12 @@
 #                              no object read or write
 #                            - CloudWatch S3 metrics (daily bucket sizes, monitoring)
 #                            - Cost Explorer (billing check) and cost allocation tags
+#                            - read-only access (ListBucket, GetObject) to the billing
+#                              bucket, when there is one; nothing else of it
+#   * with --billing-export: the billing bucket <prefix>billing-<random> (Block Public
+#     Access, a policy that lets AWS billing deliver into it) and the CUR 2.0 data
+#     export <prefix>s3-costs (daily, with resource ids, gzip CSV under cur/), which
+#     Bucketeer sums per bucket for the chargeback sheet (CLOUD_BILLING_BUCKET)
 #   * IAM user <admin-user> (path /bucketeer-admin/, outside what it can manage)
 #     with BucketeerAdmin attached, and, with --create-key, one access key.
 #
@@ -24,7 +30,8 @@
 #
 # Usage:
 #   tools/aws-setup --admin-user NAME --user-prefix PREFIX [--prefix bucketeer-]
-#                   [--region us-west-2] [--create-key] [--activate-tags] [--print]
+#                   [--region us-west-2] [--create-key] [--activate-tags]
+#                   [--billing-export] [--billing-bucket NAME] [--print]
 #
 #   --admin-user     name of Bucketeer's own IAM user (required; must not start with
 #                    the user prefix)
@@ -38,7 +45,14 @@
 #   --activate-tags  activate the bucketeer-* cost allocation tags in Cost Explorer;
 #                    AWS only knows a tag key after a resource carried it (up to 24 h),
 #                    and in an AWS Organization this must run in the management account
-#   --print          print both policies as JSON and change nothing
+#   --billing-export create (or update) the billing bucket and the data export, and
+#                    print CLOUD_BILLING_BUCKET for Bucketeer's .env; the export is
+#                    made in us-east-1 (where AWS billing lives), the bucket in --region
+#   --billing-bucket use this billing bucket name (default: the bucket the export
+#                    already delivers to, else an existing <prefix>billing-* bucket,
+#                    else a new <prefix>billing-<12 hex>)
+#   --print          print the policies (and, with a billing bucket, its policy and the
+#                    export definition) as JSON and change nothing
 #
 # Exit codes: 0 ok, 1 error, 2 bad usage.
 set -euo pipefail
@@ -48,6 +62,9 @@ REGION="us-west-2"
 CREATE_KEY=0
 ACTIVATE_TAGS=0
 PRINT_ONLY=0
+BILLING_EXPORT=0
+BILLING_BUCKET=""
+BILLING_REGION="us-east-1"  # AWS billing and bcm-data-exports live here
 
 ADMIN_USER=""
 USER_PREFIX=""
@@ -68,6 +85,8 @@ while [ $# -gt 0 ]; do
     --region) REGION="${2:-}"; shift 2 ;;
     --create-key) CREATE_KEY=1; shift ;;
     --activate-tags) ACTIVATE_TAGS=1; shift ;;
+    --billing-export) BILLING_EXPORT=1; shift ;;
+    --billing-bucket) BILLING_BUCKET="${2:-}"; shift 2 ;;
     --print) PRINT_ONLY=1; shift ;;
     -h|--help) usage ;;
     *) echo "aws-setup: unknown option $1" >&2; usage ;;
@@ -83,6 +102,11 @@ done
 [[ "$ADMIN_USER" != "$USER_PREFIX"* ]] \
   || die "--admin-user must not start with --user-prefix, or it could manage itself"
 [[ "$REGION" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]$ ]] || die "--region looks wrong: $REGION"
+if [ -n "$BILLING_BUCKET" ]; then
+  [[ "$BILLING_BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] \
+    || die "--billing-bucket must be 3-63 lowercase letters, digits or hyphens"
+fi
+EXPORT_NAME="${PREFIX}s3-costs"
 
 if [ "$PRINT_ONLY" = 1 ]; then
   ACCOUNT="${AWS_ACCOUNT_ID:-123456789012}"
@@ -98,6 +122,73 @@ ADMIN_POLICY_ARN="arn:aws:iam::${ACCOUNT}:policy${ADMIN_PATH}${ADMIN_POLICY}"
 USERS_ARN="arn:aws:iam::${ACCOUNT}:user${USER_PATH}${USER_PREFIX}*"
 BUCKETS_ARN="arn:aws:s3:::${PREFIX}*"
 OBJECTS_ARN="arn:aws:s3:::${PREFIX}*/*"
+
+random_hex() { od -An -N6 -tx1 /dev/urandom | tr -d ' \n'; }
+
+# The billing bucket: named, the one the export delivers to, one found by its prefix, or
+# (with --billing-export) a new name. Without one the policies have no billing parts.
+if [ -z "$BILLING_BUCKET" ] && [ "$PRINT_ONLY" = 0 ]; then
+  if [ "$BILLING_EXPORT" = 1 ]; then
+    export_arn=$(aws bcm-data-exports list-exports --region "$BILLING_REGION" \
+      --query "Exports[?ExportName=='${EXPORT_NAME}'].ExportArn | [0]" --output text) \
+      || die "could not list the billing data exports (bcm-data-exports)"
+    if [ -n "$export_arn" ] && [ "$export_arn" != "None" ]; then
+      BILLING_BUCKET=$(aws bcm-data-exports get-export --region "$BILLING_REGION" \
+        --export-arn "$export_arn" \
+        --query 'Export.DestinationConfigurations.S3Destination.S3Bucket' --output text)
+      [ "$BILLING_BUCKET" != "None" ] || BILLING_BUCKET=""
+    fi
+  fi
+  if [ -z "$BILLING_BUCKET" ]; then
+    BILLING_BUCKET=$(aws s3api list-buckets \
+      --query "Buckets[?starts_with(Name, '${PREFIX}billing-')].Name | [0]" --output text)
+    [ "$BILLING_BUCKET" != "None" ] || BILLING_BUCKET=""
+  fi
+fi
+if [ -z "$BILLING_BUCKET" ] && [ "$BILLING_EXPORT" = 1 ]; then
+  BILLING_BUCKET="${PREFIX}billing-$(random_hex)"
+fi
+
+# Policy fragments for the billing bucket (empty without one).
+OBJECT_READ_SCOPE='"Resource": "*"'
+BILLING_ADMIN_STATEMENTS=""
+BILLING_BOUNDARY_STATEMENTS=""
+if [ -n "$BILLING_BUCKET" ]; then
+  BILLING_ARN="arn:aws:s3:::${BILLING_BUCKET}"
+  OBJECT_READ_SCOPE="\"NotResource\": \"${BILLING_ARN}/*\""
+  BILLING_ADMIN_STATEMENTS=$(cat <<EOF
+,
+    {
+      "Sid": "ReadBillingExport",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket", "s3:GetBucketLocation", "s3:GetObject"],
+      "Resource": ["${BILLING_ARN}", "${BILLING_ARN}/*"]
+    },
+    {
+      "Sid": "LeaveBillingBucketAlone",
+      "Effect": "Deny",
+      "Action": [
+        "s3:DeleteBucket", "s3:PutBucketPolicy", "s3:DeleteBucketPolicy",
+        "s3:PutBucketPublicAccessBlock", "s3:PutBucketTagging",
+        "s3:PutBucketVersioning", "s3:PutLifecycleConfiguration",
+        "s3:PutEncryptionConfiguration", "s3:PutBucketOwnershipControls",
+        "s3:PutBucketObjectLockConfiguration", "s3:PutIntelligentTieringConfiguration"
+      ],
+      "Resource": "${BILLING_ARN}"
+    }
+EOF
+)
+  BILLING_BOUNDARY_STATEMENTS=$(cat <<EOF
+,
+    {
+      "Sid": "NeverTheBillingBucket",
+      "Effect": "Deny",
+      "Action": "s3:*",
+      "Resource": ["${BILLING_ARN}", "${BILLING_ARN}/*"]
+    }
+EOF
+)
+fi
 
 # The most a person's IAM user may ever do. Their inline policy (written by Bucketeer)
 # narrows it to their own buckets; this boundary stops anything wider, even if
@@ -135,7 +226,7 @@ boundary_policy() {
         "s3:RestoreObject"
       ],
       "Resource": "${OBJECTS_ARN}"
-    }
+    }${BILLING_BOUNDARY_STATEMENTS}
   ]
 }
 EOF
@@ -209,11 +300,17 @@ admin_policy() {
       "Sid": "NoObjectAccess",
       "Effect": "Deny",
       "Action": [
-        "s3:GetObject", "s3:GetObjectVersion", "s3:PutObject", "s3:DeleteObject",
+        "s3:GetObjectVersion", "s3:PutObject", "s3:DeleteObject",
         "s3:DeleteObjectVersion", "s3:BypassGovernanceRetention",
         "s3:PutObjectRetention", "s3:PutObjectLegalHold"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "NoObjectRead",
+      "Effect": "Deny",
+      "Action": ["s3:GetObject"],
+      ${OBJECT_READ_SCOPE}
     },
     {
       "Sid": "MonitorBucketSizes",
@@ -233,8 +330,80 @@ admin_policy() {
         "ce:UpdateCostAllocationTagsStatus"
       ],
       "Resource": "*"
+    }${BILLING_ADMIN_STATEMENTS}
+  ]
+}
+EOF
+}
+
+# Lets AWS billing (CUR 2.0 data exports, and the legacy CUR service) deliver into the
+# billing bucket of this account only.
+billing_bucket_policy() {
+  cat <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AwsBillingExportDelivery",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": ["billingreports.amazonaws.com", "bcm-data-exports.amazonaws.com"]
+      },
+      "Action": ["s3:PutObject", "s3:GetBucketPolicy"],
+      "Resource": ["${BILLING_ARN}", "${BILLING_ARN}/*"],
+      "Condition": {
+        "StringLike": {
+          "aws:SourceArn": [
+            "arn:aws:cur:${BILLING_REGION}:${ACCOUNT}:definition/*",
+            "arn:aws:bcm-data-exports:${BILLING_REGION}:${ACCOUNT}:export/*"
+          ]
+        },
+        "StringEquals": {"aws:SourceAccount": "${ACCOUNT}"}
+      }
     }
   ]
+}
+EOF
+}
+
+# The CUR 2.0 export: S3 costs per resource (the bucket name) and day, overwritten on
+# each refresh. Bucketeer reads only these columns (bucketeer/cloud_costs.py).
+export_definition() {
+  local query="SELECT bill_billing_period_start_date, line_item_usage_start_date,"
+  query+=" line_item_usage_end_date, line_item_usage_account_id, line_item_product_code,"
+  query+=" line_item_resource_id, line_item_usage_type, line_item_operation,"
+  query+=" line_item_line_item_type, line_item_usage_amount, pricing_unit,"
+  query+=" line_item_unblended_cost, line_item_net_unblended_cost"
+  query+=" FROM COST_AND_USAGE_REPORT"
+  cat <<EOF
+{
+  "Name": "${EXPORT_NAME}",
+  "Description": "Bucketeer: S3 costs per bucket (tools/aws-setup)",
+  "DataQuery": {
+    "QueryStatement": "${query}",
+    "TableConfigurations": {
+      "COST_AND_USAGE_REPORT": {
+        "INCLUDE_RESOURCES": "TRUE",
+        "TIME_GRANULARITY": "DAILY",
+        "INCLUDE_SPLIT_COST_ALLOCATION_DATA": "FALSE",
+        "INCLUDE_MANUAL_DISCOUNT_COMPATIBILITY": "FALSE"
+      }
+    }
+  },
+  "DestinationConfigurations": {
+    "S3Destination": {
+      "S3Bucket": "${BILLING_BUCKET}",
+      "S3Prefix": "cur",
+      "S3Region": "${REGION}",
+      "S3OutputConfigurations": {
+        "OutputType": "CUSTOM",
+        "Format": "TEXT_OR_CSV",
+        "Compression": "GZIP",
+        "Overwrite": "OVERWRITE_REPORT"
+      }
+    }
+  },
+  "RefreshCadence": {"Frequency": "SYNCHRONOUS"}
 }
 EOF
 }
@@ -244,7 +413,44 @@ if [ "$PRINT_ONLY" = 1 ]; then
   boundary_policy
   echo "# ${ADMIN_POLICY}"
   admin_policy
+  if [ -n "$BILLING_BUCKET" ]; then
+    echo "# bucket policy of ${BILLING_BUCKET}"
+    billing_bucket_policy
+    echo "# data export ${EXPORT_NAME} (${BILLING_REGION})"
+    export_definition
+  fi
   exit 0
+fi
+
+# The billing bucket and the data export (before the policies, which name the bucket).
+if [ "$BILLING_EXPORT" = 1 ]; then
+  if aws s3api head-bucket --bucket "$BILLING_BUCKET" >/dev/null 2>&1; then
+    echo "billing bucket ${BILLING_BUCKET} exists"
+  else
+    if [ "$REGION" = "us-east-1" ]; then
+      aws s3api create-bucket --bucket "$BILLING_BUCKET" --region "$REGION" >/dev/null
+    else
+      aws s3api create-bucket --bucket "$BILLING_BUCKET" --region "$REGION" \
+        --create-bucket-configuration "LocationConstraint=${REGION}" >/dev/null
+    fi
+    echo "created billing bucket ${BILLING_BUCKET}"
+  fi
+  aws s3api put-public-access-block --bucket "$BILLING_BUCKET" \
+    --public-access-block-configuration \
+    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+  aws s3api put-bucket-policy --bucket "$BILLING_BUCKET" --policy "$(billing_bucket_policy)"
+  echo "billing bucket: public access blocked, delivery policy set"
+  export_arn=$(aws bcm-data-exports list-exports --region "$BILLING_REGION" \
+    --query "Exports[?ExportName=='${EXPORT_NAME}'].ExportArn | [0]" --output text)
+  if [ -n "$export_arn" ] && [ "$export_arn" != "None" ]; then
+    aws bcm-data-exports update-export --region "$BILLING_REGION" \
+      --export-arn "$export_arn" --export "$(export_definition)" >/dev/null
+    echo "updated data export ${EXPORT_NAME}"
+  else
+    aws bcm-data-exports create-export --region "$BILLING_REGION" \
+      --export "$(export_definition)" >/dev/null
+    echo "created data export ${EXPORT_NAME} (first files within about 24 hours)"
+  fi
 fi
 
 # Create a managed policy, or give an existing one a new default version (IAM keeps at
@@ -312,6 +518,16 @@ if [ "$ACTIVATE_TAGS" = 1 ]; then
     echo "  key only after a resource carried it (up to 24 h); in an AWS Organization" >&2
     echo "  run --activate-tags in the management account. Re-run later." >&2
   fi
+fi
+
+if [ "$BILLING_EXPORT" = 1 ]; then
+  cat <<EOF
+
+Put this into Bucketeer's live .env (appmo env bucketeer):
+CLOUD_BILLING_BUCKET=${BILLING_BUCKET}
+EOF
+elif [ -n "$BILLING_BUCKET" ]; then
+  echo "billing bucket ${BILLING_BUCKET}: the admin user may read it (CLOUD_BILLING_BUCKET)"
 fi
 
 echo "done (account ${ACCOUNT}, bucket prefix ${PREFIX})"
