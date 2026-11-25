@@ -3,12 +3,33 @@ import { icon } from "../icons.js";
 import { sharedWithMe } from "../api.js";
 import { copyText } from "../clipboard.js";
 import { toast } from "../components/toast.js";
+import { getLocation, subscribe as onLocation } from "../location.js";
 
 // "Shared with you": buckets colleagues shared with the signed-in user. Read-only. Hidden
 // when there are none (or the list cannot be loaded): it is a convenience, not a gate.
 const ACCESS = { read: "Read-only", readwrite: "Read and write" };
 
+// Shares are an on-premises feature for now: cloud buckets have no sharing yet (PLAN.md),
+// so the card is shown only while the effective location is on premises.
 export function sharedWithMeCard() {
+  const slot = h("div", { class: "swm-slot" });
+  let shown = null;
+  const show = (loc) => {
+    if (loc === shown) return;
+    shown = loc;
+    if (loc === "cloud") slot.replaceChildren();
+    else slot.replaceChildren(onpremSharedCard());
+  };
+  show(getLocation());
+  const unsub = onLocation((loc) => {
+    if (!slot.isConnected && slot.dataset.mounted === "true") { unsub(); return; } // page replaced
+    if (slot.isConnected) slot.dataset.mounted = "true";
+    show(loc);
+  });
+  return slot;
+}
+
+function onpremSharedCard() {
   const card = h("section", { class: "card panel panel-wide swm", "aria-labelledby": "h-swm", hidden: true });
   sharedWithMe().then(({ shares }) => {
     if (!shares.length) return;
