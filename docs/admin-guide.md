@@ -197,6 +197,34 @@ Keep in mind:
   with `radosgw-admin` (or Admin Ops `purge-objects`) can most likely still remove locked
   objects; that is a cluster check.
 
+### Backups in AWS
+
+When the **global default location** is Cloud (Location tab) and the AWS connection check
+passes, each run writes to AWS instead (`BACKUP_BUCKET` still turns backups on and off). If
+the check fails, the run goes on premises. Switching the location only moves the **next**
+backup: earlier backups stay where they were written and roll off there. The Backup tab
+shows where backups go now, the bucket in use and the bucket in the other place.
+
+On the first cloud run Bucketeer's AWS admin user creates:
+
+- the bucket `<CLOUD_BUCKET_PREFIX>backup-<random>` in `CLOUD_REGION`. Its name is stored in
+  Bucketeer's database and shown on the Backup tab. Like on premises it has **object lock in
+  COMPLIANCE mode** with the same retention, versioning and lifecycle rules, plus Block
+  Public Access, SSE-S3 encryption at rest and the tags `bucketeer-bucket`,
+  `bucketeer-product=system` and `bucketeer-location=cloud`. In AWS not even the root user
+  can remove a COMPLIANCE-locked object early.
+- the IAM user `<CLOUD_USER_PREFIX>bucketeer-backup` under `/bucketeer/`, with the
+  `BucketeerUserBoundary` boundary from `tools/aws-setup` and an inline policy that only
+  allows writing, reading and listing that one bucket. A separate user is needed because
+  Bucketeer's admin user has an explicit Deny on reading and writing objects. An AD account
+  named `bucketeer-backup` (or `bucketeer-admin`) never gets cloud storage, so no person
+  can end up as this user.
+
+**Keys are made per run.** AWS shows a secret only once, and Bucketeer never stores one. So
+each backup (and each restore) deletes any key the backup user still has (left by a crash),
+creates a fresh key, uses it for that one upload or download and deletes it afterwards, also
+when the run fails. In IAM you will normally see the backup user with no access key.
+
 ### Restore
 
 Stop Bucketeer, then run in its folder:
@@ -205,7 +233,14 @@ Stop Bucketeer, then run in its folder:
 .venv/bin/python3 app.py --restore-backup latest
 # or a given archive:
 .venv/bin/python3 app.py --restore-backup backup/bucketeer-2026-11-24T0300Z.tar.gz
+# choose the place (default: where the newest backup went, else on premises):
+.venv/bin/python3 app.py --restore-backup latest --from cloud
 ```
+
+From AWS it needs the `CLOUD_*` settings and takes the bucket name from the database; on a
+new machine without a database it finds the single `<prefix>backup-*` bucket in the
+account, or you name it with `--aws-bucket NAME`. It uses a temporary key of the backup
+IAM user exactly like a backup run.
 
 It downloads the archive with the backup user's key, checks the SHA-256 of every file and
 refuses to run while Bucketeer still answers on its port (`--force` overrides that). Then it:
@@ -216,8 +251,9 @@ refuses to run while Bucketeer still answers on its port (`--force` overrides th
 3. writes the backed-up `.env` next to the live one as `.env.restored-<time>` (mode 0600),
    never over it: compare the two and copy what you need by hand;
 4. adds buckets, keys and shares created after the backup from the cluster, when this
-   version has that catch-up (otherwise it says so);
-5. records `system.restore` in the restored audit log.
+   version has that catch-up (otherwise it says so), and prints a short summary of it;
+5. records `system.restore` in the restored audit log (with the catch-up's counts and at
+   most 50 of its problems).
 
 A restore cannot bring back what happened after the backup was written: **audit entries,
 usage readings for billing and admin settings changes** made since then are lost.

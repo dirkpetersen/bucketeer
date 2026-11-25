@@ -22,9 +22,26 @@ left out with a note when absent) and `meta.json` (`format`, `createdAt`, `appVe
 `note`). Not encrypted (Q21): the bucket must stay private. A successful run also removes the
 database's pre-upgrade copies (`db.remove_upgrade_copies`). One run at a time.
 
-Destinations: `OnPremDestination` (RGW, the backup user's key, `S3_ENDPOINT_URL` or croit's
-endpoint discovery). Backups to AWS (P6-12) add another class with the same methods
-(`ensure`, `inspect`, `upload`, `download`, `latest`) chosen in `BackupService.destination`.
+Destinations (same methods `ensure`, `inspect`, `upload`, `download`, `latest`, chosen per
+run by `BackupService.destination`): `OnPremDestination` (RGW, the backup user's key,
+`S3_ENDPOINT_URL` or croit's endpoint discovery) and, when the GLOBAL default location is
+`cloud` and cloud is available (`location.cloud_available`), `AwsDestination` (P6-12).
+`BACKUP_BUCKET` stays the on/off switch for both. Switching the location only changes where
+the next run writes; earlier backups stay where they are and roll off there.
+
+`AwsDestination`: the bucket `<CLOUD_BUCKET_PREFIX>backup-<12 hex>` is named on the first run
+and stored in the `backup` setting (`awsBucket`, `awsBucketCreated`). The CloudAdmin creates
+it in `CLOUD_REGION` with object lock, then (every run, idempotent) Block Public Access,
+SSE-S3, the tags `bucketeer-bucket`, `bucketeer-product=system`, `bucketeer-location=cloud`,
+the same COMPLIANCE retention and lifecycle rules. A name taken meanwhile (by another account,
+or one of ours not created by this code) is replaced by a fresh one. The admin user has an
+explicit Deny on object reads and writes, so objects go through the IAM user
+`<CLOUD_USER_PREFIX>bucketeer-backup` (path `/bucketeer/`, the `BucketeerUserBoundary`
+boundary, inline policy `bucketeer-backup`: PutObject, GetObject, GetObjectVersion on the
+bucket's objects, ListBucket and GetBucketLocation on the bucket). No secret is ever stored:
+each upload or download deletes the user's keys this process does not hold (leftovers of a
+crash), creates one key, uses it (retrying while IAM propagates it) and deletes it in a
+`finally`. Listing (`latest`) and `inspect` use the admin user (ListBucket is allowed).
 
 API (`/api/admin/backup`, admin, CSRF via the parent router):
 
@@ -43,7 +60,11 @@ API (`/api/admin/backup`, admin, CSRF via the parent router):
   `backup`, target the bucket; actor `system` for the schedule). Runs are kept in the
   settings key `backup_runs` (newest first, the last 30).
 
-Restore: `python3 app.py --restore-backup <object key|latest> [--force]` (`restore_main`).
+Restore: `python3 app.py --restore-backup <object key|latest> [--from onprem|cloud]
+[--aws-bucket NAME] [--force]` (`restore_main`). Without `--from`, the source is where the
+newest successful run in the live database went, else on premises. From the cloud the bucket
+is the stored `awsBucket`, else `--aws-bucket`, else the one `<prefix>backup-*` bucket in the
+account; the download uses a temporary key exactly like a run.
 """
 
 import asyncio
@@ -74,6 +95,7 @@ from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
 
 from . import s3docs
 from .auth import SessionUser, require_admin
+from .cloud import USER_PATH, CloudError, NotConfigured
 from .config import Settings
 from .credentials import generate_key_pair
 from .croit import BACKUP_UID, CroitError, CroitUnavailable
@@ -147,6 +169,8 @@ def describe(exc: BaseException) -> str:
         return f"S3 refused {exc.operation_name}: {err.get('Code') or 'error'}"
     if isinstance(exc, BotoCoreError):
         return f"S3 not reachable ({type(exc).__name__})"
+    if isinstance(exc, CloudError):  # its text names the operation and AWS's code only
+        return exc.message
     if isinstance(exc, CroitError):
         return f"admin API error {exc.status}: {exc.message}"[:300]
     if isinstance(exc, CroitUnavailable):
@@ -207,10 +231,16 @@ def ensure_bucket(s3, bucket: str, days: int) -> dict[str, Any]:
                                   "Choose another BACKUP_BUCKET name.") from None
             if _code(e2) != "BucketAlreadyOwnedByYou":
                 raise
+    return {"created": created, "retentionDays": apply_lock_and_lifecycle(s3, bucket, days)}
+
+
+def apply_lock_and_lifecycle(s3, bucket: str, days: int) -> int:
+    """COMPLIANCE default retention (never shortened) and the lifecycle rules; returns the
+    retention in force."""
     enabled, mode, current = _lock_state(s3, bucket)
     if not enabled:
         raise BackupError(f"The bucket {bucket} has no object lock (it was not created by "
-                          "Bucketeer). Choose a new BACKUP_BUCKET name.")
+                          "Bucketeer). Choose a new backup bucket name.")
     effective = max(days, current or 0)
     if mode != "COMPLIANCE" or current != effective:
         s3.put_object_lock_configuration(Bucket=bucket, ObjectLockConfiguration={
@@ -218,7 +248,7 @@ def ensure_bucket(s3, bucket: str, days: int) -> dict[str, Any]:
             "Rule": {"DefaultRetention": {"Mode": "COMPLIANCE", "Days": effective}}})
     s3docs.update_bucket_lifecycle(
         s3, bucket, lambda cur: s3docs.upsert_rules(cur, lifecycle_rules(effective)))
-    return {"created": created, "retentionDays": effective}
+    return effective
 
 
 def inspect_bucket(s3, bucket: str) -> dict[str, Any]:
@@ -340,6 +370,222 @@ class OnPremDestination:
             raise BackupError(f"The RGW user {BACKUP_UID} or its key does not exist.")
         await asyncio.to_thread(s3.download_file, self.bucket, key, str(path))
 
+    @property
+    def owner(self) -> str:
+        return BACKUP_UID
+
+
+# -- AWS (P6-12) ------------------------------------------------------------------------------
+
+AWS_POLICY_NAME = "bucketeer-backup"
+# A new IAM key takes a few seconds to work in S3: wait this long between attempts.
+KEY_WAITS: tuple[float, ...] = (2.0, 3.0, 5.0, 10.0, 10.0)
+_PROPAGATION_CODES = ("InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied", "403",
+                      "Forbidden")
+_HELD_KEYS: set[str] = set()  # access key ids whose secret this process holds right now
+
+
+def load_aws(db: Database | None) -> dict[str, Any]:
+    """The stored AWS backup bucket: `{bucket: name|None, created: bool}`."""
+    saved = (db.settings.get(KEY) or {}) if db is not None else {}
+    name = saved.get("awsBucket")
+    ok = isinstance(name, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", name)
+    return {"bucket": name if ok else None, "created": bool(ok and saved.get("awsBucketCreated"))}
+
+
+def save_aws(db: Database, bucket: str, created: bool) -> None:
+    with db.tx():
+        saved = dict(db.settings.get(KEY) or {})
+        saved.update(awsBucket=bucket, awsBucketCreated=created)
+        db.settings.set(KEY, saved, "system")
+
+
+def _save_settings(db: Database, values: dict[str, Any], actor: str) -> None:
+    """Time and retention; keeps the stored AWS bucket name."""
+    with db.tx():
+        saved = dict(db.settings.get(KEY) or {})
+        saved.update(values)
+        db.settings.set(KEY, saved, actor)
+
+
+def aws_user_policy(bucket: str) -> dict[str, Any]:
+    return {"Version": "2012-10-17", "Statement": [
+        {"Sid": "BackupBucket", "Effect": "Allow",
+         "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
+         "Resource": f"arn:aws:s3:::{bucket}"},
+        {"Sid": "BackupObjects", "Effect": "Allow",
+         "Action": ["s3:PutObject", "s3:GetObject", "s3:GetObjectVersion"],
+         "Resource": f"arn:aws:s3:::{bucket}/*"},
+    ]}
+
+
+def aws_bucket_tags(bucket: str) -> list[dict[str, str]]:
+    return [{"Key": "bucketeer-bucket", "Value": bucket},
+            {"Key": "bucketeer-product", "Value": "system"},
+            {"Key": "bucketeer-location", "Value": "cloud"}]
+
+
+def setup_aws_bucket(s3, bucket: str, days: int) -> int:
+    """Everything after the create (admin client, idempotent); returns the retention."""
+    s3.put_public_access_block(Bucket=bucket, PublicAccessBlockConfiguration={
+        "BlockPublicAcls": True, "IgnorePublicAcls": True,
+        "BlockPublicPolicy": True, "RestrictPublicBuckets": True})
+    s3.put_bucket_encryption(Bucket=bucket, ServerSideEncryptionConfiguration={"Rules": [
+        {"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]})
+    s3docs.update_bucket_tagging(s3, bucket,
+                                 lambda cur: s3docs.upsert_tags(cur, aws_bucket_tags(bucket)))
+    return apply_lock_and_lifecycle(s3, bucket, days)
+
+
+def _retry_new_key(fn: Callable[..., Any], *args) -> Any:
+    """Run `fn`, retrying while a just-created IAM key is not yet known to S3."""
+    import time
+
+    for wait in (*KEY_WAITS, None):
+        try:
+            return fn(*args)
+        except ClientError as e:
+            if wait is None or _code(e) not in _PROPAGATION_CODES:
+                raise
+            time.sleep(wait)
+    return None  # pragma: no cover
+
+
+class AwsDestination:
+    """The backup bucket in AWS: set up by the CloudAdmin, written by the backup IAM user
+    through a key that exists only for one upload or download."""
+
+    kind = "cloud"
+
+    def __init__(self, cloud, db: Database | None, bucket: str | None = None):
+        self.cloud, self.db = cloud, db
+        self._bucket = bucket
+        self.owner = cloud.backup_user_name()
+
+    @property
+    def bucket(self) -> str | None:
+        return self._bucket or load_aws(self.db)["bucket"]
+
+    async def _save(self, bucket: str, created: bool) -> None:
+        self._bucket = bucket
+        if self.db is not None:
+            await self.db.run(save_aws, self.db, bucket, created)
+
+    async def _ensure_bucket(self) -> tuple[str, bool]:
+        """The bucket's name, created if needed; True when this call created it."""
+
+        c = self.cloud
+        stored = load_aws(self.db) if self.db is not None else {"bucket": None, "created": False}
+        name = self._bucket or stored["bucket"]
+        created = stored["created"] if name == stored["bucket"] else bool(name)
+        for _ in range(3):
+            if not name:
+                name = c.new_backup_bucket_name()
+                created = False
+                await self._save(name, False)  # first, so a crash never loses track of it
+            if created:
+                status = await c.bucket_status(name)
+                if status == "exists":
+                    return name, False
+                if status == "taken":
+                    raise BackupError(f"The backup bucket {name} now belongs to another AWS "
+                                      "account.")
+            params: dict[str, Any] = {"Bucket": name, "ObjectLockEnabledForBucket": True}
+            if c.region != "us-east-1":
+                params["CreateBucketConfiguration"] = {"LocationConstraint": c.region}
+            try:
+                await c.call("s3", "create_bucket", **params)
+            except CloudError as e:
+                if e.code in ("BucketAlreadyExists", "BucketAlreadyOwnedByYou"):
+                    log.warning("backup bucket name %s is taken; choosing another", name)
+                    name = None
+                    continue
+                raise
+            await self._save(name, True)
+            log.info("created the AWS backup bucket %s in %s with object lock", name, c.region)
+            return name, True
+        raise BackupError("Could not find a free name for the AWS backup bucket.")
+
+    async def _ensure_user(self, bucket: str) -> None:
+        c = self.cloud
+
+        boundary = c.boundary_arn((await c.caller_identity())["account"])
+        user = await c.get_user(self.owner)
+        if user is None:
+            await c.call("iam", "create_user", UserName=self.owner, Path=USER_PATH,
+                         PermissionsBoundary=boundary,
+                         Tags=[{"Key": "bucketeer-role", "Value": "backup"}])
+            log.info("created the backup IAM user %s", self.owner)
+        # (the admin may create users under /bucketeer/ only WITH the boundary, so an
+        # existing one has it unless an AWS administrator made it by hand)
+        await c.call("iam", "put_user_policy", UserName=self.owner, PolicyName=AWS_POLICY_NAME,
+                     PolicyDocument=json.dumps(aws_user_policy(bucket)))
+
+    async def ensure(self, retention_days: int) -> dict[str, Any]:
+        name, made = await self._ensure_bucket()
+        days = await asyncio.to_thread(setup_aws_bucket, self.cloud.client("s3"), name,
+                                       retention_days)
+        await self._ensure_user(name)
+        return {"created": made, "retentionDays": days}
+
+    async def inspect(self) -> dict[str, Any]:
+        name = self.bucket
+        if not name:
+            return {"exists": False, "note": "The first backup run creates the bucket in AWS "
+                                             "and the backup IAM user."}
+        return await asyncio.to_thread(inspect_bucket, self.cloud.client("s3"), name)
+
+    @contextlib.asynccontextmanager
+    async def _session(self):
+        """An S3 client on a key made for this one operation, deleted afterwards."""
+        c = self.cloud
+        if await c.get_user(self.owner) is None:
+            raise BackupError(f"The backup IAM user {self.owner} does not exist (yet).")
+        res = await c.call("iam", "list_access_keys", UserName=self.owner)
+        left = []
+        for k in res.get("AccessKeyMetadata") or []:
+            if k["AccessKeyId"] in _HELD_KEYS:
+                left.append(k)
+                continue
+            await c.call("iam", "delete_access_key", UserName=self.owner,
+                         AccessKeyId=k["AccessKeyId"])
+            log.info("removed a leftover access key of the backup IAM user")
+        if len(left) >= 2:
+            raise BackupError("The backup IAM user has two keys in use already.")
+        made = (await c.call("iam", "create_access_key", UserName=self.owner))["AccessKey"]
+        access = made["AccessKeyId"]
+        _HELD_KEYS.add(access)
+        try:
+            yield c.s3_with_key(access, made["SecretAccessKey"])
+        finally:
+            made = None
+            _HELD_KEYS.discard(access)
+            try:
+                await c.call("iam", "delete_access_key", UserName=self.owner, AccessKeyId=access)
+            except Exception as e:  # noqa: BLE001  the next run removes it
+                log.warning("could not delete the backup user's temporary key (%s); the next "
+                            "run removes it", type(e).__name__)
+
+    def _need_bucket(self) -> str:
+        if not self.bucket:
+            raise BackupError("No AWS backup bucket is known yet.")
+        return self.bucket
+
+    async def upload(self, key: str, path: Path) -> None:
+        bucket = self._need_bucket()
+        async with self._session() as s3:
+            await asyncio.to_thread(_retry_new_key, upload_file, s3, bucket, key, path)
+
+    async def latest(self) -> str | None:
+        if not self.bucket:
+            return None
+        return await asyncio.to_thread(latest_key, self.cloud.client("s3"), self.bucket)
+
+    async def download(self, key: str, path: Path) -> None:
+        bucket = self._need_bucket()
+        async with self._session() as s3:
+            await asyncio.to_thread(_retry_new_key, s3.download_file, bucket, key, str(path))
+
 
 # -- the archive ----------------------------------------------------------------------------
 
@@ -453,9 +699,14 @@ class BackupService:
     def bucket(self) -> str:
         return self.app.state.settings.backup_bucket
 
-    def destination(self) -> OnPremDestination:
-        # P6-12: when the global location is Cloud, return the AWS destination here.
+    def destination(self) -> "OnPremDestination | AwsDestination":
+        """AWS when the GLOBAL default location is cloud and cloud is available, else on
+        premises. Decided per run: switching the location moves the next backup."""
+        from .location import cloud_available, load_default_location
+
         s = self.app.state
+        if load_default_location(self.db.settings) == "cloud" and cloud_available(self.app):
+            return AwsDestination(s.cloud, self.db)
         return OnPremDestination(s.croit, s.settings, s.endpoints, self.factory)
 
     def settings(self) -> dict[str, Any]:
@@ -499,9 +750,10 @@ class BackupService:
         }
         try:
             dest = self.destination()
-            rec["destination"] = dest.kind
+            rec["destination"], rec["bucket"] = dest.kind, dest.bucket
             s = await db.run(self.settings)
             made = await dest.ensure(s["retentionDays"])
+            rec["bucket"] = dest.bucket
             data_dir = Path(self.app.state.settings.data_dir)
             with tempfile.TemporaryDirectory(
                     prefix=".backup-", dir=data_dir if data_dir.is_dir() else None) as tmp:
@@ -511,22 +763,25 @@ class BackupService:
             rec.update(outcome="ok", bytes=len(body), sha256=_sha256(body),
                        schemaVersion=meta["schemaVersion"], envIncluded=meta["envIncluded"],
                        note=meta["note"], retentionDays=made["retentionDays"])
-            await db.run(db.audit.add, actor, "backup.run", "backup", self.bucket, {
+            await db.run(db.audit.add, actor, "backup.run", "backup", rec["bucket"], {
                 "trigger": trigger, "key": rec["key"], "bytes": rec["bytes"],
                 "sha256": rec["sha256"], "schemaVersion": rec["schemaVersion"],
                 "envIncluded": rec["envIncluded"], "bucketCreated": made["created"],
                 "retentionDays": made["retentionDays"], "destination": dest.kind})
             for p in await db.run(db.remove_upgrade_copies):
                 log.info("backup done: removed pre-upgrade copy %s", p)
-            log.info("backup %s written to %s (%d bytes)", rec["key"], self.bucket, rec["bytes"])
+            log.info("backup %s written to %s (%s, %d bytes)", rec["key"], rec["bucket"],
+                     rec["destination"], rec["bytes"])
         except asyncio.CancelledError:
             rec.update(outcome="failed", error="Stopped by a shutdown.")
             raise
         except Exception as e:  # noqa: BLE001  every failure is recorded and audited
             rec.update(outcome="failed", error=describe(e))
-            log.warning("backup to %s failed: %s", self.bucket, rec["error"])
-            await db.run(db.audit.add, actor, "backup.failed", "backup", self.bucket or "-", {
-                "trigger": trigger, "key": rec["key"], "error": rec["error"]})
+            log.warning("backup to %s (%s) failed: %s", rec["bucket"], rec["destination"],
+                        rec["error"])
+            await db.run(db.audit.add, actor, "backup.failed", "backup", rec["bucket"] or "-", {
+                "trigger": trigger, "key": rec["key"], "error": rec["error"],
+                "destination": rec["destination"]})
         finally:
             self.running = False
             rec["finishedAt"] = datetime.now(UTC).isoformat(timespec="seconds")
@@ -541,22 +796,28 @@ class BackupService:
     async def state(self) -> dict[str, Any]:
         s = await self.db.run(self.settings)
         runs = await self.db.run(self.runs)
+        dest = await self.db.run(self.destination)
+        aws = await self.db.run(load_aws, self.db)
         bucket_state = None
         if self.bucket:
             try:
-                bucket_state = await self.destination().inspect()
+                bucket_state = await dest.inspect()
             except Exception as e:  # noqa: BLE001  shown on the page, not raised
                 bucket_state = {"exists": None, "error": describe(e)}
         return {
-            "configured": bool(self.bucket), "bucket": self.bucket or None,
+            "configured": bool(self.bucket),
+            "bucket": (dest.bucket or None) if self.bucket else None,
             "suggestedBucket": None if self.bucket else self.suggestion,
-            "destination": "onprem", "settings": s,
+            "destination": dest.kind, "onpremBucket": self.bucket or None,
+            "awsBucket": aws["bucket"],
+            "region": dest.cloud.region if dest.kind == "cloud" else None,
+            "settings": s,
             "nextRun": (self.next_run().isoformat(timespec="minutes") if self.bucket
                         else None),
             "running": self.running, "bucketState": bucket_state,
             "lastRun": runs[0] if runs else None,
             "lastSuccess": next((r for r in runs if r.get("outcome") == "ok"), None),
-            "runs": runs, "user": BACKUP_UID,
+            "runs": runs, "user": dest.owner,
         }
 
     def note_settings_changed(self) -> None:
@@ -647,7 +908,7 @@ async def put_settings(body: SettingsBody, admin: Admin, db: Db, svc: Svc):
         after["retentionDays"] = body.retentionDays
     out: dict[str, Any] = {"settings": after}
     if after != before:
-        await db.run(db.settings.set, KEY, after, admin.username)
+        await db.run(_save_settings, db, after, admin.username)
         svc.note_settings_changed()
         await db.run(db.audit.add, admin.username, "admin.settings.backup", "setting", KEY,
                      {"before": before, "after": after})
@@ -738,6 +999,32 @@ def replace_database(target: Path, data: bytes) -> Path | None:
     return kept
 
 
+def _is_report(result: Any) -> bool:
+    return isinstance(result, dict) and {"mode", "added", "skipped", "problems"} <= set(result)
+
+
+MAX_PROBLEM_ITEMS = 50
+
+
+def catch_up_digest(result: Any) -> Any:
+    """What the `system.restore` audit entry keeps of the catch-up: for a rebuild report
+    only the mode, counts and at most 50 problem items (a big cluster's report is huge)."""
+    if _is_report(result):
+        problems = result["problems"] or []
+        reasons: dict[str, int] = {}
+        for p in problems:
+            reasons[str(p.get("reason"))] = reasons.get(str(p.get("reason")), 0) + 1
+        return {"mode": result["mode"], "added": result["added"],
+                "skipped": len(result["skipped"] or []), "problems": len(problems),
+                "problemReasons": reasons,
+                "problemItems": [f"{p.get('table')} {p.get('item')}"
+                                 for p in problems[:MAX_PROBLEM_ITEMS]]}
+    if result is None or isinstance(result, int | str):
+        return result
+    text = json.dumps(result, default=str) if isinstance(result, dict | list) else str(result)
+    return result if len(text) <= 2000 else text[:2000]
+
+
 async def _catch_up(settings: Settings, db: Database, client) -> tuple[str, Any]:
     for name in CATCH_UP_MODULES:
         try:
@@ -757,16 +1044,76 @@ async def _catch_up(settings: Settings, db: Database, client) -> tuple[str, Any]
     return "unavailable", None
 
 
+SOURCES = ("onprem", "cloud")
+
+
+def live_backup_state(db_file: Path) -> dict[str, Any]:
+    """From the live database (read only, never migrated): the stored AWS bucket and where
+    the newest successful backup went. Empty values when there is no database."""
+    out: dict[str, Any] = {"awsBucket": None, "lastDestination": None}
+    if not db_file.exists():
+        return out
+    try:
+        conn = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
+        try:
+            rows = dict(conn.execute("SELECT key, value FROM settings WHERE key IN (?, ?)",
+                                     (KEY, RUNS_KEY)).fetchall())
+        finally:
+            conn.close()
+        saved = json.loads(rows.get(KEY) or "{}")
+        runs = json.loads(rows.get(RUNS_KEY) or "[]")
+    except (sqlite3.Error, ValueError):
+        return out
+    if isinstance(saved, dict):
+        name = saved.get("awsBucket")
+        out["awsBucket"] = name if isinstance(name, str) and name else None
+    for r in runs if isinstance(runs, list) else []:
+        if isinstance(r, dict) and r.get("outcome") == "ok" and r.get("destination") in SOURCES:
+            out["lastDestination"] = r["destination"]
+            break
+    return out
+
+
+async def find_aws_bucket(cloud) -> str:
+    """The one `<prefix>backup-<12 hex>` bucket in the account (restore on a new machine)."""
+    pattern = re.compile(rf"{re.escape(cloud.bucket_prefix)}backup-[0-9a-f]{{12}}\Z")
+    names = sorted(b["Name"] for b in await cloud.list_buckets() if pattern.match(b["Name"]))
+    if not names:
+        raise BackupError("No backup bucket found in AWS.")
+    if len(names) > 1:
+        raise BackupError(f"Several backup buckets in AWS ({', '.join(names)}): pass "
+                          "--aws-bucket NAME.")
+    return names[0]
+
+
 async def restore(settings: Settings, which: str, *, force: bool = False,
-                  client=None, factory: Callable[..., Any] = default_factory,
+                  source: str | None = None, aws_bucket: str | None = None,
+                  client=None, cloud_admin=None,
+                  factory: Callable[..., Any] = default_factory,
                   out: Callable[[str], None] = print) -> dict[str, Any]:
-    """Download, verify and install a backup. Raises BackupError with a clear message."""
+    """Download, verify and install a backup. Raises BackupError with a clear message.
+    `source` onprem|cloud; None = where the newest successful run went, else onprem."""
+    from .cloud import CloudAdmin
     from .credentials import EndpointResolver
     from .croit import CroitClient
     from .rgw_admin import RgwAdminClient
 
-    if not settings.backup_bucket:
+    if source not in (None, *SOURCES):
+        raise BackupError("--from must be onprem or cloud.")
+    data_dir = Path(settings.data_dir)
+    live = live_backup_state(data_dir / DB_FILENAME)
+    source = source or live["lastDestination"] or "onprem"
+    if source == "onprem" and not settings.backup_bucket:
         raise BackupError("BACKUP_BUCKET is not set in .env.")
+    if source == "cloud" and cloud_admin is None:
+        try:
+            cloud_admin = CloudAdmin(settings)
+        except NotConfigured:
+            raise BackupError("Cloud is not set up: the CLOUD_* variables in .env are "
+                              "needed to restore from AWS.") from None
+    if which != "latest" and not ARCHIVE_RE.match(which):
+        raise BackupError("Give an object key like backup/bucketeer-2026-01-31T0300Z.tar.gz "
+                          "or 'latest'.")
     if not force and app_is_running(settings):
         raise BackupError(f"Bucketeer answers on port {settings.port}: stop it first "
                           "(or pass --force).")
@@ -777,24 +1124,26 @@ async def restore(settings: Settings, which: str, *, force: bool = False,
     try:
         import time
 
-        dest = OnPremDestination(client, settings, EndpointResolver(client, settings, time.time),
-                                 factory)
+        if source == "cloud":
+            bucket = aws_bucket or live["awsBucket"] or await find_aws_bucket(cloud_admin)
+            dest = AwsDestination(cloud_admin, None, bucket=bucket)
+        else:
+            dest = OnPremDestination(client, settings,
+                                     EndpointResolver(client, settings, time.time), factory)
+        bucket = dest.bucket
+        where = f"{bucket} ({'AWS' if source == 'cloud' else 'on premises'})"
         key = which
         if which == "latest":
             key = await dest.latest()
             if not key:
-                raise BackupError(f"No backup found in {settings.backup_bucket}.")
-        elif not ARCHIVE_RE.match(which):
-            raise BackupError("Give an object key like backup/bucketeer-2026-01-31T0300Z.tar.gz "
-                              "or 'latest'.")
-        out(f"Downloading {key} from {settings.backup_bucket} ...")
-        data_dir = Path(settings.data_dir)
+                raise BackupError(f"No backup found in {where}.")
+        out(f"Downloading {key} from {where} ...")
         data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         with tempfile.TemporaryDirectory(prefix=".restore-", dir=data_dir) as tmp:
             path = Path(tmp) / "archive.tar.gz"
             try:
                 await dest.download(key, path)
-            except ClientError as e:
+            except (ClientError, CloudError) as e:
                 raise BackupError(describe(e)) from None
             meta, files = read_archive(path)
         out(f"Checked SHA-256 of {', '.join(sorted(files))} (schema v{meta.get('schemaVersion')},"
@@ -823,17 +1172,20 @@ async def restore(settings: Settings, which: str, *, force: bool = False,
             if status == "unavailable":
                 out("Catch-up from Ceph (rebuild_from_ceph) isn't available in this version: "
                     "buckets, keys and shares made after the backup are not added.")
+            elif _is_report(result):
+                from .rebuild import summary
+
+                out(summary(result))
             else:
                 out(f"Catch-up from Ceph: {status}: {result}")
-            details = {"key": key, "bucket": settings.backup_bucket,
+            details = {"key": key, "bucket": bucket, "source": source,
                        "createdAt": meta.get("createdAt"),
                        "schemaFrom": meta.get("schemaVersion"), "schemaTo": db.version,
                        "replacedCopy": str(kept) if kept else None,
                        "envRestored": str(env_written) if env_written else None,
                        "catchUp": status,
-                       "catchUpResult": result if isinstance(result, dict | list | str | int)
-                       else (str(result) if result is not None else None)}
-            db.audit.add("system", "system.restore", "backup", settings.backup_bucket, details)
+                       "catchUpResult": catch_up_digest(result)}
+            db.audit.add("system", "system.restore", "backup", bucket, details)
             return details
         finally:
             db.close()
@@ -842,23 +1194,41 @@ async def restore(settings: Settings, which: str, *, force: bool = False,
             await client.aclose()
 
 
+USAGE = ("usage: python3 app.py --restore-backup <object key|latest> [--from onprem|cloud] "
+         "[--aws-bucket NAME] [--force]")
+
+
+def _option(args: list[str], name: str) -> str | None:
+    """The value after `name`; raises ValueError when it is missing."""
+    if name not in args:
+        return None
+    i = args.index(name)
+    if i + 1 >= len(args) or args[i + 1].startswith("--"):
+        raise ValueError(name)
+    return args[i + 1]
+
+
 def restore_main(argv: list[str]) -> int:
-    """`app.py --restore-backup <object key|latest> [--force]`."""
+    """`app.py --restore-backup <object key|latest> [--from onprem|cloud] [--aws-bucket NAME]
+    [--force]`."""
     from .config import load_settings
 
     args = list(argv)
     force = "--force" in args
     try:
-        which = args[args.index("--restore-backup") + 1]
-    except (ValueError, IndexError):
-        print("usage: python3 app.py --restore-backup <object key|latest> [--force]")
+        which = _option(args, "--restore-backup")
+        source = _option(args, "--from")
+        aws_bucket = _option(args, "--aws-bucket")
+    except ValueError:
+        print(USAGE)
         return 2
-    if which.startswith("--"):
-        print("usage: python3 app.py --restore-backup <object key|latest> [--force]")
+    if which is None or source not in (None, *SOURCES):
+        print(USAGE)
         return 2
     settings = load_settings()
     try:
-        asyncio.run(restore(settings, which, force=force))
+        asyncio.run(restore(settings, which, force=force, source=source,
+                            aws_bucket=aws_bucket))
     except BackupError as e:
         print(f"Restore failed: {e}")
         return 1
