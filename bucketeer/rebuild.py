@@ -25,6 +25,17 @@ admin client's bucket list, never from a tag):
   live row (recipient AD name by `ad_names_for_uid`, display names from the admin client,
   access from the actions, `created_by` `system`, `created_at` now).
 
+- cloud `buckets` (only when cloud is configured, P6-14, Q19): every `<CLOUD_BUCKET_PREFIX>*`
+  bucket the AWS admin user lists, except the system buckets (`cloud_costs.is_system_bucket`),
+  gives a `location = 'cloud'` row from its `bucketeer-*` tags, read by the admin user: owner
+  (`bucketeer-owner`, `tenant:uid` -> `tenant$uid`), creator, creation date, budget, quota
+  (`bucketeer-quota` whole TiB; missing or `unlimited` -> the default quota TiB, reported as
+  `quota_unknown`) and storage class (the lifecycle rule `bucketeer-class`, else the product tag,
+  else `intelligent`, reported as `storage_class_unknown`). Unlike on premises, these tags are
+  trustworthy: only the admin user can write tags on cloud buckets. A bucket without an owner
+  tag gets no row (`no_owner_tag`). The report then has `added.cloud_buckets` and entries with
+  table `cloud_buckets`. AWS trouble listing the buckets is a problem, never fails the run.
+
 Modes: `fill_gaps=True` only inserts what is missing and never updates or deletes a row.
 `fill_gaps=False` ("full") refuses (`RebuildRefused`) unless the three tables are empty or
 `force=True`; it never deletes either, rows that exist are skipped the same way.
@@ -56,7 +67,7 @@ from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
 from . import bucket_facts as bf
-from . import s3docs
+from . import catalog, s3docs
 from .bucket_keys import KEY_BARE
 from .croit import CroitClientError
 from .rgw_user import ad_names_for_uid, same_uid, split_uid
@@ -126,10 +137,13 @@ def _read(s3, bucket: str) -> dict[str, Any]:
 class _Run:
     def __init__(self, state, fill_gaps: bool):
         self.state, self.db, self.admin = state, state.db, state.croit
+        self.cloud = getattr(state, "cloud", None)
         rgw = getattr(state, "rgw", None)
         self.tenant = rgw.tenant if rgw is not None else state.settings.s3_tenant
         self.mode = "fill_gaps" if fill_gaps else "full"
         self.added = dict.fromkeys(TABLES, 0)
+        if self.cloud is not None:
+            self.added["cloud_buckets"] = 0
         self.skipped: list[dict] = []
         self.problems: list[dict] = []
 
@@ -276,6 +290,111 @@ class _Run:
             return self.problem("shares", item, "insert_failed", type(e).__name__)
         self.added["shares"] += 1
 
+    # -- cloud buckets (P6-14) -------------------------------------------------------------
+
+    async def _cloud_read(self, name: str) -> dict[str, Any]:
+        """Tags and lifecycle rules of one cloud bucket, read by the AWS admin user."""
+        from .cloud import CloudError
+
+        out: dict[str, Any] = {"tags": [], "rules": []}
+        try:
+            res = await self.cloud.call("s3", "get_bucket_tagging", Bucket=name)
+            out["tags"] = res.get("TagSet") or []
+        except CloudError as e:
+            if e.code not in ("NoSuchTagSet", "NoSuchTagSetError"):
+                out["tags_error"] = e.code or "error"
+        try:
+            res = await self.cloud.call("s3", "get_bucket_lifecycle_configuration", Bucket=name)
+            out["rules"] = res.get("Rules") or []
+        except CloudError as e:
+            if e.code != "NoSuchLifecycleConfiguration":
+                self.problem("cloud_buckets", name, "lifecycle_unreadable", e.code or "error")
+        return out
+
+    def _storage_class(self, name: str, rules: list, product: str | None,
+                       cat: list[dict]) -> str:
+        from .cloud import STORAGE_CLASSES
+
+        by_aws = {v: k for k, v in STORAGE_CLASSES.items()}
+        for r in rules:
+            if isinstance(r, dict) and r.get("ID") == s3docs.STORAGE_CLASS_ID:
+                for t in r.get("Transitions") or []:
+                    if isinstance(t, dict) and t.get("StorageClass") in by_aws:
+                        return by_aws[t["StorageClass"]]
+        names = {catalog.product(cat, catalog.ARCHIVE)["name"]: "deep_archive",
+                 catalog.product(cat, catalog.CLOUD)["name"]: "intelligent"}
+        if product in names:
+            return names[product]
+        self.problem("cloud_buckets", name, "storage_class_unknown", "intelligent assumed")
+        return "intelligent"
+
+    async def cloud_row(self, name: str, got: dict, cat: list[dict], default_tib: int) -> None:
+        from .bucket_quota import MAX_BUCKET_TIB
+
+        db = self.db
+        t = {x.get("Key"): x.get("Value") for x in got["tags"] if isinstance(x, dict)}
+        owner_tag = t.get(bf.OWNER)
+        if not owner_tag:
+            return self.problem("cloud_buckets", name, "no_owner_tag")
+        tenant, _, bare = owner_tag.rpartition(":")
+        owner = f"{tenant}${bare}" if tenant else bare
+        if not bare or is_key_uid(owner):
+            return self.problem("cloud_buckets", name, "bad_owner_tag", owner_tag[:80])
+        if t.get(bf.BUCKET) and t[bf.BUCKET] != name:
+            self.problem("cloud_buckets", name, "tag_bucket_mismatch", f"tag says {t[bf.BUCKET]}")
+        if await db.run(db.buckets.get, name) is not None:
+            return self.skip("cloud_buckets", name, "exists")
+        created, creator = t.get(bf.CREATED), t.get(bf.CREATOR)
+        if created is not None:
+            try:
+                if not DATE.match(created):
+                    raise ValueError
+                date.fromisoformat(created)
+            except ValueError:
+                self.problem("cloud_buckets", name, "bad_created_tag", created[:40])
+                created = None
+        quota = t.get(bf.QUOTA) or ""
+        if quota.isdigit() and 1 <= int(quota) <= MAX_BUCKET_TIB:
+            tib = int(quota)
+        else:
+            tib = default_tib
+            self.problem("cloud_buckets", name, "quota_unknown",
+                         f"tag {quota or 'missing'}, {tib} TiB assumed")
+        storage = self._storage_class(name, got["rules"], t.get(bf.PRODUCT), cat)
+        try:
+            await db.run(lambda: db.buckets.create_cloud(
+                name, owner, t.get(bf.BUDGET) or None, creator or None, storage, tib,
+                creation_known=bool(created and creator),
+                created_at=f"{created}T00:00:00.000000Z" if created else None))
+        except sqlite3.Error as e:
+            return self.problem("cloud_buckets", name, "insert_failed", type(e).__name__)
+        self.added["cloud_buckets"] += 1
+
+    async def run_cloud(self) -> None:
+        from .bucket_quota import load_settings
+        from .cloud import CloudError
+        from .cloud_costs import is_system_bucket
+
+        s = self.state.settings
+        try:
+            listed = await self.cloud.list_buckets()
+        except CloudError as e:
+            return self.problem("cloud_buckets", "*", "aws_unavailable", e.code or "error")
+        cat = await self.db.run(catalog.load_catalog, self.db)
+        default_tib = (await self.db.run(load_settings, self.db.settings))["defaultQuotaTiB"]
+        for b in sorted(str(x.get("Name") or "") for x in listed):
+            if not b:
+                continue
+            if is_system_bucket(b, s.cloud_bucket_prefix,
+                                getattr(s, "cloud_billing_bucket", "") or ""):
+                self.skip("cloud_buckets", b, "system_bucket")
+                continue
+            got = await self._cloud_read(b)
+            if "tags_error" in got:
+                self.problem("cloud_buckets", b, "tags_unreadable", got["tags_error"])
+                continue
+            await self.cloud_row(b, got, cat, default_tib)
+
     # -- the run -------------------------------------------------------------------------
 
     async def run(self) -> dict[str, Any]:
@@ -329,37 +448,45 @@ class _Run:
                     self.skip("bucket_keys", uid, "key_user_without_statement")
         for full, owner, st in shares:
             await self.share_row(full, owner, st, users)
+        if self.cloud is not None:
+            await self.run_cloud()
         return self.report()
 
 
-def _parts(settings, db, client, s3=None) -> SimpleNamespace:
+def _parts(settings, db, client, s3=None, cloud=None) -> SimpleNamespace:
     """What a run needs, built like `create_app` does (no server, nothing started)."""
     from .credentials import EndpointResolver
     from .s3client import S3Clients
 
     if s3 is None:
         s3 = S3Clients(client, settings, EndpointResolver(client, settings, time.time))
-    return SimpleNamespace(db=db, croit=client, s3=s3, settings=settings, rgw=None)
+    if cloud is None and getattr(settings, "cloud_configured", False):
+        from .cloud import CloudAdmin
+
+        cloud = CloudAdmin(settings)
+    return SimpleNamespace(db=db, croit=client, s3=s3, settings=settings, rgw=None,
+                           cloud=cloud)
 
 
 async def rebuild_from_ceph(app_or_parts=None, fill_gaps: bool = False, *, force: bool = False,
                             actor: str = "system", settings=None, db=None, client=None,
-                            croit=None, s3=None) -> dict[str, Any]:
+                            croit=None, s3=None, cloud=None) -> dict[str, Any]:
     """Rebuild `buckets`, `bucket_keys` and `shares` from the cluster (module docstring).
     `app_or_parts` is the FastAPI app or anything with `.state` / the same attributes
     (`db`, `croit`, `s3`, `rgw`); without it pass `settings`, `db` and the admin client
-    (`client` or `croit`; `s3` optional), e.g. from the restore command. Raises
+    (`client` or `croit`; `s3` and `cloud` optional: a CloudAdmin is built from the settings
+    when cloud is configured), e.g. from the restore command. Raises
     RebuildRefused (full mode, rows present, no force) and the admin client's errors when
     users or buckets cannot be listed."""
     if app_or_parts is None:
         if settings is None or db is None or (client or croit) is None:
             raise TypeError("pass an app, or settings, db and client")
-        state = _parts(settings, db, client or croit, s3)
+        state = _parts(settings, db, client or croit, s3, cloud)
     else:
         state = getattr(app_or_parts, "state", app_or_parts)
     db = state.db
     if not fill_gaps and not force:
-        counts = {"buckets": await db.run(db.buckets.count),
+        counts = {"buckets": await db.run(db.buckets.count, None),
                   "bucket_keys": await db.run(db.bucket_keys.count),
                   "shares": await db.run(db.shares.count)}
         if any(counts.values()):

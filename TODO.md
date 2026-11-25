@@ -345,6 +345,7 @@ the item lands.
   bucket with the same object-lock rules through a dedicated backup IAM user (keys made and deleted per
   run, `--restore-backup --from cloud`).
 - [x] P6-13 Typed-name confirmation for every bucket delete; cloud buckets with content (owner request 2026-11-25)
+- [x] P6-14 Cloud buckets in admin views, chargeback CSV and rebuild (Q19)
 
 ## Verify against a real croit cluster
 

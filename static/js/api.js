@@ -161,6 +161,9 @@ export const setUserQuota = (uid, quota) =>
 export const writeAllBucketTags = () => api("/admin/buckets/write-tags", { method: "POST" });
 export const setBucketQuota = (bucket, quota) =>
   api(`/admin/buckets/${enc(bucket)}/quota`, { method: "PUT", json: quota });
+// Cloud bucket quota by an admin (Q19): whole TiB, full AWS name -> {bucket, quotaTiB, changed, monthlyCost, tagSynced, warning?}
+export const setAdminCloudBucketQuota = (name, quotaTiB) =>
+  api(`/admin/cloud-buckets/${enc(name)}/quota`, { method: "PUT", json: { quotaTiB } });
 export const getOffboarding = () => api("/admin/offboarding");
 export const runOffboarding = () => api("/admin/offboarding/run", { method: "POST" });
 export const saveOffboardingSettings = (body) => api("/admin/offboarding/settings", { method: "PUT", json: body });

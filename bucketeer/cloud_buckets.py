@@ -167,6 +167,7 @@ async def availability(app, cloud: CloudAdmin, full: str) -> str:
 MESSAGES = {
     "free": "This name is available.",
     "exists": "A bucket with this name already exists.",
+    "own": "You already have a bucket with this name.",
     "taken": "This name is taken: AWS bucket names are shared by everyone on AWS.",
     "elsewhere": "This name is taken (the bucket exists in another AWS region).",
 }
@@ -387,8 +388,13 @@ async def check_name(name: str, request: Request, response: Response, acct: Acco
         sugg = [] if status == "free" else await suggestions(request.app, cloud, prefix, name)
     except CloudError as e:
         raise cloud_http_error(e) from None
+    message = MESSAGES[status]
+    if status == "exists":
+        row = await request.app.state.db.run(request.app.state.db.buckets.get, full, "cloud")
+        if row is not None and row["owner_uid"] == acct.uid:
+            message = MESSAGES["own"]  # status stays `exists`
     return {"name": name, "fullName": full, "available": status == "free", "status": status,
-            "message": MESSAGES[status], "suggestions": sugg}
+            "message": message, "suggestions": sugg}
 
 
 # -- create -----------------------------------------------------------------------------

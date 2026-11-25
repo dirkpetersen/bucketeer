@@ -244,3 +244,7 @@
 .bu-env { margin: 0; padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--border); overflow-x: auto; font-family: var(--font-mono); font-size: var(--fs-sm); }
 .bu-tbl th, .bu-tbl td { padding-inline: var(--sp-3); font-variant-numeric: tabular-nums; }
 .bu-err { color: var(--danger); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+
+/* Buckets tab: All / On premises / Cloud (Q19) */
+.loc-filter { display: inline-flex; flex-wrap: wrap; gap: var(--sp-1); }
+.loc-filter[hidden] { display: none; }

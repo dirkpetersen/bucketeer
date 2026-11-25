@@ -145,8 +145,9 @@ def test_buckets_list_joins_budget_number(env):
     assert b["alice-data"] == {
         "name": "alice-data", "tenant": "", "owner": "alice", "objects": 42, "bytes": 1048576,
         "quota": {"enabled": False, "maxSize": None, "maxObjects": None},
-        "budgetNumber": "IDX-1234", "budgetMatches": None,
+        "budgetNumber": "IDX-1234", "budgetMatches": None, "location": "onprem",
     }
+    assert r.json()["cloud"] == {"configured": False, "available": False, "maxTiB": 100_000}
     assert b["alice-empty"]["budgetNumber"] is None  # missing, not invalid
     assert b["acme:reports"]["tenant"] == "acme" and b["acme:reports"]["owner"] == "acme$carol"
     assert "secret" not in r.text.lower()

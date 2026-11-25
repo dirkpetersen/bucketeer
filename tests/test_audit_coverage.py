@@ -90,6 +90,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "DELETE /api/admin/bucket-keys/{key_id}": ("admin.bucket_key.revoke",),
     "PUT /api/admin/users/{uid}/quota": ("admin.user.quota",),
     "PUT /api/admin/buckets/{bucket}/quota": ("admin.bucket.quota",),
+    "PUT /api/admin/cloud-buckets/{name}/quota": ("admin.bucket.quota",),
     "POST /api/admin/buckets/write-tags": ("admin.buckets.write_tags",),
     "POST /api/admin/users/{uid}/suspend": ("admin.user.suspend",),
     "POST /api/admin/users/{uid}/unsuspend": ("admin.user.unsuspend",),
@@ -296,6 +297,8 @@ def run(tmp_path_factory, moto_server):
         "/api/cloud/buckets/cov/quota", json={"quotaTiB": 2}, headers=H))
     r.step("PUT /api/cloud/buckets/{name}/budget", lambda: a.put(
         "/api/cloud/buckets/cov/budget", json={"budgetNumber": "DN012345"}, headers=H))
+    r.step("PUT /api/admin/cloud-buckets/{name}/quota", lambda: b.put(
+        "/api/admin/cloud-buckets/bucketeer-alice-cov/quota", json={"quotaTiB": 1}, headers=H))
     cl.client("cloudwatch").put_metric_data(Namespace="AWS/S3", MetricData=[{
         "MetricName": "BucketSizeBytes", "Value": float(3 * 2**40), "Unit": "Bytes",
         "Timestamp": datetime.now(UTC) - timedelta(hours=30),

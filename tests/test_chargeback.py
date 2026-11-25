@@ -47,7 +47,7 @@ def test_columns_and_rows_match_admin_buckets(env):
     r = env.admin.get(URL)
     assert r.text.splitlines()[0].lstrip("﻿") == (
         "bucket,tenant,owner_uid,owner_name,budget_number,budget_status,objects,bytes,"
-        "size_gib,quota_bytes,created_at")
+        "size_gib,quota_bytes,created_at,location,product")
     rows = rows_of(r)
     api = env.admin.get("/api/admin/buckets").json()["buckets"]
     assert [x["bucket"] for x in rows] == [b["name"] for b in api]  # same order, one each
@@ -66,6 +66,8 @@ def test_columns_and_rows_match_admin_buckets(env):
     assert by["acme:reports"]["tenant"] == "acme"
     assert by["acme:reports"]["owner_uid"] == "acme$carol"
     assert by["acme:reports"]["owner_name"]
+    assert {x["location"] for x in rows} == {"onprem"}
+    assert {x["product"] for x in rows} == {"Tier-3-S3"}
     assert "secret" not in r.text.lower()
 
 
