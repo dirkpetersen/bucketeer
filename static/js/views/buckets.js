@@ -22,6 +22,8 @@ import { menuButton } from "../components/menu-button.js";
 import { shareDialog } from "../components/share-dialog.js";
 import { aclDialog } from "../components/acl-dialog.js";
 import { objectLockDialog } from "../components/object-lock-dialog.js";
+import { getLocation, subscribe as onLocation } from "../location.js";
+import { cloudBucketsCard } from "./cloud-buckets.js";
 
 // The Buckets card on the home page: the user's own buckets with usage, quota and
 // budget number; create and delete. `isAdvanced()` tells whether the global
@@ -161,7 +163,7 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPo
     h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, vsw, peopleBtn, more)));
 }
 
-export function bucketsCard() {
+function onpremBucketsCard() {
   let buckets = [];
   let product = null; // the catalog product of these buckets (price per TiB-month)
   const deleting = new Set();
@@ -452,4 +454,23 @@ export function bucketsCard() {
 
   load();
   return card;
+}
+
+// The Buckets card follows the effective storage location: on premises (Ceph) or Cloud (AWS,
+// `cloud-buckets.js`). A location change swaps the card in place.
+export function bucketsCard() {
+  const slot = h("div", { class: "bk-slot" });
+  let shown = null;
+  const show = (loc) => {
+    if (loc === shown) return;
+    shown = loc;
+    slot.replaceChildren(loc === "cloud" ? cloudBucketsCard() : onpremBucketsCard());
+  };
+  show(getLocation());
+  const unsub = onLocation((loc) => {
+    if (!slot.isConnected && slot.dataset.mounted === "true") { unsub(); return; } // page replaced
+    if (slot.isConnected) slot.dataset.mounted = "true";
+    show(loc);
+  });
+  return slot;
 }

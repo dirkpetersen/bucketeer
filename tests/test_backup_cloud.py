@@ -375,7 +375,9 @@ def test_restore_command_options(monkeypatch):
 
 
 def test_reserved_usernames(tmp_path, aws):
-    assert cloud.reserved_usernames() == {"bucketeer-admin", "bucketeer-backup"}
+    # backup/billing (P6-10): a person's buckets would sit next to the system buckets
+    assert cloud.reserved_usernames() == {"bucketeer-admin", "bucketeer-backup", "backup",
+                                          "billing"}
     admin = CloudAdmin(make_settings(tmp_path, **CLOUD))
     assert admin.backup_user_name() == USER
     for name in ("bucketeer-backup", "Bucketeer-Backup", "bucketeer-admin"):

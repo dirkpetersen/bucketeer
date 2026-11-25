@@ -41,6 +41,15 @@ export function costLine(tib, product) {
     h("b", { text: `${formatMoney(total, product.currency)} per month` }));
 }
 
+// Cloud products are billed on usage: "About $36 per month if full (2 TiB × $18)".
+export function fullCostLine(tib, product) {
+  const price = Number(product.pricePerTiBMonth) || 0;
+  const total = Math.round(tib * price * 100) / 100;
+  return h("span", { class: "qp-cost-text" }, "About ",
+    h("b", { text: `${formatMoney(total, product.currency)} per month` }),
+    ` if full (${formatTiB(tib)} × ${formatMoney(price, product.currency)})`);
+}
+
 export function quotaPicker({ id = `qp${++seq}`, value, info, product, current = null }) {
   const max = info?.maxTiB ?? 100000;
   const input = h("input", {
@@ -64,8 +73,8 @@ export function quotaPicker({ id = `qp${++seq}`, value, info, product, current =
   const paint = () => {
     const n = read();
     const bad = message(n);
-    cost.replaceChildren(bad ? h("span", { class: "qp-cost-text", text: "—" }) : costLine(n, product));
-    if (product?.billedOn === "usage") cost.append(h("small", { text: " Estimate: the real cost is billed." }));
+    cost.replaceChildren(bad ? h("span", { class: "qp-cost-text", text: "—" }) : product?.billedOn === "usage" ? fullCostLine(n, product) : costLine(n, product));
+    if (product?.billedOn === "usage") cost.append(h("small", { text: " An estimate: the real AWS cost is billed." }));
     dec.disabled = !Number.isInteger(n) || n <= 1;
     inc.disabled = Number.isInteger(n) && n >= max;
     lim.replaceChildren();
@@ -120,5 +129,7 @@ export function quotaPicker({ id = `qp${++seq}`, value, info, product, current =
     error(m) { err.textContent = m; err.hidden = !m; },
     // After a 409 from the server: show its numbers.
     update(newInfo) { info = { ...info, ...newInfo }; paint(); },
+    // Cloud: the product follows the chosen storage class.
+    setProduct(p) { product = p; paint(); },
   };
 }

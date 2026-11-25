@@ -140,6 +140,9 @@ def no_cloud_monitor_on_start(monkeypatch):
     from bucketeer import cloud
 
     monkeypatch.setattr(cloud, "CHECK_ON_START", False)
+    from bucketeer import cloud_buckets  # the daily over-quota pass: tests call alert_tick
+
+    monkeypatch.setattr(cloud_buckets, "ALERT_ON_START", False)
 
 
 @pytest.fixture

@@ -61,6 +61,8 @@ BACKFILLS: list[tuple[int, str, dict, dict]] = [
     (5, "bucket_keys", {"id": 7}, {"statement_pending_cleanup": 0}),
     (14, "user_profiles", {"ad_username": "alice"}, {"location": None}),
     (15, "buckets", {"name": "alice-data"}, {"creation_known": 1}),
+    (18, "buckets", {"name": "alice-data"}, {"location": "onprem", "storage_class": None,
+                                             "quota_tib": None, "over_quota_alert_at": None}),
 ]
 # (setup_tokens.cloud, v17, defaults to 0; its sample row exists only from v11 on, so the
 # backfill is checked in test_setup_token_cloud_backfill)

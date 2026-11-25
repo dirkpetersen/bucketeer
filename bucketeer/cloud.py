@@ -48,10 +48,11 @@ It never touches user data: objects are reached only with a person's own key (P6
 import asyncio
 import json
 import logging
+import re
 import secrets
 import threading
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import boto3
@@ -88,7 +89,15 @@ OBJECT_ACTIONS = [
     "s3:DeleteObjectVersion", "s3:DeleteObjectTagging", "s3:AbortMultipartUpload",
     "s3:ListMultipartUploadParts", "s3:RestoreObject",
 ]
-RESERVED_USERNAMES = frozenset({"bucketeer-admin", "bucketeer-backup"})
+# `backup` / `billing` would put a person's cloud buckets next to the system buckets
+# `<prefix>backup-*` and `<prefix>billing-*` (P6-10), so they are refused for cloud too.
+RESERVED_USERNAMES = frozenset({"bucketeer-admin", "bucketeer-backup", "backup", "billing"})
+SYSTEM_BUCKET_WORDS = ("backup", "billing")
+# A new IAM user's ARN is accepted in a bucket policy only after IAM propagates it (about 5 s
+# on AWS): until then PutBucketPolicy answers MalformedPolicy "Invalid principal in policy".
+# grant_bucket_owner retries with these waits (seconds, about a minute in all).
+GRANT_WAITS = (1.0, 2.0, 4.0, 8.0, 15.0, 15.0, 15.0)
+STORAGE_CLASSES = {"intelligent": "INTELLIGENT_TIERING", "deep_archive": "DEEP_ARCHIVE"}
 BACKUP_USER = "bucketeer-backup"  # after CLOUD_USER_PREFIX: the backup IAM user (P6-12)
 BOUNDARY_POLICY = "BucketeerUserBoundary"  # tools/aws-setup, under USER_PATH
 CHECK_ON_START = True
@@ -101,9 +110,11 @@ SERVICES = ("sts", "iam", "s3", "cloudwatch")
 class CloudError(Exception):
     """An AWS call failed. `str()` is safe to show an admin: no secrets, URLs or ARNs."""
 
-    def __init__(self, status: int, code: str, message: str):
+    def __init__(self, status: int, code: str, message: str, aws_message: str = ""):
         super().__init__(message)
         self.status, self.code, self.message = status, code, message
+        # AWS's own text: only for decisions (e.g. "Invalid principal") and the log, never shown
+        self.aws_message = aws_message
 
 
 class CloudUnavailable(CloudError):
@@ -121,6 +132,10 @@ class NotConfigured(CloudError):
 def reserved_usernames() -> frozenset[str]:
     """AD usernames that never get cloud: they would name a system IAM user."""
     return RESERVED_USERNAMES
+
+
+async def _sleep(seconds: float) -> None:  # tests replace it
+    await asyncio.sleep(seconds)
 
 
 def _now() -> str:
@@ -187,7 +202,8 @@ class CloudAdmin:
             log.log(logging.DEBUG if status == 404 else logging.WARNING,
                     "AWS %s.%s refused: %s: %s", service, operation, code,
                     err.get("Message", ""))
-            raise CloudError(status, code, f"AWS refused {operation} ({code})") from None
+            raise CloudError(status, code, f"AWS refused {operation} ({code})",
+                             str(err.get("Message") or "")) from None
         except (EndpointConnectionError, ConnectTimeoutError, ReadTimeoutError) as e:
             log.warning("AWS %s.%s unreachable: %s", service, operation, type(e).__name__)
             raise CloudUnavailable(f"AWS could not be reached ({operation})") from None
@@ -228,8 +244,21 @@ class CloudAdmin:
                                         region_name=self.region)
         return session.client("s3", config=self._config)
 
+    @staticmethod
+    def owner_part(username: str) -> str:
+        """The username part of a person's cloud bucket names: lowercased, every character a
+        bucket name can't hold (`.`, `_`, `@`, `+`) a hyphen. `backup`/`billing` (alone or
+        followed by `-`) are refused (409 `reserved`): those names belong to system buckets.
+        Access never depends on this name (bucket policies do), so two names sharing a slug
+        only compete for bucket names."""
+        slug = re.sub(r"[^a-z0-9-]", "-", username.lower()).strip("-")
+        if not slug or any(slug == w or slug.startswith(w + "-") for w in SYSTEM_BUCKET_WORDS):
+            raise CloudError(409, "reserved", "Your user name can't be used for cloud bucket "
+                                              "names. Ask an administrator.")
+        return slug
+
     def bucket_name(self, username: str, name: str) -> str:
-        return f"{self.bucket_prefix}{username.lower()}-{name}"
+        return f"{self.bucket_prefix}{self.owner_part(username)}-{name}"
 
     # -- helpers later items extend ----------------------------------------------------
 
@@ -351,8 +380,19 @@ class CloudAdmin:
         doc["Statement"] = [s for s in doc["Statement"] if s.get("Sid") != OWNER_SID]
         doc["Statement"].append(self.owner_statement(bucket, user_arn))
         doc.setdefault("Version", "2012-10-17")
-        await self._write_bucket_policy(bucket, doc)
-        return doc
+        waits = list(GRANT_WAITS)
+        while True:
+            try:
+                await self._write_bucket_policy(bucket, doc)
+                return doc
+            except CloudError as e:
+                fresh = (e.code == "MalformedPolicy"
+                         and "invalid principal" in e.aws_message.lower())
+                if not fresh or not waits:
+                    raise
+                log.info("bucket policy of %s: the owner's IAM user is not visible yet; "
+                         "retrying", bucket)
+                await _sleep(waits.pop(0))
 
     async def revoke_bucket_owner(self, bucket: str) -> dict:
         """Remove the `bucketeer-owner` statement (the policy goes when it was the last)."""
@@ -401,7 +441,76 @@ class CloudAdmin:
                 return "free"
             if e.status == 403 or e.code in ("403", "Forbidden"):
                 return "taken"
+            if e.status == 301 or e.code in ("301", "PermanentRedirect"):
+                return "elsewhere"
             raise
+
+    # -- cloud buckets (P6-10, cloud_buckets.py) -----------------------------------------
+
+    async def create_bucket(self, name: str) -> None:
+        if not name.startswith(self.bucket_prefix):
+            raise ValueError(f"{name} is not a Bucketeer bucket")
+        params: dict[str, Any] = {"Bucket": name}
+        if self.region != "us-east-1":
+            params["CreateBucketConfiguration"] = {"LocationConstraint": self.region}
+        await self.call("s3", "create_bucket", **params)
+
+    async def delete_bucket(self, name: str) -> None:
+        if not name.startswith(self.bucket_prefix):
+            raise ValueError(f"{name} is not a Bucketeer bucket")
+        await self.call("s3", "delete_bucket", Bucket=name)
+
+    async def secure_bucket(self, name: str, versioning: bool) -> None:
+        """Block Public Access, SSE-S3 default encryption, BucketOwnerEnforced, versioning."""
+        await self.call("s3", "put_public_access_block", Bucket=name,
+                        PublicAccessBlockConfiguration={
+                            "BlockPublicAcls": True, "IgnorePublicAcls": True,
+                            "BlockPublicPolicy": True, "RestrictPublicBuckets": True})
+        await self.call("s3", "put_bucket_encryption", Bucket=name,
+                        ServerSideEncryptionConfiguration={"Rules": [{
+                            "ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]})
+        await self.call("s3", "put_bucket_ownership_controls", Bucket=name,
+                        OwnershipControls={"Rules": [{"ObjectOwnership": "BucketOwnerEnforced"}]})
+        if versioning:
+            await self.call("s3", "put_bucket_versioning", Bucket=name,
+                            VersioningConfiguration={"Status": "Enabled"})
+
+    async def object_probe(self, name: str) -> tuple[int, bool]:
+        """(current objects seen, more exist) from one ListObjectsV2 page (ListBucket only:
+        the admin user may neither read objects nor list versions)."""
+        res = await self.call("s3", "list_objects_v2", Bucket=name, MaxKeys=1000)
+        count = int(res.get("KeyCount") or len(res.get("Contents", [])))
+        return count, bool(res.get("IsTruncated"))
+
+    async def bucket_size(self, bucket: str, now: datetime | None = None,
+                          days: int = 4) -> dict[str, Any] | None:
+        """The bucket's size from CloudWatch `BucketSizeBytes`, summed over every storage
+        type it reports (daily, 1-2 days late): `{bytes, asOf: YYYY-MM-DD}`, or None when
+        CloudWatch has nothing yet."""
+        end = now or datetime.now(UTC)
+        start = end - timedelta(days=days)
+        res = await self.call("cloudwatch", "list_metrics", Namespace="AWS/S3",
+                              MetricName="BucketSizeBytes",
+                              Dimensions=[{"Name": "BucketName", "Value": bucket}])
+        types = sorted({d["Value"] for m in res.get("Metrics", [])
+                        for d in m.get("Dimensions", []) if d.get("Name") == "StorageType"})
+        total, latest = 0.0, None
+        for t in types:
+            pts = (await self.call(
+                "cloudwatch", "get_metric_statistics", Namespace="AWS/S3",
+                MetricName="BucketSizeBytes",
+                Dimensions=[{"Name": "BucketName", "Value": bucket},
+                            {"Name": "StorageType", "Value": t}],
+                StartTime=start, EndTime=end, Period=86400, Statistics=["Average"],
+            )).get("Datapoints", [])
+            if not pts:
+                continue
+            last = max(pts, key=lambda p: p["Timestamp"])
+            total += float(last["Average"])
+            latest = last["Timestamp"] if latest is None else max(latest, last["Timestamp"])
+        if latest is None:
+            return None
+        return {"bytes": int(total), "asOf": latest.astimezone(UTC).date().isoformat()}
 
     async def bucket_metric(self, bucket: str, metric: str, storage_type: str,
                             start: datetime, end: datetime) -> float | None:

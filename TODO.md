@@ -315,12 +315,21 @@ the item lands.
   and admin suspension deactivate cloud keys.
   - P6-10 must call `CloudAdmin.grant_bucket_owner` on create and `revoke_bucket_owner` on
     delete (with `cloud_users.ensure_account` first).
-  - (needs AWS) Check that a same-account bucket policy naming the IAM user grants access
-    with the boundary in place, and how long a new key takes to work.
-- [ ] P6-10 Cloud buckets (PLAN 4): `<CLOUD_BUCKET_PREFIX><username>-<name>`, availability
+  - [x] (needs AWS) Check that a same-account bucket policy naming the IAM user grants access
+    with the boundary in place, and how long a new key takes to work. Checked 2026-11-25:
+    yes (Get/Put/List/Delete allowed in the bucket, denied elsewhere and on PutBucketPolicy
+    and PutBucketTagging); a new key worked after about 10 s; a new user's ARN is accepted in
+    a bucket policy after about 5 s (`grant_bucket_owner` retries "Invalid principal" for up
+    to about a minute).
+- [x] P6-10 Cloud buckets (PLAN 4): `<CLOUD_BUCKET_PREFIX><username>-<name>`, availability
   check with suggestions, storage class Intelligent-Tiering or Deep Archive via day-0
   lifecycle, Block Public Access, SSE-S3, versioning, tags; list and delete; daily
   CloudWatch over-quota email to the owner (at most weekly).
+  - `cloud_buckets.py`, migration v18 (`buckets.location|storage_class|quota_tib|
+    over_quota_alert_at`), tests `tests/test_cloud_buckets.py`. v1 deletes empty buckets only.
+  - (needs AWS) Check that a day-0 lifecycle transition to INTELLIGENT_TIERING and to
+    DEEP_ARCHIVE is accepted and applied, and that HeadBucket by the admin user answers 403
+    for another account's bucket and 301 for one in another region.
 - [x] P6-11 Cloud billing (PLAN 3, decision 18): `tools/aws-setup --billing-export` creates
   the billing bucket, its policy and the CUR 2.0 export, and lets the admin user read that
   bucket only; Bucketeer sums `line_item_unblended_cost` per bucket from the export

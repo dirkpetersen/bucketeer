@@ -339,6 +339,19 @@ def abort_multipart_rule(days: int) -> dict:
                         AbortIncompleteMultipartUpload={"DaysAfterInitiation": _days(days)})
 
 
+STORAGE_CLASS_ID = PREFIX + "class"
+CLASS_RULE_CLASSES = ("INTELLIGENT_TIERING", "DEEP_ARCHIVE")
+
+
+def storage_class_rule(storage_class: str) -> dict:
+    """Cloud buckets (P6-10): every object moves to `storage_class` on day 0, so uploads with
+    any client land there without extra flags."""
+    if storage_class not in CLASS_RULE_CLASSES:
+        raise S3DocError(f"unsupported storage class {storage_class!r}")
+    return _simple_rule(STORAGE_CLASS_ID,
+                        Transitions=[{"Days": 0, "StorageClass": storage_class}])
+
+
 # ------------------------------------------------------------------------ tags
 
 def parse_tags(tags: Iterable[dict] | None) -> list[dict] | None:

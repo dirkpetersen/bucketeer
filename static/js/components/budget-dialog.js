@@ -4,16 +4,17 @@ import { bucketOptions, setBucketBudget } from "../api.js";
 import { checkBudget } from "../budget.js";
 import { nameSpan } from "./confirm-dialog.js";
 
-// budgetDialog({ bucket, current }) -> Promise<{ error? } | { saved }>
+// budgetDialog({ bucket, current, options?, save? }) -> Promise<{ error? } | { saved }>
+// `options`/`save` default to the on-premises calls; cloud buckets pass their own.
 // Change the budget number a bucket is charged to. The server is authoritative (character set,
 // the administrators' format, "required unless you are an administrator"); the checks here give
 // instant feedback only. The number is mirrored into the bucketeer-budget tag by the server.
 let seq = 0;
 
-export async function budgetDialog({ bucket, current }) {
+export async function budgetDialog({ bucket, current, options = bucketOptions, save = setBucketBudget }) {
   const id = `bud${++seq}`;
   let opts;
-  try { opts = await bucketOptions(); } catch (err) { return { error: err }; }
+  try { opts = await options(); } catch (err) { return { error: err }; }
   const required = opts.budgetRequired;
   let saved = null;
   let busy = false;
@@ -62,7 +63,7 @@ export async function budgetDialog({ bucket, current }) {
     submit.disabled = true;
     submit.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), "Saving…");
     try {
-      saved = await setBucketBudget(bucket, value);
+      saved = await save(bucket, value);
       dlg.close();
     } catch (err) {
       if (err.status === 401) { dlg.close(); return; }

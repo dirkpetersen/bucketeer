@@ -345,7 +345,7 @@ permissions boundary `BucketeerUserBoundary` and the tag `bucketeer-owner=<usern
   already exists but Bucketeer did not make it (another path, no boundary, or no owner tag
   for that person), the person is told to ask an administrator and the audit log has
   `cloud.user.refused`. Remove or rename the old user, then the person can try again.
-  Usernames `bucketeer-admin` and `bucketeer-backup` never get cloud.
+  Usernames `bucketeer-admin`, `bucketeer-backup`, `backup` and `billing` never get cloud.
 - **Access comes from each bucket's own policy.** The user's inline policy
   `bucketeer-buckets` only lets them list buckets. Each cloud bucket's bucket policy has a
   `bucketeer-owner` statement naming its owner's IAM user. Bucketeer does not use a name
@@ -358,6 +358,24 @@ permissions boundary `BucketeerUserBoundary` and the tag `bucketeer-owner=<usern
   after an offboarding suspension, makes exactly those keys active again. If AWS can't be
   reached, the suspension still happens on premises and the failure is shown (502 on the
   Users tab, `partial` in the offboarding report); the next enforce run finishes the keys.
+
+**5. Cloud buckets.** People create them on the bucket card while they work in Cloud. Each
+is `<CLOUD_BUCKET_PREFIX><username>-<name>` in `CLOUD_REGION` (dots, `_`, `@` and `+` in the
+username become hyphens; usernames `backup` and `billing`, or starting with `backup-` or
+`billing-`, get no cloud buckets, since those names belong to the backup and billing
+buckets). Bucketeer's admin user creates each bucket and sets Block Public Access, SSE-S3
+default encryption, *Bucket owner enforced*, versioning (on by default, old versions expire
+after 30 days), a lifecycle rule `bucketeer-class` that moves every object to
+Intelligent-Tiering or Glacier Deep Archive on day 0, a rule that aborts unfinished uploads
+after 7 days, the owner's `bucketeer-owner` policy statement and the `bucketeer-*` tags
+(owner, owner email, budget, product, quota, location `cloud`). If any step fails, the bucket
+is deleted again (audit `cloud.bucket.create_failed`). The quota is kept in Bucketeer's
+database and the `bucketeer-quota` tag (AWS has no bucket quota) and counts toward the same
+weekly limit as on premises. Once a day Bucketeer reads each bucket's size from CloudWatch;
+a bucket over its quota gets an email to its owner, at most once a week
+(`cloud.bucket.over_quota`; with email off only the audit entry). Bucketeer deletes only
+empty cloud buckets; people empty them with their own key. Audit: `cloud.bucket.create`,
+`quota`, `budget`, `delete`.
 
 !!! note "Profile names changed"
     The on-premises profile on users' computers is now `s3-onprem` (`AWS_PROFILE_NAME`; it

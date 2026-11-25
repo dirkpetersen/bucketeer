@@ -24,6 +24,7 @@ from . import (
     bucket_quota,
     buckets,
     cloud,
+    cloud_buckets,
     cloud_users,
     cors,
     credentials,
@@ -114,6 +115,9 @@ def create_app(
         if billing.REPORT_ON_START:  # monthly chargeback email; never blocks startup
             reporter = asyncio.get_running_loop().create_task(billing_report.report_loop(_app))
         cloud_check = None
+        cloud_alerts = None
+        if _app.state.cloud is not None and cloud_buckets.ALERT_ON_START:  # daily, background
+            cloud_alerts = asyncio.get_running_loop().create_task(cloud_buckets.alert_loop(_app))
         if _app.state.cloud is not None and cloud.CHECK_ON_START:  # never blocks startup
             cloud_check = asyncio.get_running_loop().create_task(
                 _app.state.cloud.monitor_loop())
@@ -133,7 +137,7 @@ def create_app(
         try:
             yield
         finally:
-            for task in (cloud_check, sampler, reporter, unlimit):
+            for task in (cloud_check, cloud_alerts, sampler, reporter, unlimit):
                 if task is not None:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
@@ -230,6 +234,7 @@ def create_app(
     api.include_router(rgw_user.router)
     api.include_router(credentials.router)
     api.include_router(cloud_users.router)
+    api.include_router(cloud_buckets.router)
     api.include_router(subusers.router)
     api.include_router(profile.router)
     api.include_router(bucket_delete.router)  # before /buckets/{name}

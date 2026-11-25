@@ -4,26 +4,30 @@ import { bucketOptions, setOwnBucketQuota } from "../api.js";
 import { nameSpan } from "./confirm-dialog.js";
 import { formatMoney, quotaPicker } from "./quota-picker.js";
 
-// bucketQuotaDialog({ bucket, current }) -> Promise<{ error? } | { saved }>
+// bucketQuotaDialog({ bucket, current, options?, save?, product? }) -> Promise<{ error? } | { saved }>
+// `options`/`save` default to the on-premises calls; cloud buckets pass their own and the
+// bucket's product (billed on usage: the cost shown is an estimate if the bucket is full).
 // "Change quota…": the bucket's quota in whole TiB with its monthly cost shown live. An increase
 // counts against the weekly limit (the server answers 409 with what is left); lowering always works.
 let seq = 0;
 
-export async function bucketQuotaDialog({ bucket, current }) {
+export async function bucketQuotaDialog({ bucket, current, options = bucketOptions, save = setOwnBucketQuota, product = null }) {
   const id = `bq${++seq}`;
   let opts;
-  try { opts = await bucketOptions(); } catch (err) { return { error: err }; }
+  try { opts = await options(); } catch (err) { return { error: err }; }
   let saved = null;
   let busy = false;
 
-  const picker = quotaPicker({ id, value: current ?? opts.quota.defaultTiB, info: opts.quota, product: opts.product, current });
+  const picker = quotaPicker({ id, value: current ?? opts.quota.defaultTiB, info: opts.quota, product: product || opts.product, current });
   const error = h("p", { class: "qd-error", role: "alert", hidden: true });
   const show = (msg) => { error.textContent = msg; error.hidden = !msg; };
   const cancel = h("button", { class: "btn", type: "button", text: "Cancel" });
   const submit = h("button", { class: "btn btn-primary", type: "submit" }, icon("check"), "Save quota");
-  const price = opts.product
-    ? `${opts.product.name} costs ${formatMoney(Number(opts.product.pricePerTiBMonth) || 0, opts.product.currency)} per TiB and month, billed on the quota you reserve.`
-    : "";
+  const prod = product || opts.product;
+  const price = !prod ? ""
+    : prod.billedOn === "usage"
+      ? `${prod.name} is about ${formatMoney(Number(prod.pricePerTiBMonth) || 0, prod.currency)} per TiB and month; the real AWS cost is billed. AWS does not stop uploads at the quota: you get an email when the bucket is over it.`
+      : `${prod.name} costs ${formatMoney(Number(prod.pricePerTiBMonth) || 0, prod.currency)} per TiB and month, billed on the quota you reserve.`;
 
   const form = h("form", { novalidate: true },
     h("div", { class: "qd-head" },
@@ -45,7 +49,7 @@ export async function bucketQuotaDialog({ bucket, current }) {
     submit.disabled = true;
     submit.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), "Saving…");
     try {
-      saved = await setOwnBucketQuota(bucket, value);
+      saved = await save(bucket, value);
       dlg.close();
     } catch (err) {
       if (err.status === 401) { dlg.close(); return; }
