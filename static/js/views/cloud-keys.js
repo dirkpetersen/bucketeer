@@ -3,6 +3,7 @@ import { icon } from "../icons.js";
 import { copyText } from "../clipboard.js";
 import { createCloudKey, deleteCloudKey, getCloudCredentials, rotateCloudKey } from "../api.js";
 import { cloudAvailable, getLocation, subscribe as onLocation } from "../location.js";
+import { isAdvanced, subscribe as onAdvanced } from "../advanced.js";
 import { cloudConfigSnippet, credentialsSnippet, SECRET_PLACEHOLDER, testCommand } from "../awsconfig.js";
 import { toast } from "../components/toast.js";
 import { confirmDialog } from "../components/confirm-dialog.js";
@@ -38,8 +39,8 @@ export function cloudSection() {
   let busy = false;
   let loading = false;
 
-  // Only while the storage location is Cloud (AWS): an on-premises user sees no cloud keys.
-  const shouldShow = () => cloudAvailable() && getLocation() === "cloud";
+  // Only while the storage location is Cloud (AWS) and Advanced is on, like the on-premises keys.
+  const shouldShow = () => cloudAvailable() && getLocation() === "cloud" && isAdvanced();
 
   const act = async (btn, fn) => {
     if (busy) return;
@@ -176,31 +177,45 @@ export function cloudSection() {
   };
 
   const load = async () => {
-    if (loading) return;
+    if (loading || gone()) return;
     loading = true;
     try {
       data = await getCloudCredentials();
       if (fresh && !data.keys.some((k) => k.accessKey === fresh.accessKey)) fresh = null;
     } catch (err) {
       data = null;
+      if (gone()) return teardown();
       if (!(err.name === "ApiError" && (err.status === 401 || err.status === 503))) {
-        host.hidden = !cloudAvailable() || getLocation() !== "cloud";
+        host.hidden = !shouldShow();
         host.replaceChildren(h("p", { class: "cred-warn", role: "status", text: err.message || "Your cloud keys could not be loaded." }));
         return;
       }
     } finally {
       loading = false;
     }
+    if (gone()) return teardown(); // replaced while the answer was on its way
     paint();
   };
 
+  // The Credentials card rebuilds its sections on every key reload. A replaced copy must stop
+  // reacting: `seen` marks that it was in the document once, so being detached later means gone.
   let seen = false;
-  const unsub = onLocation(() => {
-    if (host.isConnected) seen = true;
-    else if (seen) { fresh = null; return unsub(); } // the card was rebuilt
+  let unsubLoc = () => {};
+  let unsubAdv = () => {};
+  const gone = () => {
+    if (host.isConnected) { seen = true; return false; }
+    return seen;
+  };
+  const teardown = () => { fresh = null; data = null; unsubLoc(); unsubAdv(); };
+  const onChange = () => {
+    if (gone()) return teardown(); // the card was rebuilt
+    if (!host.isConnected) return; // not placed yet: never load or paint from here
     if (shouldShow() && !data) load();
     else paint();
-  });
+  };
+  unsubLoc = onLocation(onChange);
+  unsubAdv = onAdvanced(onChange);
+  requestAnimationFrame(() => { if (host.isConnected) seen = true; });
   if (shouldShow()) load();
   return host;
 }

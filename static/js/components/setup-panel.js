@@ -76,6 +76,16 @@ export function setupPanel({ endpointUrl, docsUrl, profile = "s3-onprem" }) {
       const mine = os;
       const r = await createSetupLink(mine);
       if (mine !== os) return; // the tab changed while waiting
+      const want = cloud ? "cloud" : "onprem";
+      if (r.location && r.location !== want) {
+        // The server followed the saved location, which differs from what this panel says.
+        // Never show a command for the other side; the unused link simply expires.
+        const said = (loc) => (loc === "cloud" ? "Cloud (AWS)" : "On Premises");
+        toast.error(`The server set this up for ${said(r.location)}, not ${said(want)}. `
+          + "Your location change may still be saving; try again in a moment.");
+        paintIdle();
+        return;
+      }
       link = r;
       deadline = performance.now() + r.expiresIn * 1000;
       paintLink();
@@ -89,7 +99,7 @@ export function setupPanel({ endpointUrl, docsUrl, profile = "s3-onprem" }) {
   };
 
   const paintIdle = () => {
-    const btn = h("button", { class: "btn btn-primary", type: "button", disabled: !endpointUrl }, icon("key"), "Create setup command");
+    const btn = h("button", { class: "btn btn-primary", type: "button", disabled: !cloud && !endpointUrl }, icon("key"), "Create setup command");
     btn.addEventListener("click", () => create(btn));
     body.replaceChildren(btn);
   };
@@ -127,7 +137,7 @@ export function setupPanel({ endpointUrl, docsUrl, profile = "s3-onprem" }) {
     h("p", { class: "acct-sub" }, cloud
       ? "Installs your Cloud (AWS) key as its AWS profile on this computer. A new key is made when the command runs. No secret is shown here."
       : ["Installs your keys as the AWS profile ", h("code", { text: profile }), " on this computer. No secret is shown here."]),
-    !endpointUrl && h("p", { class: "cred-warn", role: "status", text: "The S3 endpoint is not configured. Ask an administrator to set S3_ENDPOINT_URL." }),
+    !cloud && !endpointUrl && h("p", { class: "cred-warn", role: "status", text: "The S3 endpoint is not configured. Ask an administrator to set S3_ENDPOINT_URL." }),
     tabs, body,
     docsUrl && h("a", { class: "sp-help", href: `${docsUrl}s3-clients/`, target: "_blank", rel: "noopener" },
       icon("book"), h("span", {}, h("b", { text: "Which app can I use?" }), " Compare S3 clients and set up rclone, Cyberduck and more"), icon("right"))]);

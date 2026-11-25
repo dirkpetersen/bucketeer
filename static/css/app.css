@@ -143,16 +143,22 @@
 .acct-sub { color: var(--text-muted); font-size: var(--fs-sm); }
 .acct-uid { font-family: var(--font-mono); font-size: var(--fs-sm); background: var(--surface-2);
   padding: 0.1em 0.45em; border-radius: var(--r-sm); overflow-wrap: anywhere; }
-.acct .btn { width: fit-content; margin-top: var(--sp-2); }
+/* Text buttons only: icon buttons (copy, reveal) and the code-panel toolbar keep their own size and
+   alignment. :where() keeps the weight of `.acct .btn`, so the `margin-top: 0` overrides below still win. */
+.acct .btn:where(:not(.btn-icon, .cp-actions .btn)) { width: fit-content; margin-top: var(--sp-2); }
 
 /* Credentials: key, secret, snippets, test command */
 .panel-wide { grid-column: 1 / -1; }
 .creds { display: grid; gap: var(--sp-4); margin-top: var(--sp-3); }
-.cred-key, .cred-cmd { display: flex; align-items: center; gap: var(--sp-1); min-height: 3rem;
+.cred-key, .cred-cmd { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; min-height: 3rem;
   padding: 0 var(--sp-2) 0 var(--sp-4); border: 1px solid var(--border-strong); border-radius: var(--r-md);
   background: var(--surface-sunken); }
 .cred-key code, .cred-cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; scrollbar-width: none;
   font: 500 var(--fs-sm) / 3rem var(--font-mono); }
+/* Commands wrap on narrow screens instead of running into the copy button; one line looks as before. */
+.cred-cmd code { white-space: pre-wrap; overflow-wrap: anywhere; line-height: var(--lh-body); padding-block: var(--sp-2); }
+/* The copy button never gives up its square to a long key or command. */
+.cred-key > .btn-icon, .cred-cmd > .btn-icon { flex: none; }
 .cred-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 .cred-actions .btn { margin-top: 0; }
 .cred-test { display: grid; gap: var(--sp-2); }
@@ -186,7 +192,6 @@ select.input { appearance: auto; }
 .sp-body > * { min-width: 0; max-width: 100%; }
 .sp-body > .btn { margin-top: 0; }
 .sp-cmd { width: 100%; align-items: flex-start; }
-.sp-cmd code { white-space: pre-wrap; overflow-wrap: anywhere; line-height: var(--lh-body); padding-block: var(--sp-2); }
 .sp-timer { margin: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .sp-alt { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); }
 .creds-adv { display: grid; gap: var(--sp-4); }
@@ -239,13 +244,6 @@ select.input { appearance: auto; }
   font-size: var(--fs-xs);
 }
 .demo-banner strong { color: var(--accent-text); font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; margin-right: var(--sp-1); }
-
-/* Set up this computer: the optional Cloud (AWS) profile */
-.sp-cloud { display: flex; align-items: flex-start; gap: var(--sp-2); }
-.sp-cloud[hidden] { display: none; }
-.sp-cloud input { margin-top: 0.2rem; accent-color: var(--accent); }
-.sp-cloud label { display: grid; gap: var(--sp-1); color: var(--text); font-size: var(--fs-sm); }
-.sp-cloud b { font-weight: 600; }
 
 /* Cloud (AWS) keys (views/cloud-keys.js) */
 .ck { display: grid; gap: var(--sp-4); padding: var(--sp-5); border: 1px solid var(--border);

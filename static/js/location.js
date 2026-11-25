@@ -2,9 +2,9 @@
 // the server is the only persistence (/api/me `locationChoice`, `defaultLocation`,
 // `cloudAvailable`; saved with PUT /api/profile {location}). No localStorage.
 //
-// The effective location is the user's own choice only while Advanced is on and cloud
-// is available; otherwise the admin's default (and on premises when cloud is not
-// available). The server computes the same (bucketeer/location.py).
+// The effective location is the user's saved choice (Advanced only unlocks the switch),
+// else the admin's default; on premises whenever cloud is not available. The server
+// computes the same (bucketeer/location.py).
 import { saveProfile } from "./api.js";
 import { subscribe as onAdvanced } from "./advanced.js";
 
