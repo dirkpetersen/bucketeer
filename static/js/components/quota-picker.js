@@ -59,7 +59,7 @@ export function quotaPicker({ id = `qp${++seq}`, value, info, product, current =
   const dec = h("button", { class: "btn btn-sm qp-step", type: "button", "aria-label": "1 TiB less" }, icon("minus"));
   const inc = h("button", { class: "btn btn-sm qp-step", type: "button", "aria-label": "1 TiB more" }, icon("plus"));
   const cost = h("p", { class: "qp-cost", id: `${id}-c`, "aria-live": "polite" });
-  const lim = h("p", { class: "set-hint qp-limit", id: `${id}-l` });
+  const lim = h("p", { class: "set-hint qp-limit", id: `${id}-l`, "aria-live": "polite" });
   const err = h("p", { class: "set-err", id: `${id}-e`, role: "alert", hidden: true });
 
   const read = () => {
@@ -88,7 +88,7 @@ export function quotaPicker({ id = `qp${++seq}`, value, info, product, current =
     if (added > left) {
       lim.dataset.over = "true";
       lim.append(icon("alert", "icon"), h("span", {
-        text: `This adds ${formatTiB(added)}, but you can add only ${formatTiB(left)} more this week (limit ${formatTiB(info.weeklyLimitTiB)} in 7 days).${info.nextReleaseAt ? ` More frees up after ${shortDate(info.nextReleaseAt)}.` : ""}`,
+        text: `This adds ${formatTiB(added)}, but you can add only ${formatTiB(left)} more this week (limit ${formatTiB(info.weeklyLimitTiB)} in 7 days). ${info.nextReleaseAt ? `More frees up after ${shortDate(info.nextReleaseAt)}.` : "Ask an administrator for more."}`,
       }));
     } else if (added > 0) {
       lim.textContent = `You can add ${formatTiB(left)} of quota this week (limit ${formatTiB(info.weeklyLimitTiB)} in 7 days). Lowering a quota is always possible.`;
@@ -119,13 +119,18 @@ export function quotaPicker({ id = `qp${++seq}`, value, info, product, current =
     el,
     input,
     value: read,
+    // A bad number shows its error under the field; going over the weekly limit is already
+    // explained by the limit note, so it only blocks the save (the server would refuse it).
     validate() {
       const m = message(read());
       err.textContent = m;
       err.hidden = !m;
-      input.setAttribute("aria-invalid", String(!!m));
-      return m;
+      const over = !m && lim.dataset.over === "true";
+      input.setAttribute("aria-invalid", String(!!m || over));
+      return m || (over ? lim.textContent : "");
     },
+    // True while the limit note says the value is over this week's limit.
+    over() { return lim.dataset.over === "true"; },
     error(m) { err.textContent = m; err.hidden = !m; },
     // After a 409 from the server: show its numbers.
     update(newInfo) { info = { ...info, ...newInfo }; paint(); },

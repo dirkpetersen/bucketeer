@@ -23,6 +23,8 @@
 .set-check { padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
 .set-check span { display: grid; gap: 2px; }
 .set-check b { font-weight: 560; overflow-wrap: anywhere; }
+/* A chosen option (radio cards such as the default location) is marked, not just its dot. */
+.set-check:has(input[type="radio"]:checked) { border-color: var(--accent-ring); background: var(--accent-soft); }
 .set-check small { color: var(--text-muted); font-size: var(--fs-xs); }
 .set-fieldset { display: grid; gap: var(--sp-2); border: 0; padding: 0; margin: 0; min-width: 0; }
 .set-fieldset legend { padding: 0; margin-bottom: var(--sp-2); font-size: var(--fs-sm); font-weight: 560; }

@@ -56,7 +56,9 @@ export async function bucketQuotaDialog({ bucket, current, options = bucketOptio
       if (err.status === 409 && err.body?.remainingTiB != null) {
         picker.update({ remainingTiB: err.body.remainingTiB, nextReleaseAt: err.body.freesUpAt ?? null });
       }
-      show(err.message || "Could not change the quota.");
+      // The limit note under the field already explains a weekly-limit refusal.
+      show(picker.over() ? "" : err.message || "Could not change the quota.");
+      if (picker.over()) picker.input.focus();
       submit.disabled = false;
       submit.replaceChildren(icon("check"), "Save quota");
     } finally {

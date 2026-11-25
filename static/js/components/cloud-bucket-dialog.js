@@ -208,7 +208,9 @@ export async function cloudBucketDialog() {
       if (err.status === 409 && err.body?.remainingTiB != null) {
         quota.update({ remainingTiB: err.body.remainingTiB, nextReleaseAt: err.body.freesUpAt ?? null });
       }
-      showError(err.message || "Could not create the bucket.");
+      // The limit note under the quota field already explains a weekly-limit refusal.
+      showError(quota.over() ? "" : err.message || "Could not create the bucket.");
+      if (quota.over()) quota.input.focus();
       submit.disabled = false;
       submit.textContent = "Create cloud bucket";
     } finally {

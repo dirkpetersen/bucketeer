@@ -34,6 +34,8 @@
 .tab-count { min-width: 1.5rem; padding: 0.05rem 0.45rem; border-radius: var(--r-pill); background: var(--surface-2);
   font-size: var(--fs-xs); font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; }
 .tab-count:empty { display: none; }
+/* Eight tabs plus the result count: tighter tabs keep all of them in view on a laptop screen. */
+@media (max-width: 90em) { .tab { padding-inline: var(--sp-2); } .tab::after { inset-inline: var(--sp-2); } }
 .admin-tools { display: flex; align-items: center; gap: var(--sp-2); }
 @media (max-width: 39.99em) { .count { display: none; } }
 .count { white-space: nowrap; font-size: var(--fs-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; }
@@ -216,7 +218,9 @@
 .bl-cloud { display: grid; gap: var(--sp-3); padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
 .bl-cloud-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 .bl-stats { display: grid; gap: var(--sp-3); grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); }
-.bl-stat { display: grid; gap: var(--sp-1); min-width: 0; }
+.bl-stat { display: grid; gap: var(--sp-1); min-width: 0; align-content: start; }
+/* The email switch gets room for its text next to the send day instead of one narrow track. */
+@media (min-width: 48em) { .bl-switch { grid-column: span 2; } }
 .bl-stat-label, .bl-stat-note { font-size: var(--fs-xs); color: var(--text-muted); }
 .bl-stat-value { font-variant-numeric: tabular-nums; font-size: var(--fs-lg); }
 @media (max-width: 47.99em) {
@@ -227,7 +231,8 @@
 
 /* Backup tab (views/admin-backup.js) */
 .bu-facts { display: grid; gap: var(--sp-3) var(--sp-5); grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); margin: 0; padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
-.bu-fact { display: grid; gap: var(--sp-1); min-width: 0; }
+.bu-fact { display: grid; gap: var(--sp-1); min-width: 0; align-content: start; }
+.set-hint .bu-key { white-space: nowrap; }
 .bu-fact dt { color: var(--text-muted); font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 .bu-fact dd { margin: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 .bu-fact code, .bu-key { font-family: var(--font-mono); font-size: var(--fs-xs); background: var(--surface); padding: 0.1rem 0.4rem; border-radius: var(--r-sm); overflow-wrap: anywhere; }

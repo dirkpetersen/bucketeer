@@ -136,3 +136,36 @@ def test_demo_directory_lookup_user_and_sharing(tmp_path):
         c.post("/api/login", json={"login": "alice", "password": demo.DEMO_PASSWORD}, headers=H)
         r = c.get("/api/buckets/alice-data/share-lookup", params={"q": "bob"})
         assert r.status_code == 200 and r.json()["displayName"] == "Bob Brown"
+
+
+def test_demo_cloud_account_and_seed(tmp_path, monkeypatch):
+    """`--cloud`: a pretend AWS account in moto (its own account id), Bucketeer's admin key,
+    the boundary, billing export and the demo's seed data; the cloud check passes."""
+    import asyncio
+
+    import mock.demo_cloud as demo_cloud
+    from bucketeer import backup, billing, cloud
+
+    monkeypatch.setattr(cloud, "GRANT_WAITS", cloud.GRANT_WAITS)
+    monkeypatch.setattr(backup, "KEY_WAITS", backup.KEY_WAITS)
+    args = demo.parse_args(["--cloud", "--backup"])
+    assert args.cloud and args.backup
+    aws = demo_cloud.start()
+    try:
+        access, secret = demo_cloud.bootstrap()
+        demo_cloud.seed_billing_and_metrics()
+        settings = demo.demo_settings(
+            port=1, s3_url="http://127.0.0.1:3", data_dir=str(tmp_path),
+            rgw_admin_url="http://127.0.0.1:4", rgw_admin_access_key="K", rgw_admin_secret_key="S",
+            backup_bucket=demo.DEMO_BACKUP_BUCKET, **demo_cloud.cloud_settings(access, secret))
+        assert settings.cloud_configured and settings.cloud_billing_configured
+        admin = demo_cloud.make_cloud_admin(settings)
+        check = asyncio.run(admin.check())
+        assert check["ok"] and check["accountId"] == demo_cloud.DEMO_ACCOUNT
+    finally:
+        aws.stop()
+    db = Database(":memory:")
+    demo.seed_demo_db(db, days=3)
+    assert billing.load(db)["pricePerTiBMonth"] == demo.DEMO_BILLING["pricePerTiBMonth"]
+    assert db.profiles.get("alice")["default_budget_number"] == demo.DEMO_BUDGETS["alice"]
+    db.close()
