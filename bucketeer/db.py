@@ -271,6 +271,29 @@ MIGRATIONS: list[Migration] = [
     );
     CREATE INDEX quota_changes_person ON quota_changes (person, ts);
     """,
+    # v17: cloud (AWS) users, P6-9. `cloud_accounts` links an AD name to the IAM user Bucketeer
+    # made for that person (`policy_synced` 0 = the inline policy still has to be written).
+    # `cloud_key_suspensions` lists the access keys Bucketeer deactivated because their owner
+    # was suspended ('owner' = an admin, 'offboarding' = the job), so waking the owner
+    # reactivates exactly those. `setup_tokens.cloud` 1 = the link also installs `[s3-cloud]`.
+    """
+    CREATE TABLE cloud_accounts (
+        ad_username   TEXT PRIMARY KEY COLLATE NOCASE,
+        iam_user      TEXT NOT NULL UNIQUE,
+        source        TEXT NOT NULL CHECK (source IN ('created', 'recovered')),
+        policy_synced INTEGER NOT NULL DEFAULT 0,
+        created_at    TEXT NOT NULL
+    );
+    CREATE TABLE cloud_key_suspensions (
+        access_key   TEXT PRIMARY KEY,
+        iam_user     TEXT NOT NULL,
+        ad_username  TEXT NOT NULL COLLATE NOCASE,
+        suspended_by TEXT NOT NULL CHECK (suspended_by IN ('owner', 'offboarding')),
+        suspended_at TEXT NOT NULL
+    );
+    CREATE INDEX cloud_key_suspensions_ad ON cloud_key_suspensions (ad_username);
+    ALTER TABLE setup_tokens ADD COLUMN cloud INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 _MISSING: Any = object()
@@ -357,6 +380,8 @@ class Database:
         self.setup_tokens = SetupTokens(self)
         self.usage = UsageDaily(self)
         self.quota_changes = QuotaChanges(self)
+        self.cloud_accounts = CloudAccounts(self)
+        self.cloud_key_suspensions = CloudKeySuspensions(self)
         self.audit = AuditLog(self)
 
     # -- plumbing -----------------------------------------------------------
@@ -1075,13 +1100,14 @@ class SetupTokens(_Repo):
     """One-time setup links. Times are ISO strings in the `now()` format, so they sort."""
 
     def create(self, token_hash: str, ad: str, uid: str, access_key: str, os_name: str,
-               created: str, expires: str, purge_before: str) -> int:
+               created: str, expires: str, purge_before: str, cloud: bool = False) -> int:
         with self.db.tx() as c:
             c.execute("DELETE FROM setup_tokens WHERE created_at < ?", (purge_before,))
             return c.execute(
                 "INSERT INTO setup_tokens (token_hash, ad_username, rgw_uid, access_key, os, "
-                "created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (token_hash, ad, uid, access_key, os_name, created, expires)).lastrowid  # type: ignore[return-value]
+                "created_at, expires_at, cloud) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (token_hash, ad, uid, access_key, os_name, created, expires,
+                 1 if cloud else 0)).lastrowid  # type: ignore[return-value]
 
     def count_since(self, ad: str, since: str) -> int:
         return self.db.query_one(
@@ -1098,6 +1124,65 @@ class SetupTokens(_Repo):
                 "UPDATE setup_tokens SET used_at = ?, used_ip = ? "
                 "WHERE id = ? AND used_at IS NULL AND expires_at > ?",
                 (now_iso, ip, row_id, now_iso)).rowcount == 1
+
+
+class CloudAccounts(_Repo):
+    """AD name <-> IAM user of a person (cloud, P6-9). AD names compare case-insensitively."""
+
+    def get(self, ad_username: str) -> dict[str, Any] | None:
+        return self.db.query_one("SELECT * FROM cloud_accounts WHERE ad_username = ?",
+                                 (ad_username,))
+
+    def record(self, ad_username: str, iam_user: str, source: str) -> dict[str, Any]:
+        with self.db.tx() as c:
+            c.execute(
+                "INSERT INTO cloud_accounts (ad_username, iam_user, source, created_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (ad_username) DO UPDATE SET "
+                "iam_user = excluded.iam_user, source = excluded.source, policy_synced = 0",
+                (ad_username.lower(), iam_user, source, now()))
+        return self.get(ad_username)  # type: ignore[return-value]
+
+    def set_policy_synced(self, ad_username: str, synced: bool) -> None:
+        with self.db.tx() as c:
+            c.execute("UPDATE cloud_accounts SET policy_synced = ? WHERE ad_username = ?",
+                      (1 if synced else 0, ad_username))
+
+    def for_names(self, names: list[str]) -> list[dict[str, Any]]:
+        if not names:
+            return []
+        marks = ", ".join("?" * len(names))
+        return self.db.query(
+            f"SELECT * FROM cloud_accounts WHERE ad_username IN ({marks}) "  # noqa: S608
+            "ORDER BY ad_username", tuple(names))
+
+    def list(self) -> list[dict[str, Any]]:
+        return self.db.query("SELECT * FROM cloud_accounts ORDER BY ad_username")
+
+
+class CloudKeySuspensions(_Repo):
+    """Access keys Bucketeer deactivated with their suspended owner ('owner'|'offboarding')."""
+
+    def add(self, access_key: str, iam_user: str, ad_username: str, by: str) -> None:
+        with self.db.tx() as c:
+            c.execute(
+                "INSERT INTO cloud_key_suspensions (access_key, iam_user, ad_username, "
+                "suspended_by, suspended_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (access_key) "
+                "DO UPDATE SET suspended_by = excluded.suspended_by",
+                (access_key, iam_user, ad_username.lower(), by, now()))
+
+    def remove(self, access_key: str) -> None:
+        with self.db.tx() as c:
+            c.execute("DELETE FROM cloud_key_suspensions WHERE access_key = ?", (access_key,))
+
+    def for_user(self, ad_username: str) -> list[dict[str, Any]]:
+        return self.db.query("SELECT * FROM cloud_key_suspensions WHERE ad_username = ? "
+                             "ORDER BY access_key", (ad_username,))
+
+    def relabel(self, ad_username: str, old: str, new: str) -> int:
+        with self.db.tx() as c:
+            return c.execute(
+                "UPDATE cloud_key_suspensions SET suspended_by = ? "
+                "WHERE ad_username = ? AND suspended_by = ?", (new, ad_username, old)).rowcount
 
 
 class UsageDaily(_Repo):

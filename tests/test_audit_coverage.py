@@ -20,12 +20,15 @@ import pytest
 
 from bucketeer import backup, bucket_delete, bucket_quota, rebuild
 from bucketeer.bucket_keys import cleanup_pending
+from bucketeer.cloud import CloudAdmin
 
 from .conftest import REQUIRED
 from .test_acl import fake_objects
-from .test_auth import SECRET_PW, TEAM_GROUP, USERS_GROUP
+from .test_auth import SECRET_PW, TEAM_GROUP, USERS_GROUP, make_settings
 from .test_billing import FakeMailer
 from .test_buckets import Env, H
+from .test_cloud_users import BOUNDARY_DOC, boundary_session
+from .test_cloud_users import CLOUD as CLOUD_SETTINGS
 
 UNSAFE = {"POST", "PUT", "PATCH", "DELETE"}
 S = "/api/admin/settings"
@@ -42,6 +45,9 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "DELETE /api/credentials/keys/{access_key}": ("credentials.key.delete",),
     "POST /api/credentials/setup-link": ("credentials.setup_link",),
     "POST /setup/{token}": ("credentials.setup",),
+    "POST /api/cloud/credentials/keys": ("cloud.user.create", "cloud.key.create"),
+    "POST /api/cloud/credentials/keys/{access_key}/rotate": ("cloud.key.rotate",),
+    "DELETE /api/cloud/credentials/keys/{access_key}": ("cloud.key.delete",),
     "POST /api/subusers": ("subuser.create",),
     "PATCH /api/subusers/{name}": ("subuser.update",),
     "DELETE /api/subusers/{name}": ("subuser.delete",),
@@ -129,13 +135,14 @@ EVENTS = {
     "rgw.user.quota_unlimited": "one-time step: old default user quota -> unlimited (system)",
     "billing.report_failed": "no billing contact's mail server took the monthly sheet",
     "system.rebuild": "python3 app.py --rebuild-from-ceph (actor system)",
+    "cloud.user.refused": "an IAM user with the person's name that Bucketeer did not make",
 }
 
 ACTION_RE = re.compile(r"^(?:[a-z][a-z_]*)(?:\.[a-z][a-z_]*)+$")
 ACTION_EXCEPTIONS = {"logout"}  # pre-dates the scheme; kept so old log rows still match
 TARGET_TYPES = {"user", "rgw_user", "bucket", "bucket_key", "access_key", "profile", "setting",
                 "uid_mapping", "notification_endpoint", "report", "offboarding_run", "subuser",
-                "backup", "database"}
+                "backup", "database", "cloud_user"}
 ACTORS = {"alice", "bob", "dave", "system", "mallory"}
 
 SECRET_PATTERNS = [
@@ -252,6 +259,24 @@ def run(tmp_path_factory, moto_server):
     r.step("event", lambda: env.anon().post(bad_link.replace("https://testserver", "")))
     for k in env.croit_state.users["alice"].keys:
         k["secret_key"] = "AliceSetupSecret0001"
+
+    # cloud keys on the moto server (the AWS side is tested in tests/test_cloud_users.py);
+    # the client stays until the location step, so admin suspend/unsuspend reach it too
+    cl = CloudAdmin(make_settings(tmp, **CLOUD_SETTINGS),
+                    session_factory=boundary_session({}, moto_server.endpoint))
+    cl.client("iam").create_policy(PolicyName="BucketeerUserBoundary", Path="/bucketeer/",
+                                   PolicyDocument=json.dumps(BOUNDARY_DOC))
+    asyncio.run(cl.check())
+    env.app.state.cloud = cl
+    ck = r.step("POST /api/cloud/credentials/keys", lambda: a.post(
+        "/api/cloud/credentials/keys", headers=H)).json()["accessKey"]
+    r.step("POST /api/cloud/credentials/keys/{access_key}/rotate", lambda: a.post(
+        f"/api/cloud/credentials/keys/{ck}/rotate", headers=H))
+    extra = ok(a.post("/api/cloud/credentials/keys", headers=H)).json()["accessKey"]
+    r.step("DELETE /api/cloud/credentials/keys/{access_key}", lambda: a.delete(
+        f"/api/cloud/credentials/keys/{extra}", headers=H))
+    cl.client("iam").create_user(UserName="s3-bob")  # made outside Bucketeer: refused
+    r.step("event", lambda: b.post("/api/cloud/credentials/keys", headers=H))
 
     # subusers (subuser.create_failed is covered in tests/test_subusers.py)
     sub = r.step("POST /api/subusers", lambda: a.post(

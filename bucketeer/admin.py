@@ -428,17 +428,17 @@ async def apply_key_suspension(
 
 async def _set_suspended(
     uid: str, suspend: bool, admin: SessionUser, croit: CroitClient, db: Database,
-    rgw: RgwResolver, lock: asyncio.Lock,
+    rgw: RgwResolver, lock: asyncio.Lock, app=None,
 ):
     # Serialized with the offboarding job and the login unsuspend, so none of them can undo
     # another's decision between its read and its write.
     async with lock:
-        return await _set_suspended_locked(uid, suspend, admin, croit, db, rgw)
+        return await _set_suspended_locked(uid, suspend, admin, croit, db, rgw, app)
 
 
 async def _set_suspended_locked(
     uid: str, suspend: bool, admin: SessionUser, croit: CroitClient, db: Database,
-    rgw: RgwResolver,
+    rgw: RgwResolver, app=None,
 ):
     uid = _uid(uid)
     await _refuse_service_user(croit, uid)
@@ -492,6 +492,20 @@ async def _set_suspended_locked(
         for k in live:
             if k["suspended_by"] == "offboarding":
                 await db.run(db.bucket_keys.set_suspended, k["id"], True, "owner")
+    # Cloud (AWS) keys follow the same rules (cloud_users.py): deactivated with the owner,
+    # reactivated only when Bucketeer deactivated them for this owner or for the job.
+    if app is not None and not is_key_user:
+        from . import cloud_users  # cloud_users -> profile -> location -> admin
+
+        cdone: list[str] = []
+        cfailed: list[str] = []
+        if suspend:
+            if took_over:
+                await cloud_users.relabel(app, owners, "offboarding", "owner")
+            cdone, cfailed = await cloud_users.suspend_keys(app, owners, "owner")
+        elif was or took_over:
+            cdone, cfailed = await cloud_users.wake_keys(app, owners, {"owner", "offboarding"})
+        done, failed = done + cdone, failed + cfailed
     details: dict[str, Any] = {
         "before": {"suspended": was}, "after": {"suspended": suspend}, "keys": done,
     }
@@ -504,21 +518,21 @@ async def _set_suspended_locked(
     if failed:
         raise HTTPException(
             502,
-            f"{uid} is {'suspended' if suspend else 'unsuspended'}, but these bucket keys failed: "
+            f"{uid} is {'suspended' if suspend else 'unsuspended'}, but these keys failed: "
             + ", ".join(failed),
         )
     return {"uid": uid, "suspended": suspend, "keys": done}
 
 
 @router.post("/users/{uid}/suspend")
-async def suspend_user(uid: str, admin: Admin, croit: Croit, db: Db, rgw: Rgw,
-                       lock: SuspendLock):
-    return await _set_suspended(uid, True, admin, croit, db, rgw, lock)
+async def suspend_user(uid: str, request: Request, admin: Admin, croit: Croit, db: Db,
+                       rgw: Rgw, lock: SuspendLock):
+    return await _set_suspended(uid, True, admin, croit, db, rgw, lock, request.app)
 
 
 @router.post("/users/{uid}/unsuspend")
-async def unsuspend_user(uid: str, admin: Admin, croit: Croit, db: Db, rgw: Rgw,
-                         lock: SuspendLock):
-    return await _set_suspended(uid, False, admin, croit, db, rgw, lock)
+async def unsuspend_user(uid: str, request: Request, admin: Admin, croit: Croit, db: Db,
+                         rgw: Rgw, lock: SuspendLock):
+    return await _set_suspended(uid, False, admin, croit, db, rgw, lock, request.app)
 
 

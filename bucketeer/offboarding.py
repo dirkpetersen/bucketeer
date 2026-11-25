@@ -28,6 +28,9 @@ deletes anything and only suspends.
   person whose row is flagged, and only the keys with `suspended_by = 'offboarding'`. Any admin
   suspend/unsuspend clears the flag first (`admin._set_suspended`), so an admin's decision is
   never undone automatically.
+* **Cloud (AWS) keys** follow the same path (`cloud_users.suspend_keys` / `wake_keys`): enforce
+  sets the person's Active keys Inactive (`suspended_by = 'offboarding'`), the login wakes only
+  those; AWS trouble is a `cloud:<id>` entry in the failed list (`partial`, then `keys_pending`).
 * One run at a time; each run is stored in `offboarding_runs` (last 30). A scheduled run is an
   asyncio task started from the lifespan (`SCHEDULE_ON_START`, off in tests).
 
@@ -64,6 +67,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
+from . import cloud_users
 from .admin import Admin, apply_key_suspension
 from .auth import require_admin
 from .croit import CroitClientError, CroitError
@@ -294,11 +298,17 @@ class OffboardingService:
             if p["suspended"] and any(r["offboarding_suspended_at"] for r in p["rows"]):
                 live = [k for k in await self._live_keys(uid, p["names"])
                         if not k["suspended_at"]]
-                if live:
+                cloud_live = await cloud_users.active_keys(self.app, p["names"])
+                if live or cloud_live != 0:
+                    what = [f"{len(live)} bucket key(s)"] if live else []
+                    if cloud_live:
+                        what.append(f"{cloud_live} cloud key(s)")
+                    elif cloud_live is None:
+                        what.append("cloud keys (AWS could not be checked)")
                     pending.append({"uid": uid, "adUsernames": p["names"], "reason": "keys_pending",
                                     "action": "keys_pending", "keys": [],
                                     "note": "suspended by the job earlier; "
-                                            f"{len(live)} bucket key(s) still live"})
+                                            f"{' and '.join(what)} still live"})
         counts["keysPending"] = len(pending)
 
         candidates: list[tuple[str, dict, str]] = []
@@ -381,9 +391,12 @@ class OffboardingService:
             done, failed = await apply_key_suspension(
                 croit, db, [k for k in keys if not k["suspended_at"]], True,
                 "offboarding", uid)
+            # cloud (AWS) keys: deactivated, never deleted; trouble is reported like key trouble
+            cdone, cfailed = await cloud_users.suspend_keys(self.app, p["names"], "offboarding")
+            done, failed = done + cdone, failed + cfailed
         res.update(action="partial" if failed else "suspended", keys=done)
         if failed:
-            res["note"] = ("bucket keys not confirmed suspended (croit error; they may or may "
+            res["note"] = ("keys not confirmed suspended (croit or AWS error; they may or may "
                            "not be suspended, check them): " + ", ".join(failed))
             counts["failed"] += 1
         counts["suspended"] += 1
@@ -414,9 +427,11 @@ class OffboardingService:
             keys = [k for k in await self._live_keys(uid, p["names"]) if not k["suspended_at"]]
             done, failed = await apply_key_suspension(
                 self.croit, db, keys, True, "offboarding", uid)
+            cdone, cfailed = await cloud_users.suspend_keys(self.app, p["names"], "offboarding")
+            done, failed = done + cdone, failed + cfailed
         res.update(action="partial" if failed else "keys_completed", keys=done, note=None)
         if failed:
-            res["note"] = "bucket keys not confirmed suspended: " + ", ".join(failed)
+            res["note"] = "keys not confirmed suspended: " + ", ".join(failed)
             counts["failed"] += 1
         counts["keysSuspended"] += len(done)
         await self._audit(actor, "offboarding.suspend", "rgw_user", uid, {
@@ -453,6 +468,9 @@ class OffboardingService:
                         if k["suspended_by"] == "offboarding"]
                 done, failed = await apply_key_suspension(
                     self.croit, db, keys, False, "offboarding", uid)
+                # only the cloud keys the job deactivated
+                cdone, cfailed = await cloud_users.wake_keys(self.app, names, {"offboarding"})
+                done, failed = done + cdone, failed + cfailed
             except CroitClientError as e:
                 log.warning("offboarding: unsuspending %s failed: %s", uid, e)
                 await self._audit("system", "offboarding.unsuspend_failed", "rgw_user", uid,

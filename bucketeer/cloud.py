@@ -25,9 +25,28 @@ It never touches user data: objects are reached only with a person's own key (P6
   `<CLOUD_USER_PREFIX>bucketeer-backup` (path `/bucketeer/`, with the boundary
   `boundary_arn(account)`), `new_backup_bucket_name()` = `<CLOUD_BUCKET_PREFIX>backup-<12 hex>`,
   `s3_with_key(access, secret)` a plain S3 client for the backup user's temporary key.
+- Person IAM users (P6-9; orchestration, SQLite and audit live in `cloud_users.py`):
+  `account_id()` (STS, cached), `person_boundary_arn()`, `create_person_user` (path
+  `/bucketeer/`, boundary `BucketeerUserBoundary`, tag `bucketeer-owner`), `is_ours` (path +
+  boundary + owner tag; anything else is never adopted), access keys (`list_access_keys`,
+  `create_access_key`, `delete_access_key`, `set_access_key_status`), `put_user_policy`.
+- **Access to buckets comes from each bucket's own policy, never from a name wildcard.** The
+  person's inline policy `bucketeer-buckets` (`user_policy`) allows only `s3:ListAllMyBuckets`
+  and `s3:GetBucketLocation`. A wildcard such as `<prefix><username>-*` would be wrong: AD
+  names may contain hyphens, so `jdoe-x`'s bucket `<prefix>jdoe-x-data` also matches
+  `jdoe`'s wildcard, and a person named `backup` would match the system backup bucket
+  `<prefix>backup-<hex>`. Instead every cloud bucket's BUCKET POLICY carries one statement,
+  Sid `bucketeer-owner`, with the owner's IAM user ARN as Principal and the bucket-read and
+  object actions (`BUCKET_ACTIONS`, `OBJECT_ACTIONS`, within what the boundary allows) on the
+  bucket and `bucket/*`: in the same account a bucket policy naming the user grants access on
+  its own. `grant_bucket_owner(bucket, user_arn)` / `revoke_bucket_owner(bucket)` (P6-10 calls
+  them on create/delete) read-modify-write the policy and touch only `bucketeer-*` Sids.
+  If an IAM user is deleted and made again, its bucket statements must be granted again
+  (AWS then shows the old principal as a unique id).
 """
 
 import asyncio
+import json
 import logging
 import secrets
 import threading
@@ -52,6 +71,23 @@ for _name in ("botocore", "boto3", "urllib3"):
     logging.getLogger(_name).setLevel(logging.WARNING)
 
 USER_PATH = "/bucketeer/"  # per-person IAM users (tools/aws-setup grants only this path)
+USER_POLICY = "bucketeer-buckets"  # the inline policy of a person's IAM user
+OWNER_TAG = "bucketeer-owner"
+OWNER_SID = "bucketeer-owner"  # the bucket-policy statement that gives the owner access
+MAX_ACCESS_KEYS = 2  # IAM's hard limit per user
+# What the owner may do in their own bucket (the boundary in tools/aws-setup allows these):
+# bucket reads plus object access. Bucket set-up (create, delete, lifecycle) is Bucketeer's.
+BUCKET_ACTIONS = [
+    "s3:GetBucketLocation", "s3:ListBucket", "s3:ListBucketVersions",
+    "s3:ListBucketMultipartUploads", "s3:GetBucketVersioning", "s3:GetBucketTagging",
+    "s3:GetLifecycleConfiguration",
+]
+OBJECT_ACTIONS = [
+    "s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAttributes", "s3:GetObjectTagging",
+    "s3:GetObjectVersionTagging", "s3:PutObject", "s3:PutObjectTagging", "s3:DeleteObject",
+    "s3:DeleteObjectVersion", "s3:DeleteObjectTagging", "s3:AbortMultipartUpload",
+    "s3:ListMultipartUploadParts", "s3:RestoreObject",
+]
 RESERVED_USERNAMES = frozenset({"bucketeer-admin", "bucketeer-backup"})
 BACKUP_USER = "bucketeer-backup"  # after CLOUD_USER_PREFIX: the backup IAM user (P6-12)
 BOUNDARY_POLICY = "BucketeerUserBoundary"  # tools/aws-setup, under USER_PATH
@@ -91,6 +127,12 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+def _iso(value: Any) -> str | None:
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).isoformat(timespec="seconds")
+    return str(value) if value else None
+
+
 class CloudAdmin:
     backend = "aws"
 
@@ -107,6 +149,8 @@ class CloudAdmin:
         self._clients: dict[str, Any] = {}
         self._lock = threading.Lock()
         self.last_check: dict[str, Any] | None = None
+        self._account: str | None = None
+        self._caller_arn: str | None = None
         self._config = Config(
             region_name=self.region, connect_timeout=5, read_timeout=20,
             retries={"max_attempts": 3, "mode": "standard"},
@@ -192,6 +236,134 @@ class CloudAdmin:
     async def caller_identity(self) -> dict:
         res = await self.call("sts", "get_caller_identity")
         return {"account": res.get("Account"), "arn": res.get("Arn")}
+
+    async def account_id(self) -> str:
+        """The AWS account id (STS, cached after the first success)."""
+        if self._account is None:
+            ident = await self.caller_identity()
+            self._account, self._caller_arn = ident["account"], ident["arn"]
+        return str(self._account)
+
+    async def own_user_name(self) -> str | None:
+        """The IAM user name of Bucketeer's own identity (from the STS ARN), or None."""
+        await self.account_id()
+        arn = self._caller_arn or ""
+        return arn.rsplit("/", 1)[-1] if ":user/" in arn else None
+
+    async def person_boundary_arn(self) -> str:
+        return self.boundary_arn(await self.account_id())
+
+    async def user_arn(self, name: str) -> str:
+        return f"arn:aws:iam::{await self.account_id()}:user{USER_PATH}{name}"
+
+    async def user_tags(self, name: str) -> dict[str, str]:
+        res = await self.call("iam", "list_user_tags", UserName=name)
+        return {t["Key"]: t["Value"] for t in res.get("Tags", [])}
+
+    async def is_ours(self, user: dict, owner: str) -> bool:
+        """True only for a person user Bucketeer made: path `/bucketeer/`, the boundary and
+        the `bucketeer-owner` tag naming `owner`. Anything else is never adopted."""
+        boundary = (user.get("PermissionsBoundary") or {}).get("PermissionsBoundaryArn")
+        if user.get("Path") != USER_PATH or boundary != await self.person_boundary_arn():
+            return False
+        tags = await self.user_tags(user["UserName"])
+        return tags.get(OWNER_TAG, "").lower() == owner.lower()
+
+    async def create_person_user(self, name: str, owner: str) -> dict:
+        """Create `name` under `/bucketeer/` WITH the boundary (the only way the admin policy
+        lets Bucketeer create users), tagged with its owner's AD name."""
+        res = await self.call(
+            "iam", "create_user", UserName=name, Path=USER_PATH,
+            PermissionsBoundary=await self.person_boundary_arn(),
+            Tags=[{"Key": OWNER_TAG, "Value": owner.lower()},
+                  {"Key": "bucketeer-role", "Value": "person"}])
+        return res["User"]
+
+    async def list_access_keys(self, name: str) -> list[dict]:
+        """`[{accessKey, status (Active|Inactive), createdAt}]`, oldest first. No secrets
+        exist here: AWS returns a secret only once, from CreateAccessKey."""
+        res = await self.call("iam", "list_access_keys", UserName=name)
+        keys = [{"accessKey": k["AccessKeyId"], "status": k.get("Status", "Active"),
+                 "createdAt": _iso(k.get("CreateDate"))}
+                for k in res.get("AccessKeyMetadata", [])]
+        return sorted(keys, key=lambda k: (k["createdAt"] or "", k["accessKey"]))
+
+    async def create_access_key(self, name: str) -> dict:
+        """`{accessKey, secretKey, status, createdAt}`: the ONLY time the secret exists."""
+        k = (await self.call("iam", "create_access_key", UserName=name))["AccessKey"]
+        return {"accessKey": k["AccessKeyId"], "secretKey": k["SecretAccessKey"],
+                "status": k.get("Status", "Active"), "createdAt": _iso(k.get("CreateDate"))}
+
+    async def delete_access_key(self, name: str, access_key: str) -> None:
+        await self.call("iam", "delete_access_key", UserName=name, AccessKeyId=access_key)
+
+    async def set_access_key_status(self, name: str, access_key: str, active: bool) -> None:
+        await self.call("iam", "update_access_key", UserName=name, AccessKeyId=access_key,
+                        Status="Active" if active else "Inactive")
+
+    @staticmethod
+    def user_policy() -> dict:
+        """The inline policy of every person's IAM user: list buckets, nothing else. Bucket
+        access comes from each bucket's own policy (`grant_bucket_owner`)."""
+        return {"Version": "2012-10-17", "Statement": [{
+            "Sid": "ListBuckets", "Effect": "Allow",
+            "Action": ["s3:ListAllMyBuckets", "s3:GetBucketLocation"], "Resource": "*"}]}
+
+    async def put_user_policy(self, name: str) -> dict:
+        """Write `bucketeer-buckets` on the IAM user `name`."""
+        doc = self.user_policy()
+        await self.call("iam", "put_user_policy", UserName=name, PolicyName=USER_POLICY,
+                        PolicyDocument=json.dumps(doc, separators=(",", ":")))
+        return doc
+
+    @staticmethod
+    def owner_statement(bucket: str, user_arn: str) -> dict:
+        arn = f"arn:aws:s3:::{bucket}"
+        return {"Sid": OWNER_SID, "Effect": "Allow", "Principal": {"AWS": user_arn},
+                "Action": BUCKET_ACTIONS + OBJECT_ACTIONS, "Resource": [arn, f"{arn}/*"]}
+
+    async def _bucket_policy(self, bucket: str) -> dict:
+        try:
+            res = await self.call("s3", "get_bucket_policy", Bucket=bucket)
+        except CloudError as e:
+            if e.code == "NoSuchBucketPolicy":
+                return {"Version": "2012-10-17", "Statement": []}
+            raise
+        doc = json.loads(res.get("Policy") or "{}")
+        stmts = doc.get("Statement", [])
+        doc["Statement"] = stmts if isinstance(stmts, list) else [stmts]
+        return doc
+
+    async def _write_bucket_policy(self, bucket: str, doc: dict) -> None:
+        if doc["Statement"]:
+            await self.call("s3", "put_bucket_policy", Bucket=bucket,
+                            Policy=json.dumps(doc, separators=(",", ":")))
+        else:  # S3 refuses an empty policy
+            await self.call("s3", "delete_bucket_policy", Bucket=bucket)
+
+    async def grant_bucket_owner(self, bucket: str, user_arn: str) -> dict:
+        """Give `user_arn` (the owner's IAM user) access to `bucket` through the bucket
+        policy statement `bucketeer-owner`. Other statements are kept as they are; only
+        `bucketeer-*` Sids are Bucketeer's. Read-modify-write (no conditional write in S3)."""
+        if not bucket.startswith(self.bucket_prefix):
+            raise ValueError(f"{bucket} is not a Bucketeer bucket")
+        doc = await self._bucket_policy(bucket)
+        doc["Statement"] = [s for s in doc["Statement"] if s.get("Sid") != OWNER_SID]
+        doc["Statement"].append(self.owner_statement(bucket, user_arn))
+        doc.setdefault("Version", "2012-10-17")
+        await self._write_bucket_policy(bucket, doc)
+        return doc
+
+    async def revoke_bucket_owner(self, bucket: str) -> dict:
+        """Remove the `bucketeer-owner` statement (the policy goes when it was the last)."""
+        if not bucket.startswith(self.bucket_prefix):
+            raise ValueError(f"{bucket} is not a Bucketeer bucket")
+        doc = await self._bucket_policy(bucket)
+        kept = [s for s in doc["Statement"] if s.get("Sid") != OWNER_SID]
+        if len(kept) != len(doc["Statement"]):
+            doc["Statement"] = kept
+            await self._write_bucket_policy(bucket, doc)
+        return doc
 
     async def get_user(self, name: str) -> dict | None:
         """The IAM user, or None when it does not exist."""

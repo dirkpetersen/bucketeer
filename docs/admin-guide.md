@@ -330,6 +330,29 @@ cloud by default, with Advanced mode on or off; people with Advanced mode on get
 **Cloud | On Premises** switch next to the Advanced toggle and can choose for themselves.
 Changes are recorded in the audit log.
 
+**4. People's AWS users and keys.** Each person gets their own IAM user,
+`<CLOUD_USER_PREFIX><username>`, the first time they ask for a cloud key (or tick the cloud
+option of the setup command). Bucketeer creates it under the path `/bucketeer/` with the
+permissions boundary `BucketeerUserBoundary` and the tag `bucketeer-owner=<username>`.
+
+- **Existing users with that name are never taken over.** If an IAM user with the name
+  already exists but Bucketeer did not make it (another path, no boundary, or no owner tag
+  for that person), the person is told to ask an administrator and the audit log has
+  `cloud.user.refused`. Remove or rename the old user, then the person can try again.
+  Usernames `bucketeer-admin` and `bucketeer-backup` never get cloud.
+- **Access comes from each bucket's own policy.** The user's inline policy
+  `bucketeer-buckets` only lets them list buckets. Each cloud bucket's bucket policy has a
+  `bucketeer-owner` statement naming its owner's IAM user. Bucketeer does not use a name
+  wildcard such as `<prefix><username>-*`: usernames may contain hyphens, so `jdoe`'s
+  wildcard would also match the buckets of `jdoe-x`.
+- **Keys:** at most two per person (AWS's limit). AWS shows a secret only once, so Bucketeer
+  shows it once, right after it makes the key, and never stores it. Admins never see it.
+- **Suspension:** suspending a person (by hand or by the offboarding job) also sets their
+  cloud keys to *Inactive*; nothing is deleted. Unsuspending, or the person's next login
+  after an offboarding suspension, makes exactly those keys active again. If AWS can't be
+  reached, the suspension still happens on premises and the failure is shown (502 on the
+  Users tab, `partial` in the offboarding report); the next enforce run finishes the keys.
+
 !!! note "Profile names changed"
     The on-premises profile on users' computers is now `s3-onprem` (`AWS_PROFILE_NAME`; it
     was `bucketeer`) and cloud keys use `s3-cloud` (`CLOUD_PROFILE_NAME`). Existing `[bucketeer]` sections on

@@ -307,10 +307,16 @@ the item lands.
   "Default location" admin setting, per-user Cloud / On Premises switch left of the
   Advanced toggle, profile names `s3-onprem` / `CLOUD_PROFILE_NAME=s3-cloud`. Tests on
   moto (IAM, S3, CloudWatch).
-- [ ] P6-9 Cloud users and keys (PLAN 4): per-person IAM user `<CLOUD_USER_PREFIX>
-  <username>` under `/bucketeer/` with the boundary, inline policy for own buckets, keys
-  (max 5, rotate, reveal), setup script and snippets with `[s3-cloud]`; existing users
-  made outside Bucketeer are refused (decision 17); offboarding deactivates cloud keys.
+- [x] P6-9 Cloud users and keys (PLAN 4): per-person IAM user `<CLOUD_USER_PREFIX>
+  <username>` under `/bucketeer/` with the boundary, inline policy (list only; bucket access
+  through each bucket's `bucketeer-owner` policy statement, no name wildcard), keys (max 2,
+  AWS's limit; rotate; secret shown once, no reveal), setup script and snippets with
+  `[s3-cloud]`; existing users made outside Bucketeer are refused (decision 17); offboarding
+  and admin suspension deactivate cloud keys.
+  - P6-10 must call `CloudAdmin.grant_bucket_owner` on create and `revoke_bucket_owner` on
+    delete (with `cloud_users.ensure_account` first).
+  - (needs AWS) Check that a same-account bucket policy naming the IAM user grants access
+    with the boundary in place, and how long a new key takes to work.
 - [ ] P6-10 Cloud buckets (PLAN 4): `<CLOUD_BUCKET_PREFIX><username>-<name>`, availability
   check with suggestions, storage class Intelligent-Tiering or Deep Archive via day-0
   lifecycle, Block Public Access, SSE-S3, versioning, tags; list and delete; daily

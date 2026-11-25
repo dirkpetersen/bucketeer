@@ -231,3 +231,37 @@ select.input { appearance: auto; }
   font-size: var(--fs-xs);
 }
 .demo-banner strong { color: var(--accent-text); font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; margin-right: var(--sp-1); }
+
+/* Set up this computer: the optional Cloud (AWS) profile */
+.sp-cloud { display: flex; align-items: flex-start; gap: var(--sp-2); }
+.sp-cloud[hidden] { display: none; }
+.sp-cloud input { margin-top: 0.2rem; accent-color: var(--accent); }
+.sp-cloud label { display: grid; gap: var(--sp-1); color: var(--text); font-size: var(--fs-sm); }
+.sp-cloud b { font-weight: 600; }
+
+/* Cloud (AWS) keys (views/cloud-keys.js) */
+.ck { display: grid; gap: var(--sp-4); padding: var(--sp-5); border: 1px solid var(--border);
+  border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--sh-1); }
+.ck[hidden] { display: none; }
+.ck > * { min-width: 0; }
+.ck-head { display: flex; align-items: flex-start; gap: var(--sp-3); }
+.ck-head .acct-sub { margin: var(--sp-1) 0 0; }
+.ck-badge { flex: none; display: grid; place-items: center; width: 2.5rem; height: 2.5rem;
+  border-radius: var(--r-md); background: var(--accent-soft); color: var(--accent-text); }
+.ck-keys { display: grid; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.ck-key { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--surface-2); }
+.ck-key-id { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.ck-key-id code { font-family: var(--font-mono); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.ck-key .btn { margin-top: 0; }
+.ck-once { display: grid; gap: var(--sp-3); padding: var(--sp-4); border-radius: var(--r-md);
+  border: 1px solid var(--accent-ring); background: var(--accent-soft);
+  animation: ck-in var(--dur) var(--ease-out); }
+.ck-once-head { display: flex; align-items: flex-start; gap: var(--sp-2); margin: 0; color: var(--text);
+  font-size: var(--fs-sm); line-height: var(--lh-body); }
+.ck-once-head > svg { flex: none; color: var(--accent-text); margin-top: 0.15rem; }
+.ck-once-head b { font-weight: 600; }
+.ck-secret { background: var(--surface); }
+@keyframes ck-in { from { opacity: 0; transform: translateY(-0.25rem); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .ck-once { animation: none; } }

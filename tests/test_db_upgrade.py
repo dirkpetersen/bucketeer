@@ -45,6 +45,11 @@ SAMPLES: list[tuple[int, str, dict]] = [
     (16, "quota_changes", {"id": 6, "ts": T, "person": "alice", "uid": "alice",
                            "bucket": "alice-data", "location": "onprem", "old_tib": 1,
                            "new_tib": 5, "increase": 4, "counted": 1, "actor": "alice"}),
+    (17, "cloud_accounts", {"ad_username": "alice", "iam_user": "s3-alice",
+                            "source": "created", "created_at": T}),
+    (17, "cloud_key_suspensions", {"access_key": "AKIAEXAMPLE0000000002",
+                                   "iam_user": "s3-alice", "ad_username": "alice",
+                                   "suspended_by": "offboarding", "suspended_at": T}),
 ]
 
 # Values a later migration fills in for rows that existed before it:
@@ -57,6 +62,16 @@ BACKFILLS: list[tuple[int, str, dict, dict]] = [
     (14, "user_profiles", {"ad_username": "alice"}, {"location": None}),
     (15, "buckets", {"name": "alice-data"}, {"creation_known": 1}),
 ]
+# (setup_tokens.cloud, v17, defaults to 0; its sample row exists only from v11 on, so the
+# backfill is checked in test_setup_token_cloud_backfill)
+
+
+def test_setup_token_cloud_backfill(tmp_path, monkeypatch):
+    p = tmp_path / DB_FILENAME
+    build(p, 16, monkeypatch)
+    d = Database(p)
+    assert match(d._conn, "setup_tokens", {"id": 5, "cloud": 0})
+    d.close()
 
 
 def build(path, version, monkeypatch):
