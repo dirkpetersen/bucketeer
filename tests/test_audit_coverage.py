@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from bucketeer import backup, bucket_delete, rebuild
+from bucketeer import backup, bucket_delete, bucket_quota, rebuild
 from bucketeer.bucket_keys import cleanup_pending
 
 from .conftest import REQUIRED
@@ -59,6 +59,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "PUT /api/buckets/{name}/tags": ("bucket.tags",),
     "POST /api/buckets/{name}/multipart/abort": ("bucket.multipart_abort",),
     "PUT /api/buckets/{name}/budget": ("bucket.budget",),
+    "PUT /api/buckets/{name}/quota": ("bucket.quota",),
     "PUT /api/buckets/{name}/object-lock": ("bucket.object_lock",),
     "PUT /api/buckets/{name}/objects/retention": ("object.retention",),
     "PUT /api/buckets/{name}/objects/legal-hold": ("object.legal_hold",),
@@ -93,8 +94,9 @@ ROUTES: dict[str, tuple[str, ...]] = {
     f"POST {S}/budget-number/test": (),
     f"PUT {S}/placement": ("admin.settings.placement",),
     f"PUT {S}/location": ("admin.settings.location",),
-    f"PUT {S}/default-quota": ("admin.settings.default_quota",),
-    f"DELETE {S}/default-quota": ("admin.settings.default_quota",),
+    f"PUT {S}/bucket-quota": ("admin.settings.bucket_quota",),
+    f"PUT {S}/default-quota": ("admin.settings.bucket_quota",),
+    f"DELETE {S}/default-quota": ("admin.settings.bucket_quota",),
     f"PUT {S}/uid-mappings/{{ad_username}}": ("admin.settings.uid_mapping.set",),
     f"DELETE {S}/uid-mappings/{{ad_username}}": ("admin.settings.uid_mapping.delete",),
     f"PUT {S}/notification-endpoints/{{name}}": ("admin.settings.notification_endpoint.set",),
@@ -124,6 +126,7 @@ EVENTS = {
     "offboarding.unsuspend": "login undoes the job's suspension (actor system)",
     "backup.failed": "a backup run that could not write its archive",
     "rgw.user.create": "first S3 use of a new AD user creates the RGW user",
+    "rgw.user.quota_unlimited": "one-time step: old default user quota -> unlimited (system)",
     "billing.report_failed": "no billing contact's mail server took the monthly sheet",
     "system.rebuild": "python3 app.py --rebuild-from-ceph (actor system)",
 }
@@ -345,6 +348,8 @@ def run(tmp_path_factory, moto_server):
             {"key": "team", "value": "genomics"}]}))
     r.step("PUT /api/buckets/{name}/budget", lambda: a.put(
         "/api/buckets/alice-tag/budget", headers=H, json={"budgetNumber": "WT-999"}))
+    r.step("PUT /api/buckets/{name}/quota", lambda: a.put(
+        "/api/buckets/alice-tag/quota", headers=H, json={"quotaTiB": 3}))
     # object lock: default retention, then retention and legal hold of one object
     ok(a.post("/api/buckets", headers=H, json={
         "name": "alice-olock", "budgetNumber": "WT-4", "objectLock": True}))
@@ -476,7 +481,10 @@ def run(tmp_path_factory, moto_server):
     # admin settings (naming last: it changes what bucket names are valid)
     r.step(f"PUT {S}/placement", lambda: b.put(
         f"{S}/placement", json={"default": None, "allowed": []}, headers=H))
-    r.step(f"PUT {S}/default-quota", lambda: b.put(f"{S}/default-quota", json=quota, headers=H))
+    r.step(f"PUT {S}/bucket-quota", lambda: b.put(
+        f"{S}/bucket-quota", json={"maxWeeklyQuotaIncreaseTiB": 50}, headers=H))
+    r.step(f"PUT {S}/default-quota", lambda: b.put(
+        f"{S}/default-quota", json={"quotaTiB": 2}, headers=H))
     r.step(f"DELETE {S}/default-quota", lambda: b.delete(f"{S}/default-quota", headers=H))
     r.step(f"PUT {S}/uid-mappings/{{ad_username}}", lambda: b.put(
         f"{S}/uid-mappings/erin", json={"rgwUid": "alice"}, headers=H))
@@ -517,6 +525,9 @@ def run(tmp_path_factory, moto_server):
     r.step("POST /api/admin/backup/run", lambda: ok(b.post("/api/admin/backup/run", headers=H)))
     # rebuilding rows from Ceph (command line; fill-gaps adds nothing here)
     r.step("event", lambda: asyncio.run(rebuild.rebuild_from_ceph(env.app, True)))
+    # the one-time step: a person still on the old 1 TiB user quota becomes unlimited
+    env.croit_state.users["alice"].user_quota.update(enabled=True, maxSize=2**40, maxObjects=-1)
+    r.step("event", lambda: asyncio.run(bucket_quota.unlimit_user_quotas(env.app)))
     yield r
     backup.ENV_FILE = saved_env_file
     env.db.close()

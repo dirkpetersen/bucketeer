@@ -214,7 +214,9 @@ def test_create_success_row_tag_and_own_key(env):
     r = create(env.alice, versioning=True)
     assert r.status_code == 201
     assert r.json() == {"name": "alice-new", "budgetNumber": "WT-123", "versioning": "enabled",
-                        "objectLock": False, "tagSynced": True}
+                        "objectLock": False, "tagSynced": True, "quotaTiB": 1,
+                        "quotaApplied": True, "monthlyCost": 0.0}
+    assert env.croit_state.buckets["alice-new"].quota["maxSize"] == 2**40  # default 1 TiB
     assert "alice-new" in env.moto_buckets()
     assert env.croit_state.buckets["alice-new"].owner == "alice"
     assert env.tags("alice-new") == {"bucketeer-budget": "WT-123"}
@@ -339,7 +341,8 @@ def test_create_enforces_naming_prefix_and_pattern(env):
     assert r.status_code == 422 and "format" in r.json()["detail"]
     assert create(env.alice, name="alice-new").status_code == 201
     # croit makes the bucket through its API; on rgw the user's own S3 call does
-    assert env.mutations() == ([] if on_rgw() else [("PUT", "/api/s3/buckets/alice-new")])
+    assert env.mutations() == ([] if on_rgw() else [("PUT", "/api/s3/buckets/alice-new")]) \
+        + [("PUT", "/api/s3/buckets/alice-new/quota")]  # the default bucket quota
     assert "alice-new" in env.croit_state.buckets
 
 
@@ -615,7 +618,8 @@ def test_create_adopts_own_unrecorded_bucket(env):
     row = env.db.buckets.get("alice-late")
     assert row["budget_number"] == "WT-77" and row["owner_uid"] == "alice"
     assert env.tags("alice-late") == {"bucketeer-budget": "WT-77"}
-    assert env.mutations() == []  # croit was not asked to create anything
+    # croit was not asked to create anything; only the bucket quota was set
+    assert env.mutations() == [("PUT", "/api/s3/buckets/alice-late/quota")]
     assert env.audit("bucket.create")[0]["details"]["adopted"] is True
     assert lifecycle_rules(env, "alice-late") == []  # adopted buckets: lifecycle untouched
 

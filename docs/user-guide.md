@@ -15,8 +15,8 @@ university account, connect your computer in one step, and create buckets for yo
 ## 1. Log in
 
 Open Bucketeer and log in with your **username or email address** and your normal
-password. Your S3 account is created the first time you log in, with a storage limit of
-1 TiB unless your admin set something else.
+password. Your S3 account is created the first time you log in. It has no overall storage
+limit: each bucket has its own quota (see "Create a bucket").
 
 <figure class="osu-shot" markdown>
 ![The Bucketeer login page](assets/screens/login.webp#only-light)
@@ -69,6 +69,11 @@ Click **Create bucket**. Bucket names use lowercase letters, digits and hyphens 
 Versioning is on by default: when you overwrite or delete a file, the old version is kept
 for 30 days, so you can get it back.
 
+Every bucket has a **quota** in whole TiB (at least 1; the dialog suggests your admin's
+default). It is the most the bucket can hold, and on premises it is also what you pay for:
+the dialog shows the monthly cost as you choose, for example "10 TiB x $5 = **$50 per
+month**". Old versions count toward the quota.
+
 <figure class="osu-shot" markdown>
 ![The Create bucket dialog](assets/screens/create-bucket.webp#only-light)
 ![The Create bucket dialog](assets/screens/create-bucket-dark.webp#only-dark)
@@ -86,7 +91,18 @@ Each bucket row has the tasks you need most. Rare ones are in the **More** menu.
 | A key for one bucket only (for a script or instrument) | **More, Keys** |
 | Delete old files or old versions automatically | **More, Lifecycle** |
 | Change the budget number | **More, Change budget number** |
+| Make a bucket bigger or smaller | **More, Change quota**. The monthly cost is shown as you choose. |
 | Delete a bucket | **More, Delete**. A bucket with data needs you to type its name. |
+
+### Quota and the weekly limit
+
+Each bucket row shows its quota and what it costs per month. Lowering a quota always works
+(below the data already stored, the bucket simply accepts no more writes). Raising quotas is
+limited per person: all the quota you add across your buckets in any 7 days, new buckets
+included, may not exceed a limit your admins set (100 TiB unless they changed it). Lowering
+a quota does not give that allowance back. When you reach the limit, the dialog tells you
+how much you can still add and when more frees up, for example "You can add 40 TiB more
+right now. You can add 60 TiB after Dec 1". Ask an admin if you need more at once.
 
 ## Advanced
 

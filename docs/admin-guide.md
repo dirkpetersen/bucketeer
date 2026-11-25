@@ -57,6 +57,28 @@ Bucketeer knows three products: `Tier-3-S3` (on premises), `Archive-S3` and `Clo
 short text users see. The `Tier-3-S3` price is the price used for the monthly charges.
 Defaults: 0, 1 and 18 per TiB-month.
 
+### Bucket quotas
+
+Every bucket has a quota in whole TiB (at least 1). Owners choose it when they create a
+bucket and change it later with **More, Change quota**; both dialogs show the monthly cost
+from the `Tier-3-S3` price. On the **Settings** tab, **Bucket quotas** sets:
+
+- **Default bucket quota** (1 TiB unless changed): pre-filled in the create dialog.
+- **Weekly increase limit per person** (`maxWeeklyQuotaIncreaseTiB`, 100 TiB unless
+  changed): the most quota one person may add across all their buckets in any 7 days
+  (rolling). A new bucket counts its starting quota; lowering a quota is always allowed and
+  gives nothing back. Over the limit, users see how much they can still add and when.
+
+Admins are not limited, and can set any bucket's quota on the **Buckets** tab (recorded,
+never counted against the owner). Changes are audited (`bucket.quota`,
+`admin.bucket.quota`, `admin.settings.bucket_quota`).
+
+The account-wide user quota is no longer used: new S3 accounts get an unlimited user quota,
+and once after the upgrade Bucketeer sets known people whose user quota was still the old
+default (1 TiB, or what the old "Default quota" setting said) to unlimited, audited as
+`rgw.user.quota_unlimited`. User quotas an admin had set to something else are left alone.
+Bucket keys keep their zero user quota.
+
 ### Chargeback sheet (.xlsx)
 
 Pick a month and click **Download .xlsx** for the sheet finance imports
@@ -267,7 +289,7 @@ usage readings for billing and admin settings changes** made since then are lost
 | Bucket keys | All keys scoped to one bucket; revoke them. Admins never see a secret. |
 | Audit | Who did what and when; filter and export CSV. |
 | Offboarding | Daily check against AD. Starts in report-only mode; switch to enforce when you trust it. |
-| Settings | Default location (On Premises or Cloud), bucket naming rules, budget number format, placements, default quota, uid mappings, notification endpoints. |
+| Settings | Default location (On Premises or Cloud), bucket naming rules, budget number format, placements, bucket quotas (default bucket quota and weekly limit), uid mappings, notification endpoints. |
 
 ## Cloud (AWS) { #cloud }
 

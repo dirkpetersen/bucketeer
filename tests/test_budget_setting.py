@@ -160,33 +160,23 @@ def test_pattern_change_is_not_retroactive_and_admin_buckets_flag_mismatch(env):
     assert all(b["budgetMatches"] is None for b in missing)
 
 
-# -- default quota ------------------------------------------------------------------------
+# -- default bucket quota (P6-4; the old user default quota is legacy) ---------------------
 
 
-def test_default_quota_effective_is_1_tib_when_unset(env):
-    q = env.bob.get(S).json()["defaultQuota"]
-    assert q["isSet"] is False and q["quota"] is None
-    assert q["effective"] == {"enabled": True, "maxSize": TIB, "maxObjects": None}
-    assert q["default"] == q["effective"]
-    assert ps.effective_default_quota(env.db.settings) == q["default"]
-    # a copy: callers cannot mutate the built-in
-    ps.effective_default_quota(env.db.settings)["maxSize"] = 1
+def test_default_bucket_quota_is_1_tib_when_unset(env):
+    q = env.bob.get(S).json()["bucketQuota"]
+    assert q["isSet"] is False and q["defaultQuotaTiB"] == 1
+    # the legacy user default stays readable for the one-time unlimited step
+    assert ps.effective_default_quota(env.db.settings) == {
+        "enabled": True, "maxSize": TIB, "maxObjects": None}
+    ps.effective_default_quota(env.db.settings)["maxSize"] = 1  # a copy
     assert ps.DEFAULT_QUOTA["maxSize"] == TIB
 
 
-def test_default_quota_single_source_of_truth():
+def test_new_accounts_get_the_unlimited_user_quota():
     assert not hasattr(rgw_user, "DEFAULT_QUOTA")
-    assert rgw_user.effective_default_quota is ps.effective_default_quota
-
-
-def test_explicit_unlimited_differs_from_unset(env):
-    r = env.bob.put(f"{S}/default-quota", json={"enabled": False}, headers=H).json()
-    assert r["isSet"] is True and r["effective"]["enabled"] is False
-    assert ps.effective_default_quota(env.db.settings)["enabled"] is False
-    r = env.bob.delete(f"{S}/default-quota", headers=H).json()
-    assert r["isSet"] is False and r["effective"]["maxSize"] == TIB
-    set_q = env.bob.put(f"{S}/default-quota", json={"enabled": True, "maxSize": 5}, headers=H)
-    assert set_q.json()["effective"]["maxSize"] == 5
+    assert rgw_user.UNLIMITED_USER_QUOTA is ps.UNLIMITED_USER_QUOTA
+    assert ps.UNLIMITED_USER_QUOTA["enabled"] is False
 
 
 def test_backtracking_pattern_rejected_at_save(env):

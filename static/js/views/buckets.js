@@ -9,6 +9,8 @@ import { bucketKeysDialog } from "../components/bucket-keys-dialog.js";
 import { isAdvanced, subscribe } from "../advanced.js";
 import { tagsDialog } from "../components/tags-dialog.js";
 import { budgetDialog } from "../components/budget-dialog.js";
+import { bucketQuotaDialog } from "../components/bucket-quota-dialog.js";
+import { formatMoney, formatTiB } from "../components/quota-picker.js";
 import { corsDialog } from "../components/cors-dialog.js";
 import { multipartDialog } from "../components/multipart-dialog.js";
 import { notificationsDialog } from "../components/notifications-dialog.js";
@@ -51,7 +53,20 @@ function skeleton(n = 3) {
         h("div", { class: "skel-pill" }))));
 }
 
-function usageBlock(b) {
+// "Quota 10 TiB · $50 per month" under the usage meter (on premises billing is on the quota).
+function costBlock(b, product) {
+  if (b.quotaTiB == null) {
+    return h("span", { class: "bk-cost", "data-kind": "none" }, icon("alert", "icon"), "No quota set yet");
+  }
+  const parts = [h("span", { class: "bk-cost-l", text: "Quota" }), h("b", { text: formatTiB(b.quotaTiB) })];
+  if (product && b.monthlyCost != null) {
+    parts.push(h("span", { class: "bk-sep", text: " · " }),
+      h("span", { class: "bk-cost-m", text: `${formatMoney(b.monthlyCost, product.currency)} per month` }));
+  }
+  return h("span", { class: "bk-cost", title: product ? `${product.name}: ${formatMoney(Number(product.pricePerTiBMonth) || 0, product.currency)} per TiB and month` : "" }, ...parts);
+}
+
+function usageBlock(b, product) {
   const q = b.quota;
   const capBytes = q.enabled ? q.maxSize : null;
   const capObjects = q.enabled ? q.maxObjects : null;
@@ -71,6 +86,7 @@ function usageBlock(b) {
   } else {
     out.append(h("span", { class: "bk-noquota", text: "No bucket quota" }));
   }
+  out.append(costBlock(b, product));
   return out;
 }
 
@@ -93,7 +109,7 @@ function jobBlock(job, onRetry) {
     h("button", { class: "btn btn-sm", type: "button", on: { click: () => onRetry(job) } }, icon("refresh"), "Retry"));
 }
 
-function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPolicy, onAcl, onCors, onTags, onLock, onBudget, onRules, onNotify, onUploads, busy, job, onRetry) {
+function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPolicy, onAcl, onCors, onTags, onLock, onBudget, onRules, onNotify, onUploads, busy, job, onRetry, onQuota, product) {
   const created = b.createdAt ? new Date(b.createdAt) : null;
   const meta = h("div", { class: "bk-meta" });
   if (created && !Number.isNaN(created.getTime())) {
@@ -114,6 +130,7 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPo
   const more = menuButton({
     label: "More", ariaLabel: `More actions for bucket ${b.name}`, disabled: busy, className: "bk-more",
     items: [
+      { label: "Change quota…", icon: "sliders", hint: b.quotaTiB == null ? "This bucket has no quota yet" : `Now ${formatTiB(b.quotaTiB)}; the monthly cost is shown as you choose`, onSelect: () => onQuota(b) },
       { label: "Change budget number…", icon: "edit", hint: b.budgetMissing ? "This bucket has none yet" : "The index or worktag this bucket is charged to", onSelect: () => onBudget(b) },
       { label: "Keys", icon: "key", hint: "Keys that work for this bucket only", badge: b.keyCount || null, onSelect: () => onKeys(b) },
       { label: "Lifecycle", icon: "refresh", hint: "Delete old files or unfinished uploads automatically", onSelect: () => onLifecycle(b) },
@@ -140,12 +157,13 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPo
   return h("li", { class: "bk-row", "data-busy": String(!!busy), "data-deleting": String(!!active) },
     h("span", { class: "bk-ic", "aria-hidden": "true" }, icon("bucket")),
     h("div", { class: "bk-main" }, h("b", { class: "bk-name", text: b.name }), meta, job ? jobBlock(job, onRetry) : null),
-    usageBlock(b),
+    usageBlock(b, product),
     h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, vsw, peopleBtn, more)));
 }
 
 export function bucketsCard() {
   let buckets = [];
+  let product = null; // the catalog product of these buckets (price per TiB-month)
   const deleting = new Set();
   const jobs = new Map(); // bucket name -> its delete job (not done)
   let pollTimer = null;
@@ -156,7 +174,7 @@ export function bucketsCard() {
     h("div", { class: "panel-head" },
       h("div", { class: "bk-title" }, h("h2", { id: "h-buckets", text: "Your buckets" }), count),
       createBtn),
-    h("p", { class: "panel-note", text: "Your buckets, with usage against quota and the budget number each is charged to." }),
+    h("p", { class: "panel-note", text: "Your buckets, with usage against quota, the monthly cost of each quota and the budget number each is charged to." }),
     body,
     h("p", { class: "adv-only", text: "Advanced: bucket policy, ACLs, CORS, tags, notifications, object lock, unfinished uploads and full lifecycle rules are in each bucket's More menu." }));
 
@@ -170,7 +188,7 @@ export function bucketsCard() {
         h("div", { class: "empty-acts" }, h("button", { class: "btn btn-primary", type: "button", on: { click: create } }, icon("plus"), "Create your first bucket"))));
       return;
     }
-    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, managePolicy, manageAcl, manageCors, manageTags, manageLock, manageBudget, manageRules, manageNotify, manageUploads, deleting.has(b.name) || deleting.has(`v:${b.name}`), jobs.get(b.name), retryJob))));
+    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, remove, toggleVersioning, manageKeys, manageLifecycle, manageShare, managePeople, managePolicy, manageAcl, manageCors, manageTags, manageLock, manageBudget, manageRules, manageNotify, manageUploads, deleting.has(b.name) || deleting.has(`v:${b.name}`), jobs.get(b.name), retryJob, manageQuota, product))));
   }
 
   function failed(err) {
@@ -181,7 +199,9 @@ export function bucketsCard() {
   async function load({ quiet = false } = {}) {
     if (!quiet) body.replaceChildren(skeleton());
     try {
-      buckets = (await listBuckets()).buckets;
+      const res = await listBuckets();
+      buckets = res.buckets;
+      product = res.product ?? null;
     } catch (err) {
       if (err.status !== 401) failed(err);
       return;
@@ -372,6 +392,18 @@ export function bucketsCard() {
     if (!res.saved) return;
     if (res.saved.warning) toast.show(res.saved.warning, { timeout: 9000 });
     else toast.show(res.saved.changed ? `Budget number of ${b.name} saved.` : "Nothing to change.");
+    load({ quiet: true });
+  }
+
+  async function manageQuota(b) {
+    const res = await bucketQuotaDialog({ bucket: b.name, current: b.quotaTiB });
+    if (res.error) {
+      if (res.error.status !== 401) toast.error(res.error.message);
+      return;
+    }
+    if (!res.saved) return;
+    if (res.saved.warning) toast.show(res.saved.warning, { timeout: 9000 });
+    else toast.show(res.saved.changed ? `Quota of ${b.name} is now ${formatTiB(res.saved.quotaTiB)}.` : "Nothing to change.");
     load({ quiet: true });
   }
 

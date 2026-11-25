@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
 
+from . import bucket_quota
 from .auth import SessionUser, require_admin
 from .budget import budget_matches, load_budget_rules
 from .croit import CroitClient, CroitClientError, CroitError, CroitUnavailable, get_croit
@@ -369,6 +370,11 @@ async def set_bucket_quota(bucket: str, body: QuotaBody, request: Request, admin
                      {"before": before, "after": None, "requested": args,
                       "readback_failed": True})
         raise
+    # Recorded for the history, never counted against the owner's weekly limit.
+    await bucket_quota.record(
+        request.app, username=None, uid=str(stats.get("owner") or ""), full=bucket,
+        old=bucket_quota.quota_tib(before), new=bucket_quota.quota_tib(after),
+        actor=admin.username, counted=False)
     tag_ok = await _sync_quota_tag(request, bucket, stats)
     details = {"before": before, "after": after, "tag_synced": tag_ok}
     await _audit(db, admin, "admin.bucket.quota", "bucket", bucket, details)

@@ -282,7 +282,7 @@ the item lands.
 - [x] P6-3 `python3 app.py --rebuild-from-ceph [--fill-gaps]` (PLAN 1, 6): rebuild
   `buckets`, `bucket_keys`, `shares` from tags, key users and policy statements; fill-gaps
   mode never overwrites; prints and audits `system.rebuild`.
-- [ ] P6-4 Product catalog and bucket quotas (PLAN 0, 2): admin catalog (name, price per
+- [x] P6-4 Product catalog and bucket quotas (PLAN 0, 2): admin catalog (name, price per
   TiB-month, advertised text per product; defaults Tier-3-S3 / Archive-S3 / Cloud-S3);
   every bucket has a whole-TiB quota (create + "Change quota…"), live monthly cost in the
   dialogs; weekly increase limit `maxWeeklyQuotaIncreaseTiB` (default 100, rolling 7

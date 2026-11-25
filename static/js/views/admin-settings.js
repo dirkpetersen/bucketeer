@@ -1,13 +1,11 @@
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
 import {
-  clearDefaultQuota, deleteEndpoint, deleteUidMapping, getSettings, saveDefaultQuota, saveEndpoint,
+  deleteEndpoint, deleteUidMapping, getSettings, saveBucketQuotaSettings, saveEndpoint,
   saveBudgetNumber, saveNaming, savePlacement, saveUidMapping, testBudgetNumber, testNaming,
 } from "../api.js";
-import { UNITS, quotaText } from "../format.js";
 import { toast } from "../components/toast.js";
 import { confirmDialog } from "../components/confirm-dialog.js";
-import { SIZE_UNITS, splitSize } from "../components/quota-dialog.js";
 import { locationCard } from "./admin-location.js";
 
 // The "Settings" tab of the administration page: runtime policy edited here
@@ -319,59 +317,50 @@ function placementSection(data, apply, reload) {
 }
 
 function quotaSection(data, apply) {
-  const q = data.defaultQuota;
-  const mode0 = !q.isSet ? "unset" : q.quota.enabled ? "limit" : "none";
-  const mode = h("select", { class: "input", id: nid("s") },
-    [["unset", `Default (${quotaText(q.default)})`], ["none", "No limit (unlimited)"], ["limit", "Limit new users to…"]].map(([v, t]) => h("option", { value: v, text: t, selected: v === mode0 })));
-  const [sizeText, sizeUnit] = splitSize(q.quota?.maxSize);
-  const size = h("input", { class: "input", type: "number", id: nid("n"), min: "0", step: "any", inputMode: "decimal", value: sizeText, placeholder: "No size limit" });
-  const unit = h("select", { class: "input", id: nid("u"), "aria-label": "Size unit" }, SIZE_UNITS.map(([u]) => h("option", { value: u, text: u, selected: u === sizeUnit })));
-  const objs = h("input", { class: "input", type: "number", id: nid("n"), min: "0", step: "1", inputMode: "numeric", value: q.quota?.maxObjects ?? "", placeholder: "No object limit" });
-  const fMode = field("Quota for new users", mode);
-  const fSize = field("Size limit", h("div", { class: "qd-pair" }, size, unit), { id: size.id, hint: "Leave empty for no size limit. 0 is a real limit: no data at all." });
-  const fObjs = field("Object limit", objs, { hint: "Leave empty for no object limit." });
-  const limits = h("div", { class: "set-grid" }, fSize.el, fObjs.el);
-  const warn = h("p", { class: "set-hint", role: "status" }, `Built-in default: new users get ${quotaText(q.default)}. Choose "No limit" to give them no quota, or set your own limit.`);
+  const q = data.bucketQuota;
+  const num = (value, max) => h("input", {
+    class: "input mono-input", type: "number", id: nid("n"), min: "1", max: String(max), step: "1",
+    inputMode: "numeric", value: String(value),
+  });
+  const def = num(q.defaultQuotaTiB, q.maxBucketTiB);
+  const weekly = num(q.maxWeeklyQuotaIncreaseTiB, q.maxWeeklyTiB);
+  const fDef = field("Default bucket quota (TiB)", def, { hint: `Pre-filled when someone creates a bucket. Every bucket has a quota of at least 1 TiB; built-in default ${q.defaults.defaultQuotaTiB} TiB.` });
+  const fWeek = field("Weekly increase limit per person (TiB)", weekly, { hint: `The most quota one person may add across all their buckets in any 7 days (new buckets count their starting quota; lowering gives nothing back). Administrators are not limited. Built-in default ${q.defaults.maxWeeklyQuotaIncreaseTiB} TiB.` });
   const ft = footer();
-  const read = () => {
-    if (mode.value === "none") return { enabled: false };
-    const sv = size.value.trim(), ov = objs.value.trim();
-    const bytes = sv === "" ? null : Math.round(Number(sv) * UNITS.find(([u]) => u === unit.value)[1]);
-    const count = ov === "" ? null : Number(ov);
-    if (bytes != null && (!Number.isFinite(bytes) || bytes < 0 || !Number.isSafeInteger(bytes))) throw new Error("Enter a valid size, or leave it empty.");
-    if (count != null && (!Number.isInteger(count) || count < 0)) throw new Error("Enter a whole number of objects, or leave it empty.");
-    if (bytes == null && count == null) throw new Error("Set a size or an object limit, or choose \"No limit\".");
-    return { enabled: true, maxSize: bytes, maxObjects: count };
+  const read = (input, max) => {
+    const v = input.value.trim();
+    const n = /^\d+$/.test(v) ? Number(v) : NaN;
+    if (!Number.isInteger(n) || n < 1 || n > max) throw new Error(`Enter a whole number from 1 to ${max}.`);
+    return n;
   };
-  const paint = () => {
-    limits.hidden = mode.value !== "limit";
-    warn.hidden = mode.value !== "unset";
-  };
-  const dirty = () => {
-    if (mode.value !== mode0) return true;
-    if (mode.value !== "limit") return false;
-    try { const n = read(); return n.maxSize !== q.quota.maxSize || n.maxObjects !== q.quota.maxObjects; } catch { return true; }
-  };
-  const changed = () => { paint(); fSize.error(""); ft.update(dirty()); };
-  for (const el of [mode, size, unit, objs]) el.addEventListener("input", changed);
-  paint();
-  const form = h("form", { novalidate: true, class: "set-form" }, fMode.el, limits, warn, ft.el);
+  const dirty = () => def.value.trim() !== String(q.defaultQuotaTiB) || weekly.value.trim() !== String(q.maxWeeklyQuotaIncreaseTiB);
+  const changed = () => { fDef.error(""); fWeek.error(""); ft.update(dirty()); };
+  for (const el of [def, weekly]) el.addEventListener("input", changed);
+  const form = h("form", { novalidate: true, class: "set-form" }, h("div", { class: "set-grid" }, fDef.el, fWeek.el),
+    h("p", { class: "set-hint" }, "The account-wide user quota is no longer used: every S3 account is unlimited and each bucket's own quota limits it. Bucket keys keep their zero quota."),
+    ft.el);
   wireForm(form, ft, async () => {
+    let body;
     try {
-      const body = mode.value === "unset" ? null : read();
-      const res = body ? await saveDefaultQuota(body) : await clearDefaultQuota();
-      toast.show(body ? "Default quota saved." : "Default quota reset to the built-in default.");
-      apply({ defaultQuota: res });
+      body = { defaultQuotaTiB: read(def, q.maxBucketTiB) };
+    } catch (err) { fDef.error(err.message); ft.update(true); return; }
+    try {
+      body.maxWeeklyQuotaIncreaseTiB = read(weekly, q.maxWeeklyTiB);
+    } catch (err) { fWeek.error(err.message); ft.update(true); return; }
+    try {
+      const res = await saveBucketQuotaSettings(body);
+      toast.show("Bucket quota settings saved.");
+      apply({ bucketQuota: res });
     } catch (err) {
-      fSize.error(err.message);
-      limits.hidden = false;
+      fDef.error(err.message);
       ft.update(true);
     }
   });
-  ft.cancel.addEventListener("click", () => apply({ defaultQuota: q }));
-  const status = !q.isSet ? chip(`${quotaText(q.default)} (default)`) : chip(q.quota.enabled ? quotaText(q.quota) : "No limit", "chip-ok");
-  return card("Default quota", status,
-    "The per-user quota Bucketeer applies when it creates an S3 user at first login. Unless you change it, that is 1 TiB with unlimited objects. \"No limit\" is a deliberate choice and differs from the default.", form);
+  ft.cancel.addEventListener("click", () => apply({ bucketQuota: q }));
+  const status = chip(`${q.defaultQuotaTiB} TiB default · ${q.maxWeeklyQuotaIncreaseTiB} TiB/week`, q.isSet ? "chip-ok" : "");
+  return card("Bucket quotas", status,
+    "Every bucket has a quota in whole TiB, chosen by its owner when it is created and changeable later; on premises it is billed on that quota. These settings pre-fill new buckets and cap how fast one person can grow.",
+    form);
 }
 
 function mappingsSection(data, apply) {
@@ -497,7 +486,7 @@ export function renderSettings() {
   let data = null;
   const slots = {};
 
-  const PATCH_SECTION = { naming: "naming", budgetNumber: "budget", placement: "placement", defaultQuota: "quota", uidMappings: "mappings", notificationEndpoints: "endpoints" };
+  const PATCH_SECTION = { naming: "naming", budgetNumber: "budget", placement: "placement", bucketQuota: "quota", uidMappings: "mappings", notificationEndpoints: "endpoints" };
   function paint(only = null) {
     const make = {
       naming: () => namingSection(data, apply),

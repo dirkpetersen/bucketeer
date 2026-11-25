@@ -3,6 +3,7 @@ import { h } from "../dom.js";
 import { icon } from "../icons.js";
 import { bucketOptions, createBucket } from "../api.js";
 import { checkBudget } from "../budget.js";
+import { quotaPicker } from "./quota-picker.js";
 
 // createBucketDialog() -> Promise<{ created: object } | null>
 // A native <dialog> form. The server is authoritative for every rule (naming, budget
@@ -42,6 +43,7 @@ export async function createBucketDialog() {
     "aria-describedby": `${id}-bh ${id}-be`, required: opts.budgetRequired,
   });
   const budgetErr = h("p", { class: "set-err", id: `${id}-be`, role: "alert", hidden: true });
+  const quota = quotaPicker({ id: `${id}-qp`, value: opts.quota?.defaultTiB, info: opts.quota, product: opts.product });
   const versioning = h("input", { type: "checkbox", id: `${id}-v`, checked: true });
   const ncDays = h("input", {
     class: "input mono-input", type: "number", id: `${id}-nd`, value: "30", min: "1", max: "36500",
@@ -85,6 +87,7 @@ export async function createBucketDialog() {
       budget,
       h("p", { class: "set-hint", id: `${id}-bh`, text: opts.budgetExample ? `Your index or worktag, for chargeback. Example: ${opts.budgetExample}` : "Your index or worktag, for chargeback." }),
       budgetErr),
+    quota.el,
     check(versioning, "Keep every version of each object", "Protects against accidental overwrites and deletes. Old versions count toward your quota."),
     ncRow,
     advancedBlock,
@@ -128,6 +131,7 @@ export async function createBucketDialog() {
     const nm = validateName();
     const bm = validateBudget();
     if (nm || bm) { show(nameErr, nm); show(budgetErr, bm); (nm ? name : budget).focus(); return; }
+    if (quota.validate()) { quota.input.focus(); return; }
     const withRule = versioning.checked || (isAdvanced() && lock.checked);
     const days = Number(ncDays.value);
     if (withRule && (!Number.isInteger(days) || days < 1 || days > 36500)) {
@@ -147,10 +151,14 @@ export async function createBucketDialog() {
         objectLock: isAdvanced() && lock.checked,
         noncurrentDays: withRule ? days : null,
         placement: isAdvanced() && placement && placement.value !== opts.defaultPlacement ? placement.value : null,
+        quotaTiB: quota.value(),
       });
       dlg.close();
     } catch (err) {
       if (err.status === 401) { dlg.close(); return; }
+      if (err.status === 409 && err.body?.remainingTiB != null) {
+        quota.update({ remainingTiB: err.body.remainingTiB, nextReleaseAt: err.body.freesUpAt ?? null });
+      }
       showError(err.message || "Could not create the bucket.");
       submit.disabled = false;
       submit.textContent = "Create bucket";

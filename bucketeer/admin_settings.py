@@ -1,10 +1,15 @@
 """Admin settings API under /api/admin/settings (CSRF via the parent /api router).
 
-Stores and validates bucket naming rules, placement defaults, the default user
-quota, AD-to-RGW uid mappings and the notification endpoint allowlist. Nothing
-here applies a setting to a feature except uid mappings and the default quota,
-which `rgw_user` reads at login; bucket create and notifications call the
-helpers in `policy_settings` later. Every change is audited with before/after
+Stores and validates bucket naming rules, placement defaults, the bucket quota settings
+(default bucket quota in TiB and the weekly increase limit, `bucket_quota.py`), AD-to-RGW
+uid mappings and the notification endpoint allowlist. Bucket create, notifications and
+`rgw_user` read them through the `load_*` helpers.
+
+Bucket quota: `PUT /settings/bucket-quota {defaultQuotaTiB?, maxWeeklyQuotaIncreaseTiB?}`
+(partial). The old `PUT|DELETE /settings/default-quota` routes stay for compatibility: PUT
+takes `{quotaTiB}` or the old `{enabled: true, maxSize (bytes)}` (rounded up to whole TiB)
+and sets the default bucket quota; DELETE resets it to 1 TiB. All audit
+`admin.settings.bucket_quota` (target `bucket_quota`). Every change is audited with before/after
 values; no response or audit entry carries a secret (endpoints have no
 credentials in v1).
 """
@@ -15,6 +20,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from . import bucket_quota
 from .admin import Admin, Croit, Db, Rgw, _audit, croit_http_error
 from .auth import require_admin
 from .budget import (
@@ -27,18 +33,15 @@ from .budget import (
 )
 from .croit import CroitClientError
 from .policy_settings import (
-    DEFAULT_QUOTA,
     ENDPOINTS_KEY,
     MAX_PATTERN_LEN,
     NAMING_KEY,
     PLACEMENT_HINT,
     PLACEMENT_KEY,
-    QUOTA_KEY,
     SettingsError,
     check_dns_name,
     check_endpoint_capacity,
     check_mapping_unique,
-    load_default_quota,
     load_endpoints,
     load_naming,
     load_placement,
@@ -46,9 +49,7 @@ from .policy_settings import (
     normalize_naming,
     normalize_placement,
     normalize_placement_manual,
-    normalize_quota,
     placement_names,
-    quota_or_default,
     rgw_placement_ids,
     suggest_prefix,
     validate_ad_username,
@@ -128,11 +129,11 @@ async def _known_uids(croit) -> set[str] | None:
         return None  # a warning, never an error
 
 
-def _quota_view(stored: dict | None) -> dict[str, Any]:
-    """`quota` is the admin's stored value (null = not set); `effective` is what
-    new users get (the stored value, else the 1 TiB built-in `default`)."""
-    return {"isSet": stored is not None, "quota": stored,
-            "effective": quota_or_default(stored), "default": dict(DEFAULT_QUOTA)}
+def _bucket_quota_view(db) -> dict[str, Any]:
+    """Sync. The bucket quota settings, whether the admin saved any, and the defaults."""
+    return {**bucket_quota.load_settings(db.settings), "isSet": bucket_quota.is_set(db.settings),
+            "defaults": dict(bucket_quota.DEFAULTS), "maxBucketTiB": bucket_quota.MAX_BUCKET_TIB,
+            "maxWeeklyTiB": bucket_quota.MAX_WEEKLY_TIB}
 
 
 # -- reads ---------------------------------------------------------------------------
@@ -150,13 +151,12 @@ async def get_settings(_a: Admin, croit: Croit, db: Db):
         except CroitClientError as e:
             perr = croit_http_error(e).detail
     known = await _known_uids(croit)
-    quota = await db.run(load_default_quota, s)
     mappings = await db.run(db.uid_mappings.list)
     return {
         "naming": await db.run(load_naming, s),
         "placement": (_manual_placement_view(stored_placement) if _manual(croit)
                       else _placement_view(stored_placement, rows, croit_default, perr)),
-        "defaultQuota": _quota_view(quota),
+        "bucketQuota": await db.run(_bucket_quota_view, db),
         "budgetNumber": await db.run(load_budget_rules, s),
         "uidMappings": [
             _mapping_view(m, None if known is None else m["rgw_uid"] in known) for m in mappings
@@ -263,31 +263,43 @@ async def set_placement(body: Body_, admin: Admin, croit: Croit, db: Db):
     return _placement_view(new, rows, croit_default, None)
 
 
-# -- default quota -------------------------------------------------------------------
+# -- bucket quota (default bucket quota, weekly limit) --------------------------------
+
+
+async def _save_bucket_quota(db, admin, change: dict[str, Any]) -> dict[str, Any]:
+    before = await db.run(bucket_quota.load_settings, db.settings)
+    try:
+        after = bucket_quota.normalize_settings(change, before)
+    except SettingsError as e:
+        raise _bad(e) from e
+    if after != before or not await db.run(bucket_quota.is_set, db.settings):
+        await db.run(db.settings.set, bucket_quota.KEY, after, admin.username)
+    if after != before:
+        await _audit(db, admin, "admin.settings.bucket_quota", "setting", bucket_quota.KEY,
+                     {"before": before, "after": after})
+    return await db.run(_bucket_quota_view, db)
+
+
+@router.put("/bucket-quota")
+async def set_bucket_quota_settings(body: Body_, admin: Admin, db: Db):
+    return await _save_bucket_quota(db, admin, body)
 
 
 @router.put("/default-quota")
 async def set_default_quota(body: Body_, admin: Admin, db: Db):
+    """Compatibility: the old default-quota route now sets the default BUCKET quota."""
     try:
-        new = normalize_quota(body)
+        tib = bucket_quota.legacy_default_tib(body)
     except SettingsError as e:
         raise _bad(e) from e
-    before = await db.run(load_default_quota, db.settings)
-    await db.run(db.settings.set, QUOTA_KEY, new, admin.username)
-    await _audit(db, admin, "admin.settings.default_quota", "setting", QUOTA_KEY,
-                 {"before": before, "after": new})
-    return _quota_view(new)
+    return await _save_bucket_quota(db, admin, {"defaultQuotaTiB": tib})
 
 
 @router.delete("/default-quota")
 async def unset_default_quota(admin: Admin, db: Db):
-    before = await db.run(load_default_quota, db.settings)
-    if before is None:
-        return _quota_view(None)
-    await db.run(db.settings.delete, QUOTA_KEY)
-    await _audit(db, admin, "admin.settings.default_quota", "setting", QUOTA_KEY,
-                 {"before": before, "after": None})
-    return _quota_view(None)
+    """Compatibility: reset the default bucket quota to 1 TiB."""
+    return await _save_bucket_quota(
+        db, admin, {"defaultQuotaTiB": bucket_quota.DEFAULTS["defaultQuotaTiB"]})
 
 
 # -- uid mappings --------------------------------------------------------------------

@@ -156,7 +156,7 @@ export const saveOffboardingSettings = (body) => api("/admin/offboarding/setting
 export const suspendUser = (uid) => api(`/admin/users/${enc(uid)}/suspend`, { method: "POST" });
 export const unsuspendUser = (uid) => api(`/admin/users/${enc(uid)}/unsuspend`, { method: "POST" });
 
-// Admin settings (naming rules, placement, default quota, uid mappings, notification endpoints).
+// Admin settings (naming rules, placement, bucket quotas, uid mappings, notification endpoints).
 export const getSettings = () => api("/admin/settings");
 // Global "Default location" (onprem|cloud): the GET runs a fresh AWS connection check.
 export const getLocationSetting = () => api("/admin/settings/location");
@@ -167,8 +167,8 @@ export const testNaming = (body) => api("/admin/settings/naming/test", { method:
 export const saveBudgetNumber = (rules) => api("/admin/settings/budget-number", { method: "PUT", json: rules });
 export const testBudgetNumber = (body) => api("/admin/settings/budget-number/test", { method: "POST", json: body });
 export const savePlacement = (body) => api("/admin/settings/placement", { method: "PUT", json: body });
-export const saveDefaultQuota = (quota) => api("/admin/settings/default-quota", { method: "PUT", json: quota });
-export const clearDefaultQuota = () => api("/admin/settings/default-quota", { method: "DELETE" });
+// {defaultQuotaTiB?, maxWeeklyQuotaIncreaseTiB?} (partial) -> the bucketQuota view of getSettings.
+export const saveBucketQuotaSettings = (body) => api("/admin/settings/bucket-quota", { method: "PUT", json: body });
 export const saveUidMapping = (ad, rgwUid) =>
   api(`/admin/settings/uid-mappings/${enc(ad)}`, { method: "PUT", json: { rgwUid } });
 export const deleteUidMapping = (ad) => api(`/admin/settings/uid-mappings/${enc(ad)}`, { method: "DELETE" });
@@ -227,6 +227,10 @@ export const putBucketTags = (name, body) =>
 // {budgetNumber: string|null} -> {name, budgetNumber, changed, tagSynced, warning?}
 export const setBucketBudget = (name, budgetNumber) =>
   api(`/buckets/${encodeURIComponent(name)}/budget`, { method: "PUT", json: { budgetNumber } });
+// {quotaTiB} -> {name, quotaTiB, changed, monthlyCost, tagSynced, warning?}; 409 over the weekly
+// limit carries {remainingTiB, freesUpAt} on ApiError.body.
+export const setOwnBucketQuota = (name, quotaTiB) =>
+  api(`/buckets/${encodeURIComponent(name)}/quota`, { method: "PUT", json: { quotaTiB } });
 // Bucket notifications (Advanced). get -> {notifications: [{id, endpoint|null, managed, kind, topic,
 // events, prefix|null, suffix|null}], endpoints: [{name, type}], etag}. put sends {notifications, etag}:
 // managed {id, endpoint, events, prefix?, suffix?}, external kept as {id, external: true}. A 422 body has

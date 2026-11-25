@@ -8,15 +8,24 @@ or capitals never matches anything, so a user cannot address another tenant's bu
 
 - `GET /api/buckets` -> `{buckets: [{name, tenant, createdAt|null, objects, bytes,
   quota: {enabled, maxSize, maxObjects}, versioning: off|enabled|suspended|null,
-  budgetNumber|null, budgetMissing, tagPending, keyCount}]}` (`keyCount`: live bucket keys).
+  budgetNumber|null, budgetMissing, tagPending, keyCount, quotaTiB|null, monthlyCost|null}],
+  product: {id, name, pricePerTiBMonth, currency, advertised, billedOn}}` (`keyCount`: live
+  bucket keys; `quotaTiB` the bucket quota in whole TiB rounded up, null without a size
+  limit; `monthlyCost` = quotaTiB x the product's price, `catalog.py`).
   Only buckets croit lists for the
   user's uid. Read-only; it never changes state (see `reconcile`).
 - `GET /api/buckets/options` -> `{naming: {prefix, hasPattern, hint}, placements: [...]
   (empty unless the user may choose), defaultPlacement, defaultBudgetNumber,
-  budgetRequired, budgetExample}`.
+  budgetRequired, budgetExample, product, quota: {defaultTiB, maxTiB, weeklyLimitTiB,
+  remainingTiB, nextReleaseAt, exempt}}` (limit fields null for administrators).
 - `POST /api/buckets {name, budgetNumber, versioning (default true, Q7), objectLock,
-  noncurrentDays (default 30, null = no rule), placement}` -> 201
-  `{name, budgetNumber, versioning, objectLock, tagSynced, warning?}`. Name: the admin
+  noncurrentDays (default 30, null = no rule), placement, quotaTiB (default: the admin's
+  default bucket quota)}` -> 201 `{name, budgetNumber, versioning, objectLock, tagSynced,
+  quotaTiB, quotaApplied, monthlyCost, warning?}`. The quota (1..100000 whole TiB) counts
+  against the weekly increase limit (`bucket_quota.py`; checked before anything is created,
+  409 `{detail, remainingTiB, freesUpAt}`; administrators exempt) and is set through the
+  admin client right after the create; if that fails the bucket is kept, `quotaApplied` is
+  false and a `warning` says to set it with "Change quota". Name: the admin
   naming rules (`policy_settings.validate_bucket_name`); a versioned new bucket gets the
   `bucketeer-expire-noncurrent` lifecycle rule (user's key; failure keeps the bucket and
   adds a `warning`; adopted buckets are not touched); budget number: required unless
@@ -28,6 +37,10 @@ or capitals never matches anything, so a user cannot address another tenant's bu
   `tag_synced = 0`, and the answer carries a `warning`; `POST /api/buckets/reconcile`
   (called by the UI when the list shows `tagPending`) retries those. Name taken anywhere
   in the cluster -> 409.
+- `PUT /api/buckets/{name}/quota {quotaTiB}` -> `{name, quotaTiB, changed, monthlyCost,
+  tagSynced, warning?}`: own bucket (croit-verified, 404 otherwise); an increase counts
+  against the weekly limit (409 as above), a decrease always works; recorded in
+  `quota_changes`, the `bucketeer-quota` tag updated, audit `bucket.quota` (oldTiB, newTiB).
 - `POST /api/buckets/reconcile` -> `{synced: [...], pending: [...]}`: writes the managed
   tags for the user's rows with `tag_synced = 0`. A POST because it changes state.
 - `DELETE /api/buckets/{name}` `{confirmName?}`: ownership is verified in croit's list for
@@ -61,7 +74,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
-from . import bucket_delete, bucket_facts, s3docs
+from . import bucket_delete, bucket_facts, bucket_quota, catalog, s3docs
 from .admin import croit_http_error
 from .auth import SessionUser, require_user
 from .bucket_ops import S3OpError, http_error, ops_for
@@ -107,6 +120,12 @@ class CreateBody(BaseModel):
     objectLock: bool = False
     noncurrentDays: StrictInt | None = 30  # null: no cleanup rule
     placement: str | None = Field(default=None, max_length=256)
+    quotaTiB: StrictInt | None = None  # null: the admin's default bucket quota
+
+
+class QuotaBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    quotaTiB: StrictInt
 
 
 class BudgetBody(BaseModel):
@@ -270,6 +289,16 @@ async def _placement_view(request: Request) -> dict[str, Any]:
                              placement_names((resp or {}).get("placements") or []))
 
 
+async def _product(request: Request) -> dict:
+    """The catalog product of the user's buckets (on premises: Tier-3-S3)."""
+    db = request.app.state.db
+    return catalog.product_for(await db.run(catalog.load_catalog, db), "onprem")
+
+
+def _limit_response(e: bucket_quota.LimitExceeded) -> JSONResponse:
+    return JSONResponse(status_code=409, content=e.body())
+
+
 # -- list / options --------------------------------------------------------------
 
 
@@ -277,6 +306,7 @@ async def _placement_view(request: Request) -> dict[str, Any]:
 async def list_buckets(request: Request, acct: Account):
     croit, db = request.app.state.croit, request.app.state.db
     rows = await _own_buckets(croit, acct.uid)
+    product = await _product(request)
     meta = {m["name"]: m for m in await db.run(db.buckets.list, acct.uid)}
     key_counts: dict[str, int] = {}
     for k in await db.run(db.bucket_keys.list, acct.username):
@@ -314,6 +344,7 @@ async def list_buckets(request: Request, acct: Account):
         m = meta.get(full)
         objects, size = _usage(b)
         budget = (m or {}).get("budget_number")
+        tib = bucket_quota.quota_tib(b.get("bucket_quota"))
         out.append({
             "name": _short(full),
             "tenant": b.get("tenant") or "",
@@ -328,8 +359,10 @@ async def list_buckets(request: Request, acct: Account):
             "budgetMissing": budget is None,
             "keyCount": key_counts.get(full, 0),
             "tagPending": bool(m and not m.get("tag_synced", 1)),
+            "quotaTiB": tib,
+            "monthlyCost": catalog.monthly_cost(product, tib),
         })
-    return {"buckets": out}
+    return {"buckets": out, "product": catalog.public(product)}
 
 
 @router.get("/options")
@@ -353,6 +386,8 @@ async def options(request: Request, acct: Account, user: User):
         "defaultBudgetNumber": profile["default_budget_number"],
         "budgetRequired": not user.is_admin,
         "budgetExample": example,
+        "product": catalog.public(await _product(request)),
+        "quota": await bucket_quota.summary(request.app, user.username, exempt=user.is_admin),
     }
 
 
@@ -385,6 +420,14 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
         raise HTTPException(422, "That placement is not available to you.")
     placement = placement or place["default"]
 
+    if body.quotaTiB is None:
+        quota_tib = (await db.run(bucket_quota.load_settings, db.settings))["defaultQuotaTiB"]
+    else:
+        try:
+            quota_tib = bucket_quota.check_tib(body.quotaTiB)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
     if body.noncurrentDays is not None:
         try:
             s3docs.expire_noncurrent_rule(body.noncurrentDays)
@@ -409,7 +452,8 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
     adopted = False
     ops = ops_for(croit, request.app.state.settings)
     versioned = body.versioning or body.objectLock
-    async with _user_lock(request, acct.uid):
+    old_tib = None
+    async with _user_lock(request, acct.uid):  # also serialises the weekly quota limit
         created = None
         try:
             found = await existing()
@@ -420,7 +464,13 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
                         raise HTTPException(409, "You already own this bucket.")
                     raise HTTPException(409, taken)
                 adopted = True
-            else:
+                old_tib = bucket_quota.quota_tib(found.get("bucket_quota"))
+            try:
+                await bucket_quota.guard(request.app, user.username,
+                                         quota_tib - (old_tib or 0), exempt=user.is_admin)
+            except bucket_quota.LimitExceeded as e:
+                return _limit_response(e)
+            if found is None:
                 try:
                     created = await ops.create(
                         request, acct, name, versioned=body.versioning or body.objectLock,
@@ -448,6 +498,18 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
             raise _api_error(e) from None
 
         croit.invalidate_lists()  # the bucket now exists (S3-side creates bypass Admin Ops)
+        quota_ok = True
+        if old_tib != quota_tib:
+            try:
+                await bucket_quota.apply(croit, full, quota_tib)
+            except CroitClientError as e:
+                log.warning("quota of new bucket %s not set: %s", full, type(e).__name__)
+                quota_ok = False
+            croit.invalidate_lists()
+            if quota_ok:
+                await bucket_quota.record(request.app, username=user.username, uid=acct.uid,
+                                          full=full, old=old_tib, new=quota_tib,
+                                          actor=user.username, counted=not user.is_admin)
         recorded = True
         try:
             await db.run(db.buckets.delete, full)  # a leftover row of an earlier bucket
@@ -479,6 +541,7 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
                          versioningApplied=None if (created is None or adopted)
                          else created.applied,
                          placement=None if adopted else placement,
+                         quotaTiB=quota_tib, quotaApplied=quota_ok,
                          recorded=recorded, adopted=adopted)
         except Exception:
             log.exception("could not audit the creation of %s", full)
@@ -486,6 +549,9 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
         "name": name, "budgetNumber": budget,
         "versioning": "enabled" if versioned else "off",
         "objectLock": body.objectLock, "tagSynced": tag_ok,
+        "quotaTiB": quota_tib if quota_ok else old_tib, "quotaApplied": quota_ok,
+        "monthlyCost": catalog.monthly_cost(await _product(request),
+                                            quota_tib if quota_ok else old_tib),
     }
     if adopted:
         out["adopted"] = True
@@ -504,6 +570,9 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
                         "as a bucket tag yet. It will be retried automatically.")
     if created is not None and created.warning:
         warnings.append(created.warning)
+    if not quota_ok:
+        warnings.append("The bucket was created, but its quota could not be set yet. "
+                        "Set it with \"Change quota\" in the bucket's More menu.")
     if rule_ok is False:
         warnings.append("Versioning is on but the old-version cleanup rule could not be set. "
                         "Set it under Lifecycle.")
@@ -585,6 +654,61 @@ async def set_budget(name: str, body: BudgetBody, request: Request, acct: Accoun
     if not ok:
         out["warning"] = ("The budget number was saved, but the bucket tag could not be updated "
                           "yet. It will be retried automatically.")
+    return out
+
+
+# -- bucket quota ------------------------------------------------------------------
+
+
+@router.put("/{name}/quota")
+async def set_quota(name: str, body: QuotaBody, request: Request, acct: Account, user: User):
+    """Change the quota of an own bucket (whole TiB). Increases count against the weekly
+    limit (administrators exempt); decreases always work. Audit `bucket.quota`."""
+    croit: CroitClient = request.app.state.croit
+    short = _own_name(name)
+    full = _full(acct.uid, short)
+    try:
+        new = bucket_quota.check_tib(body.quotaTiB)
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
+    product = await _product(request)
+    async with _user_lock(request, acct.uid):  # one check-and-record at a time per owner
+        bucket = next((b for b in await _own_buckets(croit, acct.uid)
+                       if b.get("bucket") == full), None)
+        if bucket is None:
+            raise HTTPException(404, "Bucket not found.")
+        old = bucket_quota.quota_tib(bucket.get("bucket_quota"))
+        q = bucket.get("bucket_quota") or {}
+        exact = q.get("enabled") and q.get("maxSize") == new * bucket_quota.TIB
+        if old == new and exact:
+            return {"name": short, "quotaTiB": new, "changed": False,
+                    "monthlyCost": catalog.monthly_cost(product, new), "tagSynced": True}
+        try:
+            await bucket_quota.guard(request.app, user.username, new - (old or 0),
+                                     exempt=user.is_admin)
+        except bucket_quota.LimitExceeded as e:
+            return _limit_response(e)
+        try:
+            await bucket_quota.apply(croit, full, new)
+        except CroitClientError as e:
+            croit.invalidate_lists()
+            raise _api_error(e) from None
+        croit.invalidate_lists()
+        await bucket_quota.record(request.app, username=user.username, uid=acct.uid, full=full,
+                                  old=old, new=new, actor=user.username,
+                                  counted=not user.is_admin)
+        ok = await _try_tag(request, acct.uid, full, user)
+        try:
+            await request.app.state.db.run(request.app.state.db.buckets.set_tag_synced, full, ok)
+        except Exception:
+            log.exception("could not record the tag state of %s", full)
+        await _audit(request, user.username, "bucket.quota", full, uid=acct.uid,
+                     oldTiB=old, newTiB=new, tagSynced=ok)
+    out: dict[str, Any] = {"name": short, "quotaTiB": new, "changed": True,
+                           "monthlyCost": catalog.monthly_cost(product, new), "tagSynced": ok}
+    if not ok:
+        out["warning"] = ("The quota was changed, but the bucket's quota tag could not be "
+                          "updated yet. It will be retried automatically.")
     return out
 
 

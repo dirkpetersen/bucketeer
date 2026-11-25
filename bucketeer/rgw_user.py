@@ -13,7 +13,7 @@ session (never from request input, never from an email address). Order:
    or a bucket key's RGW user is never given out by this rule (`uid_taken`,
    audit): only the mapping reaches it.
 3. Otherwise the user is created in croit with only the uid and the AD display name (never an
-   email, Q5) and gets the default user quota: the admin Settings value, else 1 TiB (Q4). Audited.
+   email, Q5) and gets an unlimited user quota (P6-4: bucket quotas replace it). Audited.
 
 Statuses (`RgwAccount.status`): `ready`, `suspended` (resolved; callers must
 refuse to act), `creation_failed` (`reason`: `croit_rejected` (croit refused
@@ -41,7 +41,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from .auth import SessionUser, require_user
 from .croit import CroitClient, CroitClientError, CroitError, CroitUnavailable, is_backup_uid
 from .db import Database
-from .policy_settings import effective_default_quota, quota_croit_args
+from .policy_settings import UNLIMITED_USER_QUOTA, quota_croit_args
 
 log = logging.getLogger("bucketeer.rgw_user")
 
@@ -424,8 +424,7 @@ class RgwResolver:
         return bool(row) and json.loads(row["details"]).get("quota_applied") is False
 
     async def _apply_default_quota(self, username: str, uid: str, *, user_created: bool) -> None:
-        db = self._db()
-        quota = await db.run(effective_default_quota, db.settings)
+        quota = dict(UNLIMITED_USER_QUOTA)  # bucket quotas limit growth (P6-4)
         try:
             await self.croit.set_user_quota(uid, **quota_croit_args(quota))
         except CroitClientError:
