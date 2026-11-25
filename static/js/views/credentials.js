@@ -215,8 +215,8 @@ function accountStatus() {
           h("p", { class: "acct-line" }, "Signed in to S3 as ", h("code", { class: "acct-uid", text: a.uid }),
             h("span", { class: "acct-sub", text: !cloud && a.quota?.enabled ? `Storage limit: ${quotaText(a.quota)}` : "Storage limit: set per bucket (its quota)" })),
           setupPanel(d),
-          !cloud && advancedKeys(d, select, reload),
-          !cloud && subusersSection(d),
+          // `false` would print as text here, so the on-premises parts are spread in or left out
+          ...(cloud ? [] : [advancedKeys(d, select, reload), subusersSection(d)]),
           cloudSection());
       };
       // Re-read the key list after a change; the old panel (and any revealed secret) is dropped.
@@ -246,8 +246,21 @@ function accountStatus() {
 
 export function credentialsCard() {
   const { chip, body } = accountStatus();
+  const note = h("p", { class: "panel-note" });
+  const paintNote = () => {
+    note.textContent = getLocation() === "cloud"
+      ? "Connect this computer to your Cloud (AWS) storage."
+      : "Connect this computer to your storage. Advanced shows your access keys and AWS config files.";
+  };
+  paintNote();
+  let seenNote = false;
+  const unsubNote = onLocation(() => {
+    if (note.isConnected) seenNote = true;
+    else if (seenNote) return unsubNote(); // the card was replaced
+    paintNote();
+  });
   return h("section", { class: "card panel panel-wide", "aria-labelledby": "h-Credentials" },
     h("div", { class: "panel-head" }, h("h2", { id: "h-Credentials", text: "Credentials" }), chip),
-    h("p", { class: "panel-note", text: "Connect this computer to your storage. Advanced shows your access keys and AWS config files." }),
+    note,
     body);
 }
