@@ -33,8 +33,9 @@
 #                   [--region us-west-2] [--create-key] [--activate-tags]
 #                   [--billing-export] [--billing-bucket NAME] [--print]
 #
-#   --admin-user     name of Bucketeer's own IAM user (required; must not start with
-#                    the user prefix)
+#   --admin-user     name of Bucketeer's own IAM user (required). It lives under
+#                    /bucketeer-admin/, so even a name starting with the user prefix
+#                    stays outside the /bucketeer/ users it may manage
 #   --user-prefix    name prefix of the per-person IAM users (required, e.g. "s3-");
 #                    must match CLOUD_USER_PREFIX in Bucketeer's .env
 #   --prefix         bucket name prefix Bucketeer may manage (default bucketeer-);
@@ -99,8 +100,6 @@ done
 [[ "$USER_PREFIX" =~ ^[a-z0-9][a-z0-9_-]{0,15}-$ ]] \
   || die "--user-prefix is required: 1-16 lowercase letters, digits, '_' or '-', ending with '-'"
 [[ "$ADMIN_USER" =~ ^[A-Za-z0-9+=,.@_-]{1,64}$ ]] || die "--admin-user is required (an IAM user name)"
-[[ "$ADMIN_USER" != "$USER_PREFIX"* ]] \
-  || die "--admin-user must not start with --user-prefix, or it could manage itself"
 [[ "$REGION" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]$ ]] || die "--region looks wrong: $REGION"
 if [ -n "$BILLING_BUCKET" ]; then
   [[ "$BILLING_BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] \
