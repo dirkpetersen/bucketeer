@@ -174,6 +174,23 @@ def test_buckets(db):
     assert db.buckets.delete("legacy") and db.buckets.get("legacy") is None
 
 
+def test_bucket_rows_by_location(db):
+    """Cloud rows share the table: on-prem lists, counts and location-scoped get/delete
+    never see them."""
+    db.buckets.create("alice-data", "alice", "X1")
+    db.buckets.create_cloud("bucketeer-alice-scans", "alice", "X1", "alice", "intelligent", 2)
+    assert [b["name"] for b in db.buckets.list("alice")] == ["alice-data"]
+    assert [b["name"] for b in db.buckets.list()] == ["alice-data"]
+    assert len(db.buckets.list(location=None)) == 2
+    assert [b["name"] for b in db.buckets.list_cloud("alice")] == ["bucketeer-alice-scans"]
+    assert db.buckets.count() == 1 and db.buckets.count(None) == 2
+    assert db.buckets.get("bucketeer-alice-scans", "onprem") is None
+    assert db.buckets.get("bucketeer-alice-scans")["location"] == "cloud"
+    assert not db.buckets.delete("bucketeer-alice-scans", "onprem")
+    assert db.buckets.get("bucketeer-alice-scans") is not None
+    assert db.buckets.delete("bucketeer-alice-scans", "cloud")
+
+
 def test_bucket_keys(db):
     k = db.bucket_keys.create("alice.job", "alice", "b1", "read", "job")
     assert k["revoked_at"] is None and k["access"] == "read"

@@ -76,6 +76,18 @@ def test_setup_token_cloud_backfill(tmp_path, monkeypatch):
     d.close()
 
 
+def test_usage_quota_bytes_backfill_from_v12(tmp_path, monkeypatch):
+    """Production runs v12: its usage readings come through v13 with no quota (NULL)."""
+    p = tmp_path / DB_FILENAME
+    build(p, 12, monkeypatch)
+    d = Database(p)
+    assert d.version == LATEST
+    row = d._conn.execute("SELECT bytes, quota_bytes FROM usage_daily WHERE bucket = "
+                          "'alice-data'").fetchone()
+    assert tuple(row) == (1024, None)
+    d.close()
+
+
 def build(path, version, monkeypatch):
     """A database at `version`, made by the migrations of that time, with sample rows."""
     with monkeypatch.context() as m:

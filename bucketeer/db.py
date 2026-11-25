@@ -658,8 +658,15 @@ class Buckets(_Repo):
                  int(creation_known)),
             )
 
-    def count(self) -> int:
-        return int(self.db.query_one("SELECT COUNT(*) AS n FROM buckets")["n"])
+    # On-premises and cloud rows share this table (`location`, migration v18). `list` and
+    # `count` default to on-premises rows; `get` and `delete` take `location` to match only
+    # one kind (None = any), so an on-prem path never reads or removes a cloud row.
+
+    def count(self, location: str | None = "onprem") -> int:
+        if location is None:
+            return int(self.db.query_one("SELECT COUNT(*) AS n FROM buckets")["n"])
+        return int(self.db.query_one(
+            "SELECT COUNT(*) AS n FROM buckets WHERE location = ?", (location,))["n"])
 
     def set_tag_synced(self, name: str, synced: bool) -> bool:
         with self.db.tx() as c:
@@ -667,15 +674,23 @@ class Buckets(_Repo):
                 "UPDATE buckets SET tag_synced = ? WHERE name = ?", (int(synced), name)
             ).rowcount > 0
 
-    def get(self, name: str) -> dict[str, Any] | None:
-        return self.db.query_one("SELECT * FROM buckets WHERE name = ?", (name,))
+    def get(self, name: str, location: str | None = None) -> dict[str, Any] | None:
+        if location is None:
+            return self.db.query_one("SELECT * FROM buckets WHERE name = ?", (name,))
+        return self.db.query_one("SELECT * FROM buckets WHERE name = ? AND location = ?",
+                                 (name, location))
 
-    def list(self, owner_uid: str | None = None) -> list[dict[str, Any]]:
-        if owner_uid is None:
-            return self.db.query("SELECT * FROM buckets ORDER BY name")
-        return self.db.query(
-            "SELECT * FROM buckets WHERE owner_uid = ? ORDER BY name", (owner_uid,)
-        )
+    def list(self, owner_uid: str | None = None,
+             location: str | None = "onprem") -> list[dict[str, Any]]:
+        where, params = [], []
+        if owner_uid is not None:
+            where.append("owner_uid = ?")
+            params.append(owner_uid)
+        if location is not None:
+            where.append("location = ?")
+            params.append(location)
+        cond = f" WHERE {' AND '.join(where)}" if where else ""
+        return self.db.query(f"SELECT * FROM buckets{cond} ORDER BY name", tuple(params))
 
     # -- cloud buckets (P6-10) --
 
@@ -713,9 +728,12 @@ class Buckets(_Repo):
             )
             return cur.rowcount > 0
 
-    def delete(self, name: str) -> bool:
+    def delete(self, name: str, location: str | None = None) -> bool:
         with self.db.tx() as c:
-            return c.execute("DELETE FROM buckets WHERE name = ?", (name,)).rowcount > 0
+            if location is None:
+                return c.execute("DELETE FROM buckets WHERE name = ?", (name,)).rowcount > 0
+            return c.execute("DELETE FROM buckets WHERE name = ? AND location = ?",
+                             (name, location)).rowcount > 0
 
 
 class Shares(_Repo):

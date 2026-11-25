@@ -188,7 +188,7 @@ async def sync(app, uid: str, full: str, *, owner_email: str | None = None,
     db = app.state.db
     complete = True
     try:
-        row = await db.run(db.buckets.get, full)
+        row = await db.run(db.buckets.get, full, "onprem")
         if stats is None and lookup:
             try:
                 stats = await bucket_row(app.state.croit, uid, full)

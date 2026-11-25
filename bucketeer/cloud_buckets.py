@@ -611,7 +611,7 @@ async def delete_cloud_bucket(name: str, request: Request, response: Response, a
                     "detail": NOT_EMPTY, "notEmpty": True, "objects": 0, "more": True})
             if e.code != "NoSuchBucket":
                 raise cloud_http_error(e) from None
-        await db.run(db.buckets.delete, full)
+        await db.run(db.buckets.delete, full, "cloud")
         _sizes(app).pop(full, None)
         await _audit(app, user.username, "cloud.bucket.delete", full, uid=acct.uid,
                      storageClass=row.get("storage_class"), quotaTiB=row.get("quota_tib"))

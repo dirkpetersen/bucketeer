@@ -177,9 +177,9 @@ def test_reconcile_skips_row_synced_meanwhile(env):
     from bucketeer import buckets
     real = env.db.buckets.get
 
-    def get_and_sync(name):
+    def get_and_sync(name, location=None):
         env.db.buckets.set_tag_synced(name, True)  # someone synced it between list and lock
-        return real(name)
+        return real(name, location)
     with patch.object(env.db.buckets, "get", get_and_sync):
         r = env.alice.post("/api/buckets/reconcile", headers=H)
     assert r.json() == {"synced": [], "pending": []} and env.used == []

@@ -365,6 +365,13 @@ async def list_buckets(request: Request, acct: Account):
     return {"buckets": out, "product": catalog.public(product)}
 
 
+def _cloud_reserved_prefix(request: Request) -> str:
+    """CLOUD_BUCKET_PREFIX when cloud is configured, else "": new on-prem names may not
+    start with it."""
+    s = request.app.state.settings
+    return s.cloud_bucket_prefix if getattr(s, "cloud_configured", False) else ""
+
+
 @router.get("/options")
 async def options(request: Request, acct: Account, user: User):
     db = request.app.state.db
@@ -376,6 +383,9 @@ async def options(request: Request, acct: Account, user: User):
         hint = f"Starts with \"{prefix}\". " + hint
     if pattern:
         hint += " Must also match the format set by your administrators."
+    reserved = _cloud_reserved_prefix(request)
+    if reserved:
+        hint += f" May not start with \"{reserved}\" (cloud buckets)."
     place = await _placement_view(request)
     profile = await db.run(db.profiles.get, acct.username)
     example = await db.run(budget_example, db.settings)
@@ -404,6 +414,11 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
     problems = await asyncio.to_thread(validate_bucket_name, name, acct.username, rules)
     if problems:
         raise HTTPException(422, " ".join(problems))
+    reserved = _cloud_reserved_prefix(request)
+    if reserved and name.startswith(reserved):
+        # cloud bucket rows share the `buckets` table (primary key: the name)
+        raise HTTPException(422, f"Names starting with \"{reserved}\" are reserved for cloud "
+                                 "buckets. Choose another name.")
 
     try:
         budget = await asyncio.to_thread(validate_budget_number, body.budgetNumber, db.settings)
@@ -447,7 +462,7 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
         found = await existing()
         if found is None or found.get("owner") != acct.uid:
             return False
-        return await db.run(db.buckets.get, full) is None
+        return await db.run(db.buckets.get, full, "onprem") is None
 
     adopted = False
     ops = ops_for(croit, request.app.state.settings)
@@ -484,7 +499,7 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
             raise
         except CroitError as e:
             if e.status == 409:
-                row = await db.run(db.buckets.get, full)
+                row = await db.run(db.buckets.get, full, "onprem")
                 if row is not None and row.get("owner_uid") == acct.uid:
                     raise HTTPException(409, "You already own this bucket.") from None
                 raise HTTPException(409, taken) from None
@@ -512,7 +527,7 @@ async def create_bucket(body: CreateBody, request: Request, acct: Account, user:
                                           actor=user.username, counted=not user.is_admin)
         recorded = True
         try:
-            await db.run(db.buckets.delete, full)  # a leftover row of an earlier bucket
+            await db.run(db.buckets.delete, full, "onprem")  # a leftover row of an earlier bucket
             await db.run(db.buckets.create, full, acct.uid, budget, user.username,
                          False)  # tag_synced stays 0 until the tags are written
         except Exception:
@@ -593,7 +608,7 @@ async def reconcile(request: Request, acct: Account, user: User):
     synced, pending = [], []
     async with _user_lock(request, acct.uid):  # a concurrent budget edit must not be overwritten
         for m in todo:
-            m = await db.run(db.buckets.get, m["name"])  # fresh row: it may have changed
+            m = await db.run(db.buckets.get, m["name"], "onprem")  # fresh row: it may have changed
             if m is None or m["tag_synced"]:
                 continue
             short = _short(m["name"])
@@ -627,10 +642,14 @@ async def set_budget(name: str, body: BudgetBody, request: Request, acct: Accoun
         if not any(b.get("bucket") == full
                    for b in await _own_buckets(request.app.state.croit, acct.uid)):
             raise HTTPException(404, "Bucket not found.")
-        row = await db.run(db.buckets.get, full)
+        row = await db.run(db.buckets.get, full, "onprem")
         old = (row or {}).get("budget_number")
         if row is not None and old == budget and row["tag_synced"]:
             return {"name": short, "budgetNumber": budget, "changed": False, "tagSynced": True}
+        if row is None and await db.run(db.buckets.get, full) is not None:
+            # an older on-prem bucket named like a cloud bucket: the name is the primary key
+            raise HTTPException(409, "A cloud bucket has the same name, so this bucket's "
+                                     "budget number can't be recorded. Ask an administrator.")
         if row is None:
             # a bucket older than this row: its creator and creation date are unknown here,
             # so neither is recorded nor written as a tag (whatever the bucket has stays)
@@ -807,7 +826,7 @@ async def delete_bucket(name: str, request: Request, acct: Account, user: User,
         await _audit_unsure(request, user.username, "bucket.delete_failed", full, acct, e,
                             confirmed=confirmed)
         raise croit_http_error(e) from None
-    await db.run(db.buckets.delete, full)
+    await db.run(db.buckets.delete, full, "onprem")
     await _audit(request, user.username, "bucket.delete", full, uid=acct.uid,
                  objects=objects, bytes=size, dataDeleted=confirmed and objects > 0)
     # The bucket's scoped keys have nothing left to reach: delete their RGW users.

@@ -254,6 +254,43 @@ def test_grant_retries_while_the_principal_propagates(env, monkeypatch):
     assert len(calls) == 4
 
 
+def test_cloud_create_refuses_a_name_used_on_premises(env):
+    env.db.buckets.create("bucketeer-alice-scans", "bob", "DN099999")
+    assert env.user.get(f"{B}/check", params={"name": "scans"}).json()["status"] == "exists"
+    r = env.user.post(B, json=NEW, headers=H)
+    assert r.status_code == 409
+    assert env.s3.list_buckets()["Buckets"] == []
+    assert env.db.buckets.get("bucketeer-alice-scans")["location"] == "onprem"
+
+
+def test_onprem_names_may_not_use_the_cloud_prefix(env, tmp_path):
+    env.app.state.settings = make_settings(tmp_path, **CLOUD)
+    hint = env.user.get("/api/buckets/options").json()["naming"]["hint"]
+    assert '"bucketeer-"' in hint
+    r = env.user.post("/api/buckets", json={"name": "bucketeer-alice-x", "budgetNumber":
+                                            "DN099999"}, headers=H)
+    assert r.status_code == 422 and "reserved for cloud" in r.json()["detail"]
+
+
+def test_onprem_paths_leave_cloud_rows_alone(env):
+    assert env.user.post(B, json=NEW, headers=H).status_code == 201
+    full = "bucketeer-alice-scans"
+    env.db.buckets.set_tag_synced(full, False)
+    assert full not in [b["name"] for b in env.db.buckets.list("alice")]
+    assert env.user.post("/api/buckets/reconcile", headers=H).json()["synced"] == []
+    r = env.user.put("/api/buckets/bucketeer-alice-scans/budget",
+                     json={"budgetNumber": "DN012345"}, headers=H)
+    assert r.status_code == 404
+    row = env.db.buckets.get(full)
+    assert row["location"] == "cloud" and row["budget_number"] == "DN099999"
+    # an older on-prem bucket that shares its name with a cloud row: a clear 409, no 500
+    env.db.buckets.create_cloud("alice-data", "carl", "DN099999", "carl", "intelligent", 1)
+    r = env.user.put("/api/buckets/alice-data/budget", json={"budgetNumber": "DN012345"},
+                     headers=H)
+    assert r.status_code == 409 and "cloud bucket" in r.json()["detail"]
+    assert env.db.buckets.get("alice-data")["budget_number"] == "DN099999"
+
+
 # -- list -----------------------------------------------------------------------------
 
 

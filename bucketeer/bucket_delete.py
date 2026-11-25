@@ -394,9 +394,9 @@ async def _finish(app, job_id: int) -> None:
     job = await db.run(db.delete_jobs.get, job_id)
     full, owner = job["bucket"], SimpleNamespace(uid=job["owner_uid"], username=job["owner_ad"])
     # Only the job owner's records: after an ownership change the rest are someone else's.
-    row = await db.run(db.buckets.get, full)
+    row = await db.run(db.buckets.get, full, "onprem")
     if row is None or row["owner_uid"] == owner.uid:
-        await db.run(db.buckets.delete, full)
+        await db.run(db.buckets.delete, full, "onprem")
     keys = await revoke_for_deleted_bucket(_Shim(app), owner, full, only_owner=True)
     await revoke_shares(_Shim(app), owner.username, full, owner_uid=owner.uid)
     warning = None
@@ -468,7 +468,7 @@ async def _delete_empty(request: Request, acct, user, full: str, short: str, obj
     if outcome == "notempty":
         return None
     db = app.state.db
-    await db.run(db.buckets.delete, full)
+    await db.run(db.buckets.delete, full, "onprem")
     await _audit(app, user.username, "bucket.delete", full, uid=acct.uid, objects=objects,
                  bytes=size, dataDeleted=False)
     from .bucket_keys import revoke_for_deleted_bucket
