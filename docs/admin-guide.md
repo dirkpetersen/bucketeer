@@ -178,6 +178,7 @@ What comes back:
 | Buckets | the `bucketeer-*` tags: budget number, creator, creation date. A bucket without them gets no row, as before Bucketeer knew it. |
 | Bucket keys | the key users (`owner+label`) and their `bucketeer-key-<id>` policy statements: same id, owner (from the key user's display name), bucket, access, the public half of the key, suspended or not. |
 | Shares | the `bucketeer-share-*` policy statements whose person still has an S3 account. |
+| Cloud buckets | only when cloud is configured: every `<CLOUD_BUCKET_PREFIX>*` bucket in the AWS account except the backup and billing buckets, from its `bucketeer-*` tags read by Bucketeer's AWS admin user: owner, creator, creation date, budget number, quota, and the storage class from the bucket's `bucketeer-class` lifecycle rule (else its product tag). Only the admin user can write tags on cloud buckets, so here the tags are trusted. A bucket without an owner tag gets no row; a missing quota tag becomes the default quota and is listed as a problem. |
 
 A tag owner that differs from Ceph's is reported, and that bucket's tags are rewritten
 at the owner's next visit.
@@ -291,7 +292,7 @@ usage readings for billing and admin settings changes** made since then are lost
 | Tab | What it does |
 |---|---|
 | Users | Quotas, suspend and restore. Suspending a user also suspends their bucket keys. |
-| Buckets | Usage, bucket quotas, budget numbers (with a check against the format), chargeback CSV, Write Bucketeer tags. |
+| Buckets | On-premises and cloud buckets (filter All / On premises / Cloud; cloud rows have a "Cloud" badge and their storage class). Usage, bucket quotas, budget numbers (with a check against the format), chargeback CSV, Write Bucketeer tags. A cloud bucket's size comes from AWS CloudWatch (daily, a day or two late; empty while AWS can't be reached) and its quota is in whole TiB; an administrator's quota change is not limited by the weekly limit but is recorded, and the bucket's quota tag is updated. |
 | Bucket keys | All keys scoped to one bucket; revoke them. Admins never see a secret. |
 | Audit | Who did what and when; filter and export CSV. |
 | Offboarding | Daily check against AD. Starts in report-only mode; switch to enforce when you trust it. |

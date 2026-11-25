@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
 
-from . import bucket_quota
+from . import bucket_quota, catalog
 from .auth import SessionUser, require_admin
 from .budget import budget_matches, load_budget_rules
 from .croit import CroitClient, CroitClientError, CroitError, CroitUnavailable, get_croit
@@ -176,6 +176,7 @@ def _bucket_view(b: dict, meta: dict | None, matches: bool | None = None) -> dic
         "budgetNumber": (meta or {}).get("budget_number"),  # null = missing
         # does it match the current admin pattern? null = no number or no pattern
         "budgetMatches": matches,
+        "location": "onprem",
     }
 
 
@@ -218,9 +219,14 @@ async def list_users(_a: Admin, croit: Croit, db: Db):
     return {"users": out}
 
 
-async def _judged_buckets(croit: CroitClient, db: Database, *, with_users: bool = False):
-    """(bucket views, metadata rows by name, croit users by uid or {}); each view
-    carries `budgetMatches` against the current admin pattern."""
+async def _judged_buckets(croit: CroitClient, db: Database, *, with_users: bool = False,
+                          app=None):
+    """(bucket views, metadata rows by name, croit users by uid or {}, pattern); each view
+    carries `budgetMatches` against the current admin pattern. With `app`, the cloud
+    buckets from SQLite are included (`admin_cloud`, Q19); their metadata rows are in the
+    same dict (a name is unique across locations)."""
+    from . import admin_cloud  # it imports buckets, which imports this module
+
     try:
         if with_users:
             buckets, users = await asyncio.gather(croit.list_buckets(), croit.list_users())
@@ -229,21 +235,32 @@ async def _judged_buckets(croit: CroitClient, db: Database, *, with_users: bool 
     except CroitClientError as e:
         raise croit_http_error(e) from e
     meta = {m["name"]: m for m in await db.run(db.buckets.list)}
+    clouds = await admin_cloud.cloud_rows(app) if app is not None else []
+    for c in clouds:
+        meta[c["row"]["name"]] = c["row"]
 
     pattern = (await db.run(load_budget_rules, db.settings))["pattern"]
 
     def build():
         rows, seen, timeouts = [], {}, 0
-        for b in buckets:
-            m = meta.get(b.get("bucket"))
-            value = (m or {}).get("budget_number")
+
+        def judge(value):
+            nonlocal timeouts
             if value not in seen:
                 try:
                     seen[value] = None if timeouts >= 3 else budget_matches(value, pattern)
                 except TimeoutError:
                     timeouts += 1  # after 3, the rest is unjudged (null)
                     seen[value] = None
-            rows.append(_bucket_view(b, m, seen[value]))
+            return seen[value]
+
+        for b in buckets:
+            m = meta.get(b.get("bucket"))
+            if m is not None and m.get("location", "onprem") != "onprem":
+                m = None
+            rows.append(_bucket_view(b, m, judge((m or {}).get("budget_number"))))
+        for c in clouds:
+            rows.append(admin_cloud.view(c, judge(c["row"].get("budget_number"))))
         return rows
 
     out = await asyncio.to_thread(build)
@@ -252,16 +269,21 @@ async def _judged_buckets(croit: CroitClient, db: Database, *, with_users: bool 
 
 
 @router.get("/buckets")
-async def list_buckets(_a: Admin, croit: Croit, db: Db):
-    out, _meta, _users, _pattern = await _judged_buckets(croit, db)
-    return {"buckets": out}
+async def list_buckets(request: Request, _a: Admin, croit: Croit, db: Db):
+    from . import admin_cloud
+
+    out, _meta, _users, _pattern = await _judged_buckets(croit, db, app=request.app)
+    cloud = getattr(request.app.state, "cloud", None)
+    return {"buckets": out, "cloud": {
+        "configured": cloud is not None, "available": admin_cloud.cloud_ready(request.app),
+        "maxTiB": bucket_quota.MAX_BUCKET_TIB}}
 
 
 # -- chargeback export (Q2) ----------------------------------------------------------
 
 CHARGEBACK_COLUMNS = [
     "bucket", "tenant", "owner_uid", "owner_name", "budget_number", "budget_status",
-    "objects", "bytes", "size_gib", "quota_bytes", "created_at",
+    "objects", "bytes", "size_gib", "quota_bytes", "created_at", "location", "product",
 ]
 _FORMULA_START = ("=", "+", "-", "@", "\t", "\r")
 
@@ -284,10 +306,13 @@ def budget_status(number: str | None, matches: bool | None, pattern: str = "") -
 
 
 @router.get("/export/chargeback.csv")
-async def export_chargeback(admin: Admin, croit: Croit, db: Db):
-    """One row per bucket for finance: owner, budget number and usage. UTF-8
-    with a BOM, so Excel opens it with the right encoding."""
-    views, meta, users, pattern = await _judged_buckets(croit, db, with_users=True)
+async def export_chargeback(request: Request, admin: Admin, croit: Croit, db: Db):
+    """One row per bucket for finance: owner, budget number and usage, on premises and
+    cloud (`location`, `product`). UTF-8 with a BOM, so Excel opens it with the right
+    encoding."""
+    views, meta, users, pattern = await _judged_buckets(croit, db, with_users=True,
+                                                        app=request.app)
+    onprem_product = catalog.product_for(await db.run(catalog.load_catalog, db))["name"]
     buf = io.StringIO(newline="")
     w = csv.writer(buf, lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL)
     w.writerow(CHARGEBACK_COLUMNS)
@@ -297,10 +322,13 @@ async def export_chargeback(admin: Admin, croit: Croit, db: Db):
         m = meta.get(v["name"]) or {}
         created = m.get("created_at") if m.get("creation_known", 1) else None
         number = v["budgetNumber"]
+        cloud = v["location"] == "cloud"
+        size = None if v["bytes"] is None else f"{v['bytes'] / 1024**3:.3f}"
         w.writerow([csv_safe(c) for c in (
             v["name"], v["tenant"], v["owner"], (users.get(v["owner"]) or {}).get("name") or "",
             number, budget_status(number, v["budgetMatches"], pattern), v["objects"], v["bytes"],
-            f"{v['bytes'] / 1024**3:.3f}", quota, created,
+            size, quota, created, v["location"],
+            v["product"]["name"] if cloud else onprem_product,
         )])
     await _audit(db, admin, "admin.export.chargeback", "report", "chargeback",
                  {"rows": len(views)})

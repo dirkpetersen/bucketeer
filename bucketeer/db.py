@@ -702,15 +702,18 @@ class Buckets(_Repo):
 
     # -- cloud buckets (P6-10) --
 
-    def create_cloud(self, name: str, owner_uid: str, budget_number: str | None, by: str,
-                     storage_class: str, quota_tib: int, tag_synced: bool = True) -> None:
+    def create_cloud(self, name: str, owner_uid: str, budget_number: str | None,
+                     by: str | None, storage_class: str, quota_tib: int,
+                     tag_synced: bool = True, creation_known: bool = True,
+                     created_at: str | None = None) -> None:
+        """`creation_known` / `created_at` as in `create` (the rebuild restores rows)."""
         with self.db.tx() as c:
             c.execute(
                 "INSERT INTO buckets (name, owner_uid, budget_number, created_at, created_by, "
                 "tag_synced, creation_known, location, storage_class, quota_tib) "
-                "VALUES (?, ?, ?, ?, ?, ?, 1, 'cloud', ?, ?)",
-                (name, owner_uid, budget_number, now(), by, int(tag_synced), storage_class,
-                 quota_tib))
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'cloud', ?, ?)",
+                (name, owner_uid, budget_number, created_at or now(), by, int(tag_synced),
+                 int(creation_known), storage_class, quota_tib))
 
     def list_cloud(self, owner_uid: str | None = None) -> list[dict[str, Any]]:
         if owner_uid is None:

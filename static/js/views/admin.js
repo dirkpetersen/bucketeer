@@ -1,10 +1,12 @@
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
-import { adminBucketKeys, adminBuckets, adminRevokeBucketKey, adminUsers, setBucketQuota, setUserQuota, suspendUser, unsuspendUser, writeAllBucketTags } from "../api.js";
+import { adminBucketKeys, adminBuckets, adminRevokeBucketKey, adminUsers, setAdminCloudBucketQuota, setBucketQuota, setUserQuota, suspendUser, unsuspendUser, writeAllBucketTags } from "../api.js";
 import { formatBytes, formatCount, quotaText } from "../format.js";
 import { toast } from "../components/toast.js";
 import { confirmDialog } from "../components/confirm-dialog.js";
 import { quotaDialog } from "../components/quota-dialog.js";
+import { bucketQuotaDialog } from "../components/bucket-quota-dialog.js";
+import { formatTiB } from "../components/quota-picker.js";
 import { renderSettings } from "./admin-settings.js";
 import { renderAudit } from "./admin-audit.js";
 import { renderOffboarding } from "./admin-offboarding.js";
@@ -13,9 +15,15 @@ import { renderBackup } from "./admin-backup.js";
 
 // Administration: all users and buckets, quota editing, suspend/unsuspend.
 // The server enforces the role on every call; this view is only shown to admins.
+// The Buckets tab lists on-premises (Ceph) and cloud (AWS) buckets (Q19); cloud rows carry
+// `location: "cloud"`, a CloudWatch size (null when not measured or AWS is unavailable) and a
+// quota in whole TiB, edited through the admin cloud quota route.
 
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 const quotaSize = (q) => (q.enabled && q.maxSize != null ? q.maxSize : Infinity);
+const CLASS = { intelligent: "Intelligent-Tiering", deep_archive: "Deep Archive" };
+const LOCATIONS = [["all", "All"], ["onprem", "On premises"], ["cloud", "Cloud"]];
+const isCloud = (r) => r.location === "cloud";
 
 function badge(text, kind = "") {
   return h("span", { class: `chip ${kind}`.trim() }, kind === "chip-warn" || kind === "chip-ok" ? h("span", { class: "dot" }) : null, text);
@@ -51,19 +59,31 @@ function userColumns(act) {
 }
 
 function bucketColumns(act) {
+  const usage = (r) => {
+    if (r.bytes == null) return h("div", { class: "usage" }, h("span", { class: "muted", text: "Not measured yet" }),
+      h("span", { class: "sub", text: "AWS reports sizes daily" }));
+    return h("div", { class: "usage" }, h("b", { text: formatBytes(r.bytes) }),
+      h("span", { class: "sub", text: isCloud(r) ? (r.sizeAsOf ? `as of ${r.sizeAsOf.slice(0, 10)}` : "AWS, daily") : `${formatCount(r.objects)} objects` }));
+  };
   return [
     { key: "bucket", label: "Bucket", sort: (r) => r.name, cell: (r) => h("div", { class: "who" },
-        h("b", { class: "mono", text: r.name }), r.tenant && h("span", { class: "sub", text: `tenant ${r.tenant}` })) },
+        h("b", { class: "mono", text: r.name }),
+        isCloud(r)
+          ? h("span", { class: "chips" }, badge("Cloud", "chip-accent"), h("span", { class: "sub", text: CLASS[r.storageClass] ?? r.product?.name ?? "" }))
+          : r.tenant && h("span", { class: "sub", text: `tenant ${r.tenant}` })) },
     { key: "owner", label: "Owner", sort: (r) => r.owner, cell: (r) => h("code", { text: r.owner }) },
     { key: "budget", label: "Budget number", sort: (r) => r.budgetNumber ?? "", cell: (r) =>
         r.budgetNumber ? h("div", { class: "who" }, h("code", { text: r.budgetNumber }),
           r.budgetMatches === false && badge("Format mismatch", "chip-warn")) : badge("Missing", "chip-warn") },
-    { key: "usage", label: "Usage", num: true, sort: (r) => r.bytes, cell: (r) => h("div", { class: "usage" },
-        h("b", { text: formatBytes(r.bytes) }), h("span", { class: "sub", text: `${formatCount(r.objects)} objects` })) },
+    { key: "usage", label: "Usage", num: true, sort: (r) => r.bytes ?? -1, cell: usage },
     { key: "quota", label: "Quota", sort: (r) => quotaSize(r.quota), cell: (r) => h("div", { class: "usage" },
-        h("span", { class: r.quota.enabled ? "" : "muted", text: quotaText(r.quota) }), meter(r.bytes, r.quota)) },
+        isCloud(r)
+          ? h("span", { text: r.quotaTiB ? formatTiB(r.quotaTiB) : "No quota" })
+          : h("span", { class: r.quota.enabled ? "" : "muted", text: quotaText(r.quota) }),
+        r.bytes != null ? meter(r.bytes, r.quota) : null,
+        r.overQuota ? badge("Over quota", "chip-warn") : null) },
     { key: "actions", label: "Actions", noSort: true, cell: (r) => h("div", { class: "acts" },
-        act.button("edit", "Quota", () => act.quota("bucket", r), `Edit quota of ${r.name}`)) },
+        act.button("edit", "Quota", () => (isCloud(r) ? act.cloudQuota(r) : act.quota("bucket", r)), `Edit quota of ${r.name}`)) },
   ];
 }
 
@@ -99,6 +119,8 @@ export function renderAdmin() {
     q: "",
     sort: { users: { key: "user", dir: 1 }, buckets: { key: "bucket", dir: 1 }, keys: { key: "bucket", dir: 1 } },
     only: { users: false, buckets: false, keys: false }, // suspended only / missing budget only / revoked too
+    loc: "all", // Buckets tab: all | onprem | cloud
+    cloudInfo: null, // {configured, available, maxTiB} from GET /api/admin/buckets
     data: { users: { status: "loading", rows: [] }, buckets: { status: "loading", rows: [] }, keys: { status: "loading", rows: [] } },
   };
   const busy = new Set();
@@ -126,6 +148,23 @@ export function renderAdmin() {
         toast.show(`Quota saved for ${id}.`);
         render();
       }
+    },
+    // Cloud buckets: whole TiB, no weekly limit for admins (the change is still recorded).
+    async cloudQuota(row) {
+      const info = state.cloudInfo || {};
+      const res = await bucketQuotaDialog({
+        bucket: row.name, current: row.quotaTiB, product: row.product,
+        options: async () => ({ quota: { defaultTiB: row.quotaTiB ?? 1, maxTiB: info.maxTiB ?? 100000, weeklyLimitTiB: null, remainingTiB: null, nextReleaseAt: null, exempt: true }, product: row.product }),
+        save: (name, quotaTiB) => setAdminCloudBucketQuota(name, quotaTiB),
+      });
+      if (res.error) { if (res.error.status !== 401) toast.error(res.error.message); return; }
+      if (!res.saved) return;
+      row.quotaTiB = res.saved.quotaTiB;
+      row.quota = { enabled: true, maxSize: res.saved.quotaTiB * 2 ** 40, maxObjects: null };
+      row.overQuota = row.bytes != null && row.bytes > row.quota.maxSize;
+      if (res.saved.warning) toast.error(res.saved.warning);
+      else toast.show(res.saved.changed ? `Quota of ${row.name} is now ${formatTiB(res.saved.quotaTiB)}.` : "Nothing to change.");
+      render();
     },
     async revokeKey(row) {
       const retry = row.state === "revoked";
@@ -173,6 +212,7 @@ export function renderAdmin() {
     try {
       const res = await (tab === "users" ? adminUsers() : tab === "keys" ? adminBucketKeys() : adminBuckets());
       state.data[tab] = { status: "ready", rows: res[tab] };
+      if (tab === "buckets") state.cloudInfo = res.cloud ?? null;
     } catch (err) {
       if (err.status !== 401) state.data[tab] = { status: "error", rows: [], error: err.message };
     }
@@ -212,12 +252,15 @@ export function renderAdmin() {
   const dirBtn = h("button", { class: "btn btn-icon sort-dir", type: "button" });
   const onlyBtn = h("button", { class: "btn btn-filter", type: "button", "aria-pressed": "false" });
   const refreshBtn = h("button", { class: "btn btn-icon", type: "button", "aria-label": "Refresh", title: "Refresh" }, icon("refresh"));
-  const exportEl = h("a", { class: "btn", href: "/api/admin/export/chargeback.csv", download: "", title: "One row per bucket: bucket, tenant, owner, budget number and status, objects, bytes, GiB, quota, created. Opens in Excel." }, "Export CSV");
-  const exportNote = h("p", { class: "export-note", text: "Export CSV lists every bucket (not just the filtered ones): bucket, tenant, owner, budget number and status, objects, bytes, GiB, quota and creation date, for chargeback. UTF-8, opens in Excel." });
+  const exportEl = h("a", { class: "btn", href: "/api/admin/export/chargeback.csv", download: "", title: "One row per bucket, on premises and cloud: bucket, tenant, owner, budget number and status, objects, bytes, GiB, quota, created, location, product. Opens in Excel." }, "Export CSV");
+  const exportNote = h("p", { class: "export-note", text: "Export CSV lists every bucket, on premises and cloud (not just the filtered ones): bucket, tenant, owner, budget number and status, objects, bytes, GiB, quota, creation date, location and product, for chargeback. Cloud sizes come from AWS CloudWatch (daily). UTF-8, opens in Excel." });
+  const locBtns = LOCATIONS.map(([key, label]) => h("button", { class: "btn btn-filter", type: "button", "aria-pressed": "false", "data-loc": key,
+    on: { click: () => { state.loc = key; render(); } } }, label));
+  const locGroup = h("div", { class: "loc-filter", role: "group", "aria-label": "Location" }, locBtns);
   const tagsBtn = h("button", { class: "btn", type: "button", title: "Write owner, bucket, budget, quota, product and location as bucketeer-* tags to every bucket, with each owner's own key." }, icon("tag"), "Write Bucketeer tags");
   tagsBtn.addEventListener("click", writeTags);
   const filtersEl = h("div", { class: "admin-filters" },
-    h("div", { class: "search" }, icon("search", "icon search-ic"), search), sortSel, dirBtn, onlyBtn, exportEl, tagsBtn);
+    h("div", { class: "search" }, icon("search", "icon search-ic"), search), sortSel, dirBtn, locGroup, onlyBtn, exportEl, tagsBtn);
   const countEl = h("span", { class: "count", "aria-live": "polite" });
   const tableHost = h("div", { class: "table-host" });
   const settings = renderSettings();
@@ -278,6 +321,7 @@ export function renderAdmin() {
     let rows = state.data[tab].rows;
     if (tab === "keys") { if (!state.only.keys) rows = rows.filter((r) => r.state !== "revoked"); }
     else if (state.only[tab]) rows = rows.filter((r) => (tab === "users" ? r.suspended : !r.budgetNumber));
+    if (tab === "buckets" && state.loc !== "all") rows = rows.filter((r) => (r.location || "onprem") === state.loc);
     if (state.q) rows = rows.filter((r) => text(r).includes(state.q));
     const { key, dir } = state.sort[tab];
     const col = cols.find((c) => c.key === key) ?? cols[0];
@@ -300,7 +344,7 @@ export function renderAdmin() {
       stat("Suspended", u ? formatCount(susp) : null, susp > 0),
       stat("Buckets", b ? formatCount(buckets.rows.length) : null),
       stat("Without budget number", b ? formatCount(missing) : null, missing > 0),
-      stat("Stored", b ? formatBytes(buckets.rows.reduce((s, r) => s + r.bytes, 0)) : null));
+      stat("Stored", b ? formatBytes(buckets.rows.reduce((s, r) => s + (r.bytes || 0), 0)) : null));
     document.getElementById("tc-users")?.replaceChildren(u ? formatCount(users.rows.length) : "");
     document.getElementById("tc-buckets")?.replaceChildren(b ? formatCount(buckets.rows.length) : "");
     const liveKeys = keys.status === "ready" ? keys.rows.filter((r) => r.state !== "revoked").length : null;
@@ -358,6 +402,14 @@ export function renderAdmin() {
     const d = state.data[tab];
     exportEl.hidden = tab !== "buckets";
     tagsBtn.hidden = tab !== "buckets";
+    const cloudRows = tab === "buckets" && d.rows.some(isCloud);
+    locGroup.hidden = !cloudRows && !state.cloudInfo?.configured;
+    if (tab !== "buckets") locGroup.hidden = true;
+    for (const btn of locBtns) {
+      const on = btn.dataset.loc === state.loc;
+      btn.classList.toggle("on", on);
+      btn.setAttribute("aria-pressed", String(on));
+    }
     onlyBtn.textContent = tab === "users" ? "Suspended only" : tab === "keys" ? "Show revoked" : "Missing budget number";
     onlyBtn.setAttribute("aria-pressed", String(state.only[tab]));
     onlyBtn.classList.toggle("on", state.only[tab]);
@@ -384,10 +436,10 @@ export function renderAdmin() {
     const total = tab === "keys" && !state.only.keys ? d.rows.filter((r) => r.state !== "revoked").length : d.rows.length;
     countEl.textContent = rows.length === total ? `${formatCount(rows.length)} ${noun}${rows.length === 1 ? "" : "s"}` : `${formatCount(rows.length)} of ${formatCount(total)}`;
     if (!rows.length) {
-      const filtered = state.q || (state.only[tab] && tab !== "keys");
+      const filtered = state.q || (state.only[tab] && tab !== "keys") || (tab === "buckets" && state.loc !== "all");
       tableHost.replaceChildren(filtered
         ? emptyState("Nothing matches", "Try a different search or clear the filter.",
-          [h("button", { class: "btn", type: "button", on: { click: () => { state.q = ""; search.value = ""; if (tab !== "keys") state.only[tab] = false; render(); } } }, "Clear filters")])
+          [h("button", { class: "btn", type: "button", on: { click: () => { state.q = ""; search.value = ""; if (tab !== "keys") state.only[tab] = false; state.loc = "all"; render(); } } }, "Clear filters")])
         : emptyState(`No ${noun}s yet`, `There are no ${noun}s on the cluster.`));
       return;
     }

@@ -29,11 +29,14 @@ export function renderBilling() {
     }
   }
 
+  // Rounded to cents first, so a tiny negative amount (or -0) never shows as "-$0.00".
+  const cents = (v) => Math.round((Number(v) || 0) * 100) / 100 || 0;
   const money = (v) => {
+    const n = cents(v);
     try {
-      return new Intl.NumberFormat(undefined, { style: "currency", currency: data.settings.currency }).format(v);
+      return new Intl.NumberFormat(undefined, { style: "currency", currency: data.settings.currency }).format(n);
     } catch {
-      return `${v.toFixed(2)} ${data.settings.currency}`;
+      return `${n.toFixed(2)} ${data.settings.currency}`;
     }
   };
   const monthLabel = (m) => new Date(`${m}-15T00:00:00`).toLocaleDateString(undefined, { month: "short", year: "2-digit" });
@@ -92,10 +95,11 @@ export function renderBilling() {
   const fmtWhen = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
   const usd = (v) => {
+    const n = cents(v);
     try {
-      return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(v);
+      return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(n);
     } catch {
-      return `${Number(v).toFixed(2)} USD`;
+      return `${n.toFixed(2)} USD`;
     }
   };
 
@@ -123,7 +127,7 @@ export function renderBilling() {
       const stat = (label, value, extra) => h("div", { class: "bl-stat" },
         h("span", { class: "bl-stat-label", text: label }), h("b", { class: "bl-stat-value", text: value }),
         extra ? h("small", { class: "bl-stat-note", text: extra }) : null);
-      const gap = Math.round((c.exportTotal - c.rowsTotal) * 100) / 100 || 0; // never "-$0.00"
+      const gap = cents(c.exportTotal - c.rowsTotal); // never "-$0.00"
       box.replaceChildren(
         h("div", { class: "bl-cloud-head" },
           h("b", { text: `Cloud (AWS), ${m}` }),
@@ -222,7 +226,7 @@ export function renderBilling() {
   }
 
   function tableCard() {
-    const months = data.months;
+    const months = [...data.months].reverse(); // newest first: the current month needs no scrolling
     const rows = view === "users" ? data.users : data.buckets;
     const lead = view === "users"
       ? [["User", (r) => h("code", { text: r.owner })], ["Buckets", (r) => String(r.buckets), true]]
