@@ -18,9 +18,9 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from bucketeer import backup, bucket_delete, bucket_quota, rebuild
+from bucketeer import backup, bucket_delete, bucket_quota, cloud_buckets, rebuild
 from bucketeer.bucket_keys import cleanup_pending
-from bucketeer.cloud import CloudAdmin
+from bucketeer.cloud import CloudAdmin, CloudError
 
 from .conftest import REQUIRED
 from .test_acl import fake_objects
@@ -48,6 +48,10 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "POST /api/cloud/credentials/keys": ("cloud.user.create", "cloud.key.create"),
     "POST /api/cloud/credentials/keys/{access_key}/rotate": ("cloud.key.rotate",),
     "DELETE /api/cloud/credentials/keys/{access_key}": ("cloud.key.delete",),
+    "POST /api/cloud/buckets": ("cloud.bucket.create",),
+    "PUT /api/cloud/buckets/{name}/quota": ("cloud.bucket.quota",),
+    "PUT /api/cloud/buckets/{name}/budget": ("cloud.bucket.budget",),
+    "DELETE /api/cloud/buckets/{name}": ("cloud.bucket.delete",),
     "POST /api/subusers": ("subuser.create",),
     "PATCH /api/subusers/{name}": ("subuser.update",),
     "DELETE /api/subusers/{name}": ("subuser.delete",),
@@ -136,6 +140,8 @@ EVENTS = {
     "billing.report_failed": "no billing contact's mail server took the monthly sheet",
     "system.rebuild": "python3 app.py --rebuild-from-ceph (actor system)",
     "cloud.user.refused": "an IAM user with the person's name that Bucketeer did not make",
+    "cloud.bucket.create_failed": "a cloud bucket set-up step failed after CreateBucket",
+    "cloud.bucket.over_quota": "the daily check found a cloud bucket over its quota (system)",
 }
 
 ACTION_RE = re.compile(r"^(?:[a-z][a-z_]*)(?:\.[a-z][a-z_]*)+$")
@@ -277,6 +283,33 @@ def run(tmp_path_factory, moto_server):
         f"/api/cloud/credentials/keys/{extra}", headers=H))
     cl.client("iam").create_user(UserName="s3-bob")  # made outside Bucketeer: refused
     r.step("event", lambda: b.post("/api/cloud/credentials/keys", headers=H))
+
+    # cloud buckets on the same moto server (tests/test_cloud_buckets.py has the details)
+    env.db.settings.set("location", {"default": "cloud"}, "test")
+    cb = {"name": "cov", "storageClass": "intelligent", "quotaTiB": 1,
+          "budgetNumber": "DN099999"}
+    r.step("POST /api/cloud/buckets", lambda: a.post("/api/cloud/buckets", json=cb, headers=H))
+    r.step("PUT /api/cloud/buckets/{name}/quota", lambda: a.put(
+        "/api/cloud/buckets/cov/quota", json={"quotaTiB": 2}, headers=H))
+    r.step("PUT /api/cloud/buckets/{name}/budget", lambda: a.put(
+        "/api/cloud/buckets/cov/budget", json={"budgetNumber": "DN012345"}, headers=H))
+    cl.client("cloudwatch").put_metric_data(Namespace="AWS/S3", MetricData=[{
+        "MetricName": "BucketSizeBytes", "Value": float(3 * 2**40), "Unit": "Bytes",
+        "Timestamp": datetime.now(UTC) - timedelta(hours=30),
+        "Dimensions": [{"Name": "BucketName", "Value": "bucketeer-alice-cov"},
+                       {"Name": "StorageType", "Value": "IntelligentTieringFAStorage"}]}])
+    r.step("event", lambda: asyncio.run(cloud_buckets.alert_tick(env.app)))  # over quota
+    r.step("DELETE /api/cloud/buckets/{name}", lambda: a.delete(
+        "/api/cloud/buckets/cov", headers=H))
+    real_grant = cl.grant_bucket_owner
+
+    async def broken_grant(*_a):
+        raise CloudError(500, "InternalError", "AWS refused PutBucketPolicy (InternalError)")
+    cl.grant_bucket_owner = broken_grant
+    r.step("event", lambda: a.post("/api/cloud/buckets", json={**cb, "name": "cov2"},
+                                   headers=H))  # rolled back: cloud.bucket.create_failed
+    cl.grant_bucket_owner = real_grant
+    env.db.settings.set("location", {"default": "onprem"}, "test")
 
     # subusers (subuser.create_failed is covered in tests/test_subusers.py)
     sub = r.step("POST /api/subusers", lambda: a.post(

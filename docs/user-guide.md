@@ -103,6 +103,37 @@ month**". Old versions count toward the quota.
 <figcaption>Name, budget number and versioning for a new bucket.</figcaption>
 </figure>
 
+### Cloud buckets { #cloud-buckets }
+
+When you work in **Cloud**, the bucket card lists your **cloud buckets** at AWS instead, and
+**Create cloud bucket** makes a new one.
+
+- **Name.** You type only the last part; the full AWS name is
+  `<prefix><your username>-<name>`, shown as you type. AWS bucket names are shared by everyone
+  on AWS, so the dialog checks the name as you type and, when it is taken, offers free
+  alternatives (for example `scans-2` or `scans-2026`).
+- **Storage class**, chosen once:
+    - **Intelligent-Tiering** (Cloud-S3) for data you may read again: AWS moves each object
+      to cheaper tiers when it is not read, and back when it is. Objects can be read at any time.
+    - **Glacier Deep Archive** (Archive-S3) for data you keep but almost never read. It is the
+      cheapest, but **every object needs a restore before it can be read**: that takes 12 to
+      48 hours and is done with another tool, not with Bucketeer. AWS also charges every
+      object for **at least 180 days**, even when you delete it sooner, and restores and
+      downloads cost extra.
+- **Quota and costs.** The quota works like on premises (whole TiB, the same weekly limit
+  across all your buckets), but AWS does not stop uploads at the quota: when a bucket holds
+  more, its owner gets an email (at most once a week). The dialog shows an estimate such as
+  "about $36 per month if full"; what is billed to your budget number is the **real AWS
+  cost** (storage, requests, restores, downloads). The list shows each bucket's size as AWS
+  reports it once a day (it can lag a day or two) and the estimated cost now.
+- **Access.** Use your cloud key (profile `s3-cloud`, see [Cloud keys](#cloud-keys)). A new
+  bucket can take a few seconds before your key works on it.
+- **Delete.** Bucketeer deletes **empty** cloud buckets only. Empty it first with your own
+  cloud key and an S3 tool, old versions included (for example
+  `aws --profile s3-cloud s3 rm s3://<bucket> --recursive`, then delete the old versions),
+  then choose **More, Delete bucket**.
+- Sharing, bucket keys and share links are on premises only for now.
+
 ## 5. Everyday tasks
 
 Each bucket row has the tasks you need most. Rare ones are in the **More** menu.

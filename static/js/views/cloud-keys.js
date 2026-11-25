@@ -70,6 +70,7 @@ export function cloudSection() {
     return h("div", { class: "ck-once", role: "status" },
       h("p", { class: "ck-once-head" }, icon("alert"),
         h("span", {}, h("b", { text: "Copy the secret now. " }), "You won't see it again: AWS shows a secret only once, and Bucketeer does not keep it.")),
+      h("p", { class: "set-hint", text: "A new key can take up to a minute before AWS accepts it. If a command is refused right away, wait a moment and try again." }),
       h("div", { class: "field" }, h("span", { class: "label", text: "Access key" }),
         h("div", { class: "cred-key" }, h("code", { text: accessKey }), copyBtn(accessKey, "Copy access key"))),
       h("div", { class: "field" }, h("span", { class: "label", text: "Secret access key" }),

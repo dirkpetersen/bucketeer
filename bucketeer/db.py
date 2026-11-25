@@ -294,6 +294,18 @@ MIGRATIONS: list[Migration] = [
     CREATE INDEX cloud_key_suspensions_ad ON cloud_key_suspensions (ad_username);
     ALTER TABLE setup_tokens ADD COLUMN cloud INTEGER NOT NULL DEFAULT 0;
     """,
+    # v18: cloud (AWS) buckets, P6-10, share the `buckets` table. `location` 'cloud' rows are
+    # AWS buckets (`name` = the full AWS name); AWS has no bucket quota, so `quota_tib` holds
+    # it (mirrored in the `bucketeer-quota` tag); `storage_class` intelligent|deep_archive;
+    # `over_quota_alert_at` = the last over-quota email (at most one per 7 days).
+    """
+    ALTER TABLE buckets ADD COLUMN location TEXT NOT NULL DEFAULT 'onprem'
+        CHECK (location IN ('onprem', 'cloud'));
+    ALTER TABLE buckets ADD COLUMN storage_class TEXT;
+    ALTER TABLE buckets ADD COLUMN quota_tib INTEGER;
+    ALTER TABLE buckets ADD COLUMN over_quota_alert_at TEXT;
+    CREATE INDEX buckets_location ON buckets (location, owner_uid);
+    """,
 ]
 
 _MISSING: Any = object()
@@ -664,6 +676,34 @@ class Buckets(_Repo):
         return self.db.query(
             "SELECT * FROM buckets WHERE owner_uid = ? ORDER BY name", (owner_uid,)
         )
+
+    # -- cloud buckets (P6-10) --
+
+    def create_cloud(self, name: str, owner_uid: str, budget_number: str | None, by: str,
+                     storage_class: str, quota_tib: int, tag_synced: bool = True) -> None:
+        with self.db.tx() as c:
+            c.execute(
+                "INSERT INTO buckets (name, owner_uid, budget_number, created_at, created_by, "
+                "tag_synced, creation_known, location, storage_class, quota_tib) "
+                "VALUES (?, ?, ?, ?, ?, ?, 1, 'cloud', ?, ?)",
+                (name, owner_uid, budget_number, now(), by, int(tag_synced), storage_class,
+                 quota_tib))
+
+    def list_cloud(self, owner_uid: str | None = None) -> list[dict[str, Any]]:
+        if owner_uid is None:
+            return self.db.query("SELECT * FROM buckets WHERE location = 'cloud' ORDER BY name")
+        return self.db.query("SELECT * FROM buckets WHERE location = 'cloud' AND owner_uid = ? "
+                             "ORDER BY name", (owner_uid,))
+
+    def set_quota_tib(self, name: str, tib: int) -> bool:
+        with self.db.tx() as c:
+            return c.execute("UPDATE buckets SET quota_tib = ? WHERE name = ?",
+                             (tib, name)).rowcount > 0
+
+    def set_alerted(self, name: str, ts: str | None) -> bool:
+        with self.db.tx() as c:
+            return c.execute("UPDATE buckets SET over_quota_alert_at = ? WHERE name = ?",
+                             (ts, name)).rowcount > 0
 
     def set_budget_number(self, name: str, budget_number: str | None) -> bool:
         with self.db.tx() as c:

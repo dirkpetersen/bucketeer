@@ -147,6 +147,42 @@ class Mailer:
             sent.append(to)
         return sent, failed
 
+    def _build_over_quota(self, to: str, bucket: str, size_tib: float, quota_tib: int,
+                          as_of: str) -> EmailMessage:
+        s = self.s
+        msg = EmailMessage()
+        msg["From"] = s.smtp_from
+        msg["To"] = to
+        msg["Subject"] = f"Cloud bucket {_clean(bucket, 63)} is over its quota"
+        msg.set_content(
+            f"Your cloud (AWS) bucket \"{_clean(bucket, 63)}\" holds about {size_tib:,.2f} TiB "
+            f"(as of {_clean(as_of, 10)}), more than its quota of {quota_tib:,} TiB.\n\n"
+            "AWS does not stop uploads at the quota, and the real AWS cost is billed. Raise the "
+            "quota with \"Change quota\" or delete data you no longer need.\n\n"
+            f"{s.app_url}\n\nYou get this reminder at most once a week per bucket.\n")
+        return msg
+
+    async def send_over_quota(self, to: str, bucket: str, size_tib: float, quota_tib: int,
+                              as_of: str):
+        """True (sent), False (failed or no usable address, logged) or None (email off)."""
+        if not self.enabled:
+            log.info("over-quota alert for %s not sent: email is off (SMTP_FROM empty)",
+                     _clean(bucket, 63))
+            return None
+        to = (to or "").strip()
+        if not to or any(c in to for c in "\r\n<>,;\" "):
+            log.info("over-quota alert for %s not sent: no usable address", _clean(bucket, 63))
+            return False
+        try:
+            await asyncio.to_thread(
+                self._send, self._build_over_quota(to, bucket, size_tib, quota_tib, as_of))
+        except Exception as e:  # noqa: BLE001  logged; retried the next day
+            log.warning("over-quota alert to %s for %s failed: %s: %s", to, _clean(bucket, 63),
+                        type(e).__name__, _clean(str(e), 200))
+            return False
+        log.info("over-quota alert sent to %s for %s", to, _clean(bucket, 63))
+        return True
+
     async def send_share_invite(self, to: str, owner_name: str, bucket: str, access: str):
         if not self.enabled:
             log.info("share invitation for bucket %s not sent: email is off (SMTP_FROM empty)",

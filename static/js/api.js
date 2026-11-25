@@ -242,6 +242,21 @@ export const setBucketBudget = (name, budgetNumber) =>
 // limit carries {remainingTiB, freesUpAt} on ApiError.body.
 export const setOwnBucketQuota = (name, quotaTiB) =>
   api(`/buckets/${encodeURIComponent(name)}/quota`, { method: "PUT", json: { quotaTiB } });
+// Cloud (AWS) buckets, P6-10. list -> {buckets: [{name, fullName, storageClass, product, quotaTiB,
+// monthlyCost, bytes|null, sizeAsOf|null, estimatedCost|null, overQuota, createdAt, budgetNumber,
+// budgetMissing, tagPending}], region, currency}. options -> {prefix, maxNameLength, region,
+// refused, storageClasses: [{id, awsClass, product}], defaultStorageClass, defaultBudgetNumber,
+// budgetRequired, budgetExample, quota}. check -> {name, fullName, available, status, message,
+// suggestions: [{name, fullName}]}. Delete works for empty buckets only (409 notEmpty, objects).
+export const listCloudBuckets = () => api("/cloud/buckets");
+export const cloudBucketOptions = () => api("/cloud/buckets/options");
+export const checkCloudBucketName = (name) => api(`/cloud/buckets/check?name=${encodeURIComponent(name)}`);
+export const createCloudBucket = (body) => api("/cloud/buckets", { method: "POST", json: body });
+export const setCloudBucketQuota = (name, quotaTiB) =>
+  api(`/cloud/buckets/${encodeURIComponent(name)}/quota`, { method: "PUT", json: { quotaTiB } });
+export const setCloudBucketBudget = (name, budgetNumber) =>
+  api(`/cloud/buckets/${encodeURIComponent(name)}/budget`, { method: "PUT", json: { budgetNumber } });
+export const deleteCloudBucket = (name) => api(`/cloud/buckets/${encodeURIComponent(name)}`, { method: "DELETE" });
 // Bucket notifications (Advanced). get -> {notifications: [{id, endpoint|null, managed, kind, topic,
 // events, prefix|null, suffix|null}], endpoints: [{name, type}], etag}. put sends {notifications, etag}:
 // managed {id, endpoint, events, prefix?, suffix?}, external kept as {id, external: true}. A 422 body has
