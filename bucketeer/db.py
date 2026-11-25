@@ -251,6 +251,26 @@ MIGRATIONS: list[Migration] = [
     """
     ALTER TABLE buckets ADD COLUMN creation_known INTEGER NOT NULL DEFAULT 1;
     """,
+    # v16: bucket quota changes (whole TiB), for the weekly increase limit per person
+    # (`bucket_quota.py`). `increase` = max(new - old, 0); only rows with `counted = 1` (a
+    # person changing their own bucket) count; admin changes are recorded with 0. Losing
+    # this table only resets the rolling week.
+    """
+    CREATE TABLE quota_changes (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts        TEXT NOT NULL,          -- UTC ISO time
+        person    TEXT,                   -- AD username of the person charged (lowercase)
+        uid       TEXT NOT NULL,          -- bucket owner's RGW uid
+        bucket    TEXT NOT NULL,          -- tenant-qualified bucket name
+        location  TEXT NOT NULL DEFAULT 'onprem',
+        old_tib   INTEGER,                -- null: no quota (unlimited) or a new bucket
+        new_tib   INTEGER,                -- null: no quota (admin switched it off)
+        increase  INTEGER NOT NULL DEFAULT 0,
+        counted   INTEGER NOT NULL DEFAULT 1,
+        actor     TEXT NOT NULL
+    );
+    CREATE INDEX quota_changes_person ON quota_changes (person, ts);
+    """,
 ]
 
 _MISSING: Any = object()
@@ -336,6 +356,7 @@ class Database:
         self.delete_jobs = BucketDeleteJobs(self)
         self.setup_tokens = SetupTokens(self)
         self.usage = UsageDaily(self)
+        self.quota_changes = QuotaChanges(self)
         self.audit = AuditLog(self)
 
     # -- plumbing -----------------------------------------------------------
@@ -1095,6 +1116,30 @@ class UsageDaily(_Repo):
     def between(self, first: str, last: str) -> list[dict[str, Any]]:
         return self.db.query("SELECT day, bucket, owner, bytes, quota_bytes FROM usage_daily "
                              "WHERE day BETWEEN ? AND ? ORDER BY day", (first, last))
+
+
+class QuotaChanges(_Repo):
+    """Bucket quota changes in whole TiB (the weekly increase limit's record)."""
+
+    def add(self, *, person: str | None, uid: str, bucket: str, old_tib: int | None,
+            new_tib: int | None, actor: str, counted: bool = True, location: str = "onprem",
+            ts: str | None = None) -> int:
+        increase = max(0, (new_tib or 0) - (old_tib or 0)) if new_tib is not None else 0
+        with self.db.tx() as c:
+            return c.execute(
+                "INSERT INTO quota_changes (ts, person, uid, bucket, location, old_tib, "
+                "new_tib, increase, counted, actor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (ts or now(), person, uid, bucket, location, old_tib, new_tib, increase,
+                 1 if counted else 0, actor)).lastrowid
+
+    def increases_since(self, person: str, since: str) -> list[dict[str, Any]]:
+        """The counted increases of `person` after `since` (UTC ISO), oldest first."""
+        return self.db.query(
+            "SELECT ts, bucket, increase FROM quota_changes WHERE person = ? AND counted = 1 "
+            "AND increase > 0 AND ts > ? ORDER BY ts", (person, since))
+
+    def list(self, limit: int = 100) -> list[dict[str, Any]]:
+        return self.db.query("SELECT * FROM quota_changes ORDER BY id DESC LIMIT ?", (limit,))
 
 
 class AuditLog(_Repo):

@@ -66,8 +66,10 @@ def test_create_uses_the_users_own_key_and_no_admin_call(env):
     r = create(env.alice)
     assert r.status_code == 201 and r.json()["versioning"] == "enabled"
     assert set(env.used) == {ALICE_KEY}
-    assert env.mutations() == [] and env.mutations("/s3/") == []
-    assert [m for m in env.transport.raw_calls if m[0] == "PUT" and "bucket" in m[1]] == []
+    # the only admin-plane write is the bucket quota (P6-4); the bucket itself came via S3
+    assert env.mutations() == [("PUT", "/api/s3/buckets/alice-new/quota")]
+    assert [m for m in env.transport.raw_calls if m[0] == "PUT" and "bucket" in m[1]
+            and "quota" not in m[1]] == []
     # the mirror made it visible to the admin plane, with the creating key's owner
     assert env.croit_state.buckets["alice-new"].owner == "alice"
     assert env.croit_state.buckets["alice-new"].versioning == "ENABLED"

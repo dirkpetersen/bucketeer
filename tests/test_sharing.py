@@ -10,7 +10,6 @@ import logging
 import pytest
 
 from bucketeer import s3docs, sharing
-from bucketeer.policy_settings import DEFAULT_QUOTA
 from bucketeer.rgw_user import READY, RgwAccount
 
 from .test_auth import SECRET_PW, TEAM_GROUP, USERS_GROUP
@@ -147,7 +146,7 @@ def test_share_creates_account_on_the_spot(env):
     assert r.status_code == 201 and r.json()["accountCreated"] is True
     u = env.croit_state.users["erin"]
     assert u.name == "Erin E" and u.email == ""  # never an email
-    assert u.user_quota["enabled"] is True and u.user_quota["maxSize"] == DEFAULT_QUOTA["maxSize"]
+    assert u.user_quota["enabled"] is False  # unlimited: bucket quotas limit growth (P6-4)
     assert sids(env) == ["bucketeer-share-u-erin"]
     created = [a for a in env.audit("rgw.user.") if a["action"] == "rgw.user.create"]
     assert created and created[-1]["target"] == "erin"

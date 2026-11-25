@@ -9,8 +9,10 @@ Stored in the `settings` table (JSON values, caller-supplied defaults):
 
 * `naming`                 {prefix: str, pattern: str}
 * `placement`              {default: str|None, allowed: [str]}
-* `default_quota`          absent = the built-in default (1 TiB, `DEFAULT_QUOTA`), else
-                           {enabled, maxSize, maxObjects}; `enabled: false` = unlimited
+* `default_quota`          LEGACY (before P6-4): the user quota new accounts used to get;
+                           absent = 1 TiB (`DEFAULT_QUOTA`). Only the one-time
+                           `bucket_quota.unlimit_user_quotas` step reads it now.
+* `bucket_quota`           {defaultQuotaTiB, maxWeeklyQuotaIncreaseTiB} (`bucket_quota.py`)
 * `budget_number`          {pattern, example} (see `budget.py`)
 * `notification_endpoints` [{name, type, url, topic, verifyTls}]
 
@@ -54,7 +56,10 @@ QUOTA_KEY = "default_quota"
 ENDPOINTS_KEY = "notification_endpoints"
 
 DEFAULT_NAMING: dict[str, str] = {"prefix": "", "pattern": ""}
-DEFAULT_QUOTA: dict[str, Any] = {"enabled": True, "maxSize": 2**40, "maxObjects": None}  # Q4
+# Legacy (Q4, before P6-4): the user quota new accounts used to get.
+DEFAULT_QUOTA: dict[str, Any] = {"enabled": True, "maxSize": 2**40, "maxObjects": None}
+# Since P6-4 every new account's user quota is unlimited; bucket quotas replace it.
+UNLIMITED_USER_QUOTA: dict[str, Any] = {"enabled": False, "maxSize": None, "maxObjects": None}
 DEFAULT_PLACEMENT: dict[str, Any] = {"default": None, "allowed": []}
 
 
@@ -469,9 +474,9 @@ def quota_or_default(stored: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def effective_default_quota(settings_repo) -> dict[str, Any]:
-    """The quota new users get: the admin's value, else `DEFAULT_QUOTA` (1 TiB,
-    objects unlimited). The one source of truth; an explicit unlimited is stored
-    (`enabled: false`) and is not the same as unset."""
+    """LEGACY: the user quota new accounts got before P6-4 (the admin's old value, else
+    `DEFAULT_QUOTA`, 1 TiB). Only `bucket_quota.unlimit_user_quotas` uses it, to recognise
+    accounts that still carry it."""
     return quota_or_default(load_default_quota(settings_repo))
 
 

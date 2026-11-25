@@ -21,7 +21,7 @@
    text. Start a signed session cookie.
 
 The RGW user id is the lowercased `sAMAccountName`. The first login creates the RGW user
-with the default quota.
+with an unlimited user quota; each bucket has its own quota in whole TiB.
 
 ## Request path
 

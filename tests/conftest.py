@@ -94,6 +94,14 @@ def no_billing_sampler(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_unlimit_on_start(monkeypatch):
+    """The one-time unlimited user quota step is called explicitly in tests."""
+    from bucketeer import bucket_quota
+
+    monkeypatch.setattr(bucket_quota, "UNLIMIT_ON_START", False)
+
+
+@pytest.fixture(autouse=True)
 def no_budget_gate(monkeypatch):
     """The default-budget gate is tested in tests/test_budget_gate.py."""
     from bucketeer import profile

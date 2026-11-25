@@ -43,7 +43,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from . import s3docs
+from . import catalog, s3docs
 from .admin import croit_http_error
 from .auth import SessionUser, require_admin
 from .croit import CroitClientError
@@ -64,7 +64,6 @@ LOCATION = "bucketeer-location"
 KEYS = (BUDGET, BUCKET, OWNER, OWNER_EMAIL, CREATOR, CREATED, QUOTA, PRODUCT, LOCATION)
 
 ONPREM = "onprem"
-DEFAULT_PRODUCT = "Tier-3-S3"
 MAX_TAGS = 50
 VALUE_MAX = 256
 TIB = 2**40
@@ -74,10 +73,10 @@ BULK_CONCURRENCY = 4
 REPORT_MAX = 200  # skipped / failed entries returned
 
 
-def product_name(location: str = ONPREM) -> str:
-    """The product of a bucket. One place, so the admin product catalog (P6-4) can
-    replace the constant."""
-    return DEFAULT_PRODUCT
+def product_name(location: str = ONPREM, products: list[dict] | None = None) -> str:
+    """The product name of a bucket at `location` from the admin product catalog
+    (`catalog.load_catalog`); without one, the default catalog (`Tier-3-S3` on premises)."""
+    return catalog.product_for(products or catalog.build_catalog(None), location)["name"]
 
 
 def tag_value_ok(value: str) -> bool:
@@ -207,6 +206,7 @@ async def sync(app, uid: str, full: str, *, owner_email: str | None = None,
                      else None) if row else creator,
             created=row.get("created_at") if row and row.get("creation_known", 1) else None,
             quota=quota_value(stats.get("bucket_quota")) if stats is not None else None,
+            product=product_name(ONPREM, await db.run(catalog.load_catalog, db)),
         )
         changed = await app.state.s3.call(uid, write, _short(full), facts)
         return complete, bool(changed)

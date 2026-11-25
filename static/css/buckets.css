@@ -461,3 +461,31 @@
 .bk-job-msg { color: var(--text-muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .bk-job-stopped .btn { flex: none; }
 @media (max-width: 34em) { .bk-job-stopped { flex-wrap: wrap; } }
+
+/* Bucket quota (P6-4): the cost line in the row, and the TiB picker in the create and
+   "Change quota" dialogs (components/quota-picker.js). */
+.bk-cost { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0 var(--sp-1); font-size: var(--fs-xs); color: var(--text-muted); }
+.bk-cost b { color: var(--text); font-weight: 600; }
+.bk-cost-l { font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
+.bk-cost-m { color: var(--accent-text); font-weight: 600; }
+.bk-cost[data-kind="none"] { color: var(--accent-text); font-weight: 560; }
+.bk-cost svg { width: 0.9rem; height: 0.9rem; flex: none; }
+
+.qp { display: grid; gap: var(--sp-2); }
+.qp-row { display: flex; align-items: stretch; gap: var(--sp-2); }
+.qp-row .qp-step { min-width: 2.75rem; min-height: 2.75rem; justify-content: center; padding: 0; }
+.qp-box { position: relative; flex: 1 1 auto; min-width: 0; max-width: 12rem; }
+.qp-box .qp-input { width: 100%; padding-right: 3.25rem; font-variant-numeric: tabular-nums; text-align: right; }
+.qp-unit { position: absolute; inset-block: 0; right: var(--sp-3); display: flex; align-items: center;
+  font-size: var(--fs-xs); font-weight: 650; letter-spacing: 0.06em; color: var(--text-muted); pointer-events: none; }
+.qp-cost { margin: 0; padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); background: var(--surface-2);
+  border: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-muted); font-variant-numeric: tabular-nums;
+  transition: border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out); }
+.qp-cost b { color: var(--text); font-weight: 700; font-size: var(--fs-md); }
+.qp-cost small { display: block; margin-top: var(--sp-1); font-size: var(--fs-xs); }
+.qp-limit { display: flex; gap: var(--sp-2); align-items: flex-start; margin: 0; }
+.qp-limit:empty { display: none; }
+.qp-limit[data-over="true"] { color: var(--accent-text); font-weight: 560; }
+.qp-limit svg { width: 1rem; height: 1rem; flex: none; margin-top: 0.1rem; }
+.qp .set-err[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .qp-cost { transition: none; } }

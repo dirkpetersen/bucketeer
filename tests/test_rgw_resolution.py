@@ -36,6 +36,7 @@ from .test_auth import SECRET_PW, USERS_GROUP, FakeLdap, make_settings
 H = {"X-Requested-With": "bucketeer"}
 TOKEN = REQUIRED["croit_api_token"]
 TIB = 2**40
+UNLIMITED = {"enabled": False, "maxSize": None, "maxObjects": None}
 
 
 class Env:
@@ -188,24 +189,22 @@ def test_uid_is_never_derived_from_the_email(env):
 # -- auto-create and quota ------------------------------------------------------------
 
 
-def test_auto_create_applies_1_tib_by_default_and_audits(env):
+def test_auto_create_sets_an_unlimited_user_quota_and_audits(env):
+    """P6-4: bucket quotas replace the account-wide user quota."""
     a = env.resolve("dave", "Dave X")
     assert a.created and a.status == "ready"
-    assert a.quota == {"enabled": True, "maxSize": TIB, "maxObjects": None}
-    q = env.users["dave"].user_quota
-    assert q["enabled"] and q["maxSize"] == TIB and q["maxObjects"] < 0
+    assert a.quota == {"enabled": False, "maxSize": None, "maxObjects": None}
+    assert env.users["dave"].user_quota["enabled"] is False
     (row,) = env.audit()
     assert (row["action"], row["actor"], row["target"]) == ("rgw.user.create", "dave", "dave")
-    assert row["details"] == {
-        "quota": {"enabled": True, "maxSize": TIB, "maxObjects": None}, "quota_applied": True,
-    }
+    assert row["details"] == {"quota": UNLIMITED, "quota_applied": True}
 
 
-def test_auto_create_uses_the_admin_default_quota(env):
+def test_legacy_default_quota_setting_no_longer_applies(env):
     env.db.settings.set(QUOTA_KEY, {"enabled": True, "maxSize": 5 * 2**30, "maxObjects": 1000})
     a = env.resolve("dave")
-    assert a.quota == {"enabled": True, "maxSize": 5 * 2**30, "maxObjects": 1000}
-    assert env.audit()[0]["details"]["quota"]["maxObjects"] == 1000
+    assert a.quota == {"enabled": False, "maxSize": None, "maxObjects": None}
+    assert env.audit()[0]["details"]["quota"]["enabled"] is False
 
 
 def test_admin_default_with_quota_disabled_is_honored(env):
@@ -315,10 +314,12 @@ def test_quota_failure_leaves_unavailable_and_is_retried_next_time(env):
         if req.method == "PUT" and req.url.path.endswith("/quota") else None
     )
     assert env.resolve("dave").status == "unavailable"
-    assert "dave" in env.users and not env.users["dave"].user_quota["enabled"]
+    assert "dave" in env.users
+    env.users["dave"].user_quota.update(enabled=True, maxSize=TIB)  # e.g. a cluster default
     env.transport.fail = None
     a = env.resolve("dave")
-    assert a.status == "ready" and env.users["dave"].user_quota["maxSize"] == TIB
+    assert a.status == "ready" and env.users["dave"].user_quota["enabled"] is False
+    assert env.audit()[0]["details"] == {"quota": UNLIMITED, "quota_applied": True}
     assert len(env.posts()) == 1  # not created twice
 
 
@@ -367,7 +368,7 @@ def test_account_endpoint_first_login_creates_user_and_hides_keys(env):
     body = r.json()
     assert body["uid"] == "dave" and body["status"] == "ready" and body["created"] is True
     assert body["displayName"] == "Dave X"
-    assert body["quota"] == {"enabled": True, "maxSize": TIB, "maxObjects": None}
+    assert body["quota"] == {"enabled": False, "maxSize": None, "maxObjects": None}
     assert "key" not in r.text.lower() and "secret" not in r.text.lower()
     assert r.headers["cache-control"] == "no-store"
 
@@ -632,16 +633,17 @@ def test_pending_default_quota_survives_a_restart(env):
         if req.method == "PUT" and req.url.path.endswith("/quota") else None
     )
     assert env.resolve("dave").status == "unavailable"
+    env.users["dave"].user_quota.update(enabled=True, maxSize=TIB)
     env.transport.fail = None
     fresh = RgwResolver(env.rgw.croit, lambda: env.db, env.rgw.tenant)  # "restart": no memory
     a = asyncio.run(fresh.resolve("dave", "Dave X"))
-    assert a.status == "ready" and a.quota["maxSize"] == TIB
-    assert env.users["dave"].user_quota["maxSize"] == TIB
+    assert a.status == "ready" and a.quota["enabled"] is False
+    assert env.users["dave"].user_quota["enabled"] is False
     assert env.audit()[0]["action"] == "rgw.user.default_quota"
-    # settled: an admin who later removes the quota is not overruled
-    env.users["dave"].user_quota["enabled"] = False
+    # settled: an admin who later sets a user quota is not overruled
+    env.users["dave"].user_quota.update(enabled=True, maxSize=5 * TIB)
     fresh.invalidate()
-    assert asyncio.run(fresh.resolve("dave", "Dave X")).quota["enabled"] is False
+    assert asyncio.run(fresh.resolve("dave", "Dave X")).quota["enabled"] is True
 
 
 def test_pending_quota_entry_survives_many_unrelated_audit_rows(env):
@@ -650,12 +652,13 @@ def test_pending_quota_entry_survives_many_unrelated_audit_rows(env):
         if req.method == "PUT" and req.url.path.endswith("/quota") else None
     )
     assert env.resolve("dave").status == "unavailable"
+    env.users["dave"].user_quota.update(enabled=True, maxSize=TIB)
     env.transport.fail = None
     for i in range(70):
         env.db.audit.add("x", "rgw.user.uid_taken", "rgw_user", "dave", {"n": i})
     fresh = RgwResolver(env.rgw.croit, lambda: env.db, env.rgw.tenant)
-    assert asyncio.run(fresh.resolve("dave", "Dave X")).quota["maxSize"] == TIB
-    assert env.users["dave"].user_quota["maxSize"] == TIB
+    assert asyncio.run(fresh.resolve("dave", "Dave X")).quota["enabled"] is False
+    assert env.users["dave"].user_quota["enabled"] is False
 
 
 def test_mapping_target_missing_audits_once_per_period(env):

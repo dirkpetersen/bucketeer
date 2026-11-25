@@ -42,6 +42,9 @@ SAMPLES: list[tuple[int, str, dict]] = [
                           "os": "linux", "created_at": T, "expires_at": T}),
     (12, "usage_daily", {"day": "2026-01-01", "bucket": "alice-data", "owner": "alice",
                          "bytes": 1024}),
+    (16, "quota_changes", {"id": 6, "ts": T, "person": "alice", "uid": "alice",
+                           "bucket": "alice-data", "location": "onprem", "old_tib": 1,
+                           "new_tib": 5, "increase": 4, "counted": 1, "actor": "alice"}),
 ]
 
 # Values a later migration fills in for rows that existed before it:

@@ -79,7 +79,7 @@ def test_create_writes_every_fact_with_the_owners_key(env):
         "bucketeer-budget": "WT-123", "bucketeer-bucket": "alice-new",
         "bucketeer-owner": "alice", "bucketeer-owner-email": "alice@example.org",
         "bucketeer-creator": "alice", "bucketeer-created": TODAY,
-        "bucketeer-quota": "unlimited", "bucketeer-product": "Tier-3-S3",
+        "bucketeer-quota": "1", "bucketeer-product": "Tier-3-S3",
         "bucketeer-location": "onprem"}
     assert set(env.used) == {ALICE_KEY}
     assert env.db.buckets.get("alice-new")["tag_synced"] == 1
@@ -117,7 +117,7 @@ def test_unreadable_quota_leaves_the_row_unsynced(env, monkeypatch):
     monkeypatch.undo()
     r = env.alice.post("/api/buckets/reconcile", headers=H)
     assert r.json()["synced"] == ["alice-new"]
-    assert env.all_tags("alice-new")["bucketeer-quota"] == "unlimited"
+    assert env.all_tags("alice-new")["bucketeer-quota"] == "1"
 
 
 def test_budget_change_refreshes_facts_and_keeps_user_tags(env):

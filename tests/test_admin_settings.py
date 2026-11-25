@@ -31,7 +31,8 @@ ROUTES = [
     ("PUT", f"{S}/naming", {"prefix": "", "pattern": ""}),
     ("POST", f"{S}/naming/test", {"name": "abc", "username": "alice"}),
     ("PUT", f"{S}/placement", {"default": None, "allowed": []}),
-    ("PUT", f"{S}/default-quota", {"enabled": False}),
+    ("PUT", f"{S}/bucket-quota", {"defaultQuotaTiB": 2}),
+    ("PUT", f"{S}/default-quota", {"quotaTiB": 2}),
     ("DELETE", f"{S}/default-quota", None),
     ("PUT", f"{S}/uid-mappings/dave", {"rgwUid": "dave-legacy"}),
     ("DELETE", f"{S}/uid-mappings/dave", None),
@@ -71,9 +72,11 @@ def test_defaults(env):
     assert r.status_code == 200
     d = r.json()
     assert d["naming"] == {"prefix": "", "pattern": ""}
-    one_tib = {"enabled": True, "maxSize": 2**40, "maxObjects": None}
-    assert d["defaultQuota"] == {"isSet": False, "quota": None, "effective": one_tib,
-                                 "default": one_tib}
+    assert d["bucketQuota"] == {
+        "defaultQuotaTiB": 1, "maxWeeklyQuotaIncreaseTiB": 100, "isSet": False,
+        "defaults": {"defaultQuotaTiB": 1, "maxWeeklyQuotaIncreaseTiB": 100},
+        "maxBucketTiB": 100_000, "maxWeeklyTiB": 100_000}
+    assert "defaultQuota" not in d
     assert d["budgetNumber"] == {"pattern": "", "example": ""}
     assert d["uidMappings"] == [] and d["notificationEndpoints"] == []
     p = d["placement"]
@@ -223,34 +226,40 @@ def test_rgw_placement_format_validation(env, body):
 # -- default quota -----------------------------------------------------------------------
 
 
-def test_default_quota_set_unset_and_zero(env):
-    r = put(env, "/default-quota", {"enabled": True, "maxSize": 5 * 2**30, "maxObjects": None})
-    stored = {"enabled": True, "maxSize": 5 * 2**30, "maxObjects": None}
-    assert r.json()["isSet"] is True and r.json()["quota"] == stored
-    assert r.json()["effective"] == stored
-    assert env.admin.get(S).json()["defaultQuota"]["isSet"] is True
-    r = put(env, "/default-quota", {"enabled": True, "maxSize": 0})  # 0 is a real limit
-    assert r.status_code == 200 and r.json()["quota"]["maxSize"] == 0
-    r = put(env, "/default-quota", {"enabled": False})  # explicitly unlimited != not set
-    assert r.json()["isSet"] is True and r.json()["quota"]["enabled"] is False
-    r = env.admin.delete(f"{S}/default-quota", headers=H)
-    assert r.json()["isSet"] is False and r.json()["quota"] is None
-    assert r.json()["effective"]["maxSize"] == 2**40  # unset = the 1 TiB default
-    assert env.admin.get(S).json()["defaultQuota"]["isSet"] is False
-    assert len(env.audit("admin.settings.default_quota")) == 4
-    # unsetting something not set is a no-op without an audit entry
-    env.admin.delete(f"{S}/default-quota", headers=H)
-    assert len(env.audit("admin.settings.default_quota")) == 4
+def test_bucket_quota_settings_partial_update_and_audit(env):
+    r = put(env, "/bucket-quota", {"defaultQuotaTiB": 5})
+    assert r.status_code == 200
+    assert r.json()["defaultQuotaTiB"] == 5 and r.json()["maxWeeklyQuotaIncreaseTiB"] == 100
+    assert r.json()["isSet"] is True
+    r = put(env, "/bucket-quota", {"maxWeeklyQuotaIncreaseTiB": 40})
+    assert r.json()["defaultQuotaTiB"] == 5 and r.json()["maxWeeklyQuotaIncreaseTiB"] == 40
+    assert env.admin.get(S).json()["bucketQuota"]["maxWeeklyQuotaIncreaseTiB"] == 40
+    (last, first) = env.audit("admin.settings.bucket_quota")
+    assert first["details"]["before"]["defaultQuotaTiB"] == 1
+    assert last["details"]["after"] == {"defaultQuotaTiB": 5, "maxWeeklyQuotaIncreaseTiB": 40}
+    assert last["target"] == "bucket_quota" and last["target_type"] == "setting"
+    put(env, "/bucket-quota", {"maxWeeklyQuotaIncreaseTiB": 40})  # unchanged: no entry
+    assert len(env.audit("admin.settings.bucket_quota")) == 2
     assert env.transport.mutations() == []  # store only: croit untouched
 
 
+def test_old_default_quota_routes_set_the_default_bucket_quota(env):
+    r = put(env, "/default-quota", {"enabled": True, "maxSize": 3 * 2**40 + 1})  # rounds up
+    assert r.status_code == 200 and r.json()["defaultQuotaTiB"] == 4
+    assert put(env, "/default-quota", {"quotaTiB": 2}).json()["defaultQuotaTiB"] == 2
+    assert put(env, "/default-quota", {"enabled": False}).status_code == 422
+    r = env.admin.delete(f"{S}/default-quota", headers=H)
+    assert r.json()["defaultQuotaTiB"] == 1
+    assert len(env.audit("admin.settings.bucket_quota")) == 3
+
+
 @pytest.mark.parametrize("body", [
-    {"enabled": True}, {"enabled": True, "maxSize": -1}, {"enabled": True, "maxSize": 2**62 + 1},
-    {"enabled": True, "maxObjects": 1.5}, {"enabled": "yes", "maxSize": 1}, {"maxSize": 1},
-    {"enabled": True, "maxSize": "5"}, {"enabled": True, "maxSize": True},
+    {}, {"defaultQuotaTiB": 0}, {"defaultQuotaTiB": 100_001}, {"defaultQuotaTiB": 1.5},
+    {"defaultQuotaTiB": True}, {"defaultQuotaTiB": "5"}, {"maxWeeklyQuotaIncreaseTiB": 0},
+    {"maxWeeklyQuotaIncreaseTiB": 100_001}, {"other": 1},
 ])
-def test_default_quota_validation(env, body):
-    assert put(env, "/default-quota", body).status_code == 422
+def test_bucket_quota_validation(env, body):
+    assert put(env, "/bucket-quota", body).status_code == 422
     assert env.db.settings.all() == {}
 
 
@@ -408,11 +417,11 @@ def test_no_secrets_anywhere(env):
 
 def test_one_audit_entry_per_change_and_actor(env):
     put(env, "/naming", {"prefix": "a-"})
-    put(env, "/default-quota", {"enabled": True, "maxSize": 1})
+    put(env, "/bucket-quota", {"defaultQuotaTiB": 3})
     put(env, "/placement", {"default": None, "allowed": []})
     acts = [(a["action"], a["actor"]) for a in env.audit("admin.settings")]
     assert sorted(acts) == [
-        ("admin.settings.default_quota", "bob"),
+        ("admin.settings.bucket_quota", "bob"),
         ("admin.settings.naming", "bob"),
         ("admin.settings.placement", "bob"),
     ]

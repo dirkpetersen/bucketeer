@@ -21,6 +21,7 @@ from . import (
     bucket_delete,
     bucket_facts,
     bucket_keys,
+    bucket_quota,
     buckets,
     cloud,
     cors,
@@ -120,6 +121,10 @@ def create_app(
         backups = None
         if backup.SCHEDULE_ON_START:  # nightly backup; never blocks startup or /health
             backups = asyncio.get_running_loop().create_task(_app.state.backup.schedule_loop())
+        unlimit = None
+        if bucket_quota.UNLIMIT_ON_START:  # one-time: unlimited user quotas; in background
+            unlimit = asyncio.get_running_loop().create_task(
+                bucket_quota.unlimit_on_start(_app))
         schedule = None
         if offboarding.SCHEDULE_ON_START:  # background: never blocks startup or /health
             schedule = asyncio.get_running_loop().create_task(
@@ -127,7 +132,7 @@ def create_app(
         try:
             yield
         finally:
-            for task in (cloud_check, sampler, reporter):
+            for task in (cloud_check, sampler, reporter, unlimit):
                 if task is not None:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
