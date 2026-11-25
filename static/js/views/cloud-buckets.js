@@ -1,9 +1,9 @@
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
-import { cloudBucketOptions, deleteCloudBucket, listCloudBuckets, setCloudBucketBudget, setCloudBucketQuota } from "../api.js";
+import { cloudBucketOptions, deleteCloudBucket, listCloudBuckets, listCloudDeleteJobs, retryCloudDeleteJob, setCloudBucketBudget, setCloudBucketQuota } from "../api.js";
 import { formatBytes } from "../format.js";
 import { toast } from "../components/toast.js";
-import { confirmDialog, nameSpan } from "../components/confirm-dialog.js";
+import { deleteBucketDialog, deleteJobBlock } from "../components/bucket-delete.js";
 import { cloudBucketDialog } from "../components/cloud-bucket-dialog.js";
 import { budgetDialog } from "../components/budget-dialog.js";
 import { bucketQuotaDialog } from "../components/bucket-quota-dialog.js";
@@ -13,7 +13,8 @@ import { menuButton } from "../components/menu-button.js";
 // The Buckets card while the effective location is Cloud (P6-10): the person's AWS buckets with
 // their storage class, size from CloudWatch (daily, a day or two late), quota and the estimated
 // monthly cost from the catalog price (the real AWS cost is billed). Create, change quota or
-// budget number, delete (empty buckets only).
+// budget number, delete (the typed name always; a bucket with content is emptied by a
+// background job with a temporary key of the owner, P6-13).
 
 const CLASS = { intelligent: "Intelligent-Tiering", deep_archive: "Deep Archive" };
 
@@ -64,7 +65,7 @@ function usageBlock(b) {
   return out;
 }
 
-function row(b, acts, busy) {
+function row(b, acts, busy, job) {
   const meta = h("div", { class: "bk-meta" });
   const created = b.createdAt ? new Date(b.createdAt) : null;
   if (created && !Number.isNaN(created.getTime())) {
@@ -81,13 +82,14 @@ function row(b, acts, busy) {
     items: [
       { label: "Change quota…", icon: "sliders", hint: `Now ${formatTiB(b.quotaTiB)}`, onSelect: () => acts.quota(b) },
       { label: "Change budget number…", icon: "edit", hint: "The index or worktag the AWS cost is charged to", onSelect: () => acts.budget(b) },
-      { label: "Delete bucket", icon: "trash", danger: true, separatorBefore: true, hint: "Only an empty bucket can be deleted", onSelect: () => acts.remove(b) },
+      { label: "Delete bucket", icon: "trash", danger: true, separatorBefore: true, disabled: !!job && (job.state === "queued" || job.state === "running"), onSelect: () => acts.remove(b) },
     ],
   });
-  return h("li", { class: "bk-row", "data-busy": String(!!busy) },
+  const deleting = !!job && (job.state === "queued" || job.state === "running");
+  return h("li", { class: "bk-row", "data-busy": String(!!busy), "data-deleting": String(deleting) },
     h("span", { class: "bk-ic", "aria-hidden": "true" }, icon("cloud")),
     h("div", { class: "bk-main" }, h("b", { class: "bk-name", text: b.name, title: b.fullName }),
-      h("code", { class: "cbk-full", text: b.fullName }), meta),
+      h("code", { class: "cbk-full", text: b.fullName }), meta, job ? deleteJobBlock(job, acts.retry) : null),
     usageBlock(b),
     h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, more)));
 }
@@ -96,6 +98,8 @@ export function cloudBucketsCard() {
   let buckets = [];
   let region = "";
   const busy = new Set();
+  const jobs = new Map(); // short bucket name -> its delete job (not done)
+  let pollTimer = null;
   const body = h("div", { class: "bk-body", "aria-live": "polite" }, skeleton());
   const createBtn = h("button", { class: "btn btn-primary btn-sm", type: "button", disabled: true }, icon("plus"), "Create cloud bucket");
   const count = h("span", { class: "chip", hidden: true });
@@ -116,8 +120,8 @@ export function cloudBucketsCard() {
         h("div", { class: "empty-acts" }, h("button", { class: "btn btn-primary", type: "button", on: { click: create } }, icon("plus"), "Create your first cloud bucket"))));
       return;
     }
-    const acts = { quota: changeQuota, budget: changeBudget, remove };
-    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, acts, busy.has(b.name)))));
+    const acts = { quota: changeQuota, budget: changeBudget, remove, retry: retryJob };
+    body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, acts, busy.has(b.name), jobs.get(b.name)))));
   }
 
   async function load({ quiet = false } = {}) {
@@ -133,7 +137,50 @@ export function cloudBucketsCard() {
       return;
     }
     createBtn.disabled = false;
+    await refreshJobs({ repaint: false });
     paint();
+  }
+
+  // Delete jobs run on the server; poll while one is active, stop when none is or the card is gone.
+  async function refreshJobs({ repaint = true } = {}) {
+    let list;
+    try {
+      list = (await listCloudDeleteJobs()).jobs;
+    } catch {
+      return;
+    }
+    const prev = new Map(jobs);
+    jobs.clear();
+    for (const j of list) if (j.state !== "done") jobs.set(j.bucket, j);
+    let finished = false;
+    for (const [name, was] of prev) {
+      if (was.state !== "queued" && was.state !== "running") continue;
+      const now = jobs.get(name);
+      if (!now) finished = true;
+      else if (now.state === "failed" || now.state === "blocked") toast.error(`Deleting ${name} stopped: ${now.message || "try again."}`, { timeout: 12000 });
+    }
+    if (finished) toast.show("Cloud bucket deleted.");
+    schedulePoll();
+    if (finished) await load({ quiet: true });
+    else if (repaint && buckets.length) paint();
+  }
+
+  function schedulePoll() {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+    if (![...jobs.values()].some((j) => j.state === "queued" || j.state === "running")) return;
+    pollTimer = setTimeout(() => { if (card.isConnected) refreshJobs(); }, 3000);
+  }
+
+  async function retryJob(job) {
+    try {
+      const res = await retryCloudDeleteJob(job.id);
+      jobs.set(res.job.bucket, res.job);
+      paint();
+      schedulePoll();
+    } catch (err) {
+      if (err.status !== 401) toast.error(err.message);
+    }
   }
 
   async function create() {
@@ -168,27 +215,47 @@ export function cloudBucketsCard() {
     load({ quiet: true });
   }
 
+  // Every delete asks for the typed name (owner 2026-11-25). The first request only asks the
+  // server what the bucket holds (a live listing plus AWS's daily counts), so the dialog can say.
   async function remove(b) {
-    const ok = await confirmDialog({
-      title: ["Delete cloud bucket ", nameSpan(b.name), "?"], danger: true, confirmLabel: "Delete bucket",
-      message: "Only an empty bucket can be deleted here. Its name becomes available to everyone on AWS again.",
+    busy.add(b.name);
+    paint();
+    let found = null;
+    try {
+      await deleteCloudBucket(b.name);
+    } catch (err) {
+      if (err.status === 409 && err.body?.requiresConfirmation) found = err.body;
+      else if (err.status === 409 && err.body?.job) {
+        jobs.set(err.body.job.bucket, err.body.job);
+        schedulePoll();
+      } else if (err.status !== 401) toast.error(err.message);
+    }
+    busy.delete(b.name);
+    paint();
+    if (!found) return;
+    const ok = await deleteBucketDialog({
+      name: b.name, objects: found.objects || 0, bytes: found.bytes, more: !!found.more,
+      storageClass: found.storageClass || b.storageClass, cloud: true, countsMayLag: !!found.countsMayLag,
     });
     if (!ok) return;
     busy.add(b.name);
     paint();
     try {
-      await deleteCloudBucket(b.name);
+      const res = await deleteCloudBucket(b.name, b.name);
+      if (res?.job) {
+        jobs.set(res.job.bucket, res.job);
+        toast.show(`Deleting ${b.name} in the background.`);
+        busy.delete(b.name);
+        paint();
+        schedulePoll();
+        return;
+      }
       toast.show(`Cloud bucket ${b.name} deleted.`);
     } catch (err) {
-      if (err.status === 409 && err.body?.notEmpty) {
-        const n = err.body.objects;
-        await confirmDialog({
-          title: [nameSpan(b.name), " still holds data"], confirmLabel: "OK", cancelLabel: "Close",
-          message: `${n ? `It holds ${n}${err.body.more ? " or more" : ""} ${n === 1 ? "object" : "objects"}. ` : "It still holds old versions or delete markers. "}${err.body.detail}`,
-        });
-      } else if (err.status !== 401) {
-        toast.error(err.message);
-      }
+      if (err.status === 409 && err.body?.job) {
+        jobs.set(err.body.job.bucket, err.body.job);
+        schedulePoll();
+      } else if (err.status !== 401) toast.error(err.message);
     }
     busy.delete(b.name);
     load({ quiet: true });

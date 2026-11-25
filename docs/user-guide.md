@@ -128,10 +128,14 @@ When you work in **Cloud**, the bucket card lists your **cloud buckets** at AWS 
   reports it once a day (it can lag a day or two) and the estimated cost now.
 - **Access.** Use your cloud key (profile `s3-cloud`, see [Cloud keys](#cloud-keys)). A new
   bucket can take a few seconds before your key works on it.
-- **Delete.** Bucketeer deletes **empty** cloud buckets only. Empty it first with your own
-  cloud key and an S3 tool, old versions included (for example
-  `aws --profile s3-cloud s3 rm s3://<bucket> --recursive`, then delete the old versions),
-  then choose **More, Delete bucket**.
+- **Delete.** **More, Delete bucket** works as on premises (see
+  [Deleting a bucket](#deleting-a-bucket)). The number of objects and the space come from
+  AWS's daily figures, so they can lag a day. A cloud bucket with data is emptied in the
+  background with a temporary key of your own cloud account, which Bucketeer deletes again
+  when it is done. AWS allows two keys per person: if you already have two cloud keys, the
+  deletion stops and asks you to delete one of them first, then **Retry**. **Deep Archive:**
+  objects stored for less than 180 days are still charged for the full 180 days when you
+  delete them (AWS's early deletion fee).
 - Sharing, bucket keys and share links are on premises only for now.
 
 ## 5. Everyday tasks
@@ -146,7 +150,17 @@ Each bucket row has the tasks you need most. Rare ones are in the **More** menu.
 | Delete old files or old versions automatically | **More, Lifecycle** |
 | Change the budget number | **More, Change budget number** |
 | Make a bucket bigger or smaller | **More, Change quota**. The monthly cost is shown as you choose. |
-| Delete a bucket | **More, Delete**. A bucket with data needs you to type its name. |
+| Delete a bucket | **More, Delete bucket**. Type the bucket's name to confirm (see below). |
+
+### Deleting a bucket
+
+Choose **More, Delete bucket** and type the bucket's name: the **Delete** button works only
+when the name matches, for an empty bucket too. When the bucket still holds data, the
+dialog says how much, for example "This bucket holds 1,204 objects (3.2 GiB). They will be
+deleted permanently, with every old version." This cannot be undone. A large bucket is
+emptied in the background: its row shows the progress, and the bucket disappears when it is
+gone. Files under object lock or a legal hold are never removed; the deletion then stops,
+says until when the lock lasts, and offers **Retry** for later.
 
 ### Quota and the weekly limit
 

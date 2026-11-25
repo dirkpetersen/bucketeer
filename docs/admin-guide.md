@@ -373,9 +373,11 @@ is deleted again (audit `cloud.bucket.create_failed`). The quota is kept in Buck
 database and the `bucketeer-quota` tag (AWS has no bucket quota) and counts toward the same
 weekly limit as on premises. Once a day Bucketeer reads each bucket's size from CloudWatch;
 a bucket over its quota gets an email to its owner, at most once a week
-(`cloud.bucket.over_quota`; with email off only the audit entry). Bucketeer deletes only
-empty cloud buckets; people empty them with their own key. Audit: `cloud.bucket.create`,
-`quota`, `budget`, `delete`.
+(`cloud.bucket.over_quota`; with email off only the audit entry). Deleting a cloud bucket
+needs its typed name; one with data is emptied by a background job that uses a temporary
+key of the owner's IAM user (deleted again afterwards; a person with two keys is asked to
+delete one first). Audit: `cloud.bucket.create`, `quota`, `budget`, `delete`,
+`delete_started`, `delete_failed`, `delete_retry`.
 
 !!! note "Profile names changed"
     The on-premises profile on users' computers is now `s3-onprem` (`AWS_PROFILE_NAME`; it

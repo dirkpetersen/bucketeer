@@ -306,6 +306,14 @@ MIGRATIONS: list[Migration] = [
     ALTER TABLE buckets ADD COLUMN over_quota_alert_at TEXT;
     CREATE INDEX buckets_location ON buckets (location, owner_uid);
     """,
+    # v19: delete jobs for cloud (AWS) buckets share `bucket_delete_jobs` (P6-13).
+    # `temp_key` = the access key id (never the secret) of the temporary IAM key a cloud job
+    # holds right now, so a crash leftover is deleted on the next run.
+    """
+    ALTER TABLE bucket_delete_jobs ADD COLUMN location TEXT NOT NULL DEFAULT 'onprem'
+        CHECK (location IN ('onprem', 'cloud'));
+    ALTER TABLE bucket_delete_jobs ADD COLUMN temp_key TEXT;
+    """,
 ]
 
 _MISSING: Any = object()
@@ -1085,14 +1093,14 @@ class BucketDeleteJobs(_Repo):
     queued/running job per bucket (unique index): `create` raises `sqlite3.IntegrityError`."""
 
     def create(self, bucket: str, owner_uid: str, owner_ad: str, objects_hint: int | None,
-               bytes_hint: int | None) -> dict[str, Any]:
+               bytes_hint: int | None, location: str = "onprem") -> dict[str, Any]:
         with self.db.tx() as c:
             t = now()
             cur = c.execute(
                 "INSERT INTO bucket_delete_jobs (bucket, owner_uid, owner_ad, state, "
-                "objects_hint, bytes_hint, created_at, updated_at) "
-                "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)",
-                (bucket, owner_uid, owner_ad, objects_hint, bytes_hint, t, t))
+                "objects_hint, bytes_hint, created_at, updated_at, location) "
+                "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?)",
+                (bucket, owner_uid, owner_ad, objects_hint, bytes_hint, t, t, location))
             return self.get(cur.lastrowid)  # type: ignore[return-value]
 
     def get(self, job_id: int) -> dict[str, Any] | None:
@@ -1108,11 +1116,20 @@ class BucketDeleteJobs(_Repo):
         return self.db.query("SELECT * FROM bucket_delete_jobs WHERE state IN "
                              "('queued', 'running') ORDER BY id")
 
-    def list_for(self, owner_uid: str, done_since: str) -> list[dict[str, Any]]:
-        """The owner's jobs: every one not done, plus those done since `done_since`."""
+    def list_for(self, owner_uid: str, done_since: str,
+                 location: str = "onprem") -> list[dict[str, Any]]:
+        """The owner's jobs at `location`: every one not done, plus those done since
+        `done_since`."""
         return self.db.query(
-            "SELECT * FROM bucket_delete_jobs WHERE owner_uid = ? AND "
-            "(state != 'done' OR finished_at >= ?) ORDER BY id", (owner_uid, done_since))
+            "SELECT * FROM bucket_delete_jobs WHERE owner_uid = ? AND location = ? AND "
+            "(state != 'done' OR finished_at >= ?) ORDER BY id",
+            (owner_uid, location, done_since))
+
+    def set_temp_key(self, job_id: int, access_key: str | None) -> None:
+        """The access key id of a cloud job's temporary IAM key (None = deleted)."""
+        with self.db.tx() as c:
+            c.execute("UPDATE bucket_delete_jobs SET temp_key = ?, updated_at = ? WHERE id = ?",
+                      (access_key, now(), job_id))
 
     def start(self, job_id: int) -> bool:
         with self.db.tx() as c:

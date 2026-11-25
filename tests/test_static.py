@@ -112,3 +112,19 @@ def test_dom_h_assigns_custom_element_props_as_properties():
     # h() must not turn string props on custom elements into attributes (secrets).
     src = (STATIC_DIR / "js" / "dom.js").read_text()
     assert 'el.localName.includes("-")' in src and "el[k] = v" in src
+
+
+def test_every_bucket_delete_asks_for_the_typed_name():
+    # owner 2026-11-25: on premises and cloud, empty or not, the name must be typed
+    js = STATIC_DIR / "js"
+    dialog = (js / "components" / "bucket-delete.js").read_text()
+    assert "requireText: name" in dialog and "danger: true" in dialog
+    assert "180 days" in dialog  # the Deep Archive early deletion note
+    for view in ("buckets.js", "cloud-buckets.js"):
+        text = (js / "views" / view).read_text()
+        assert "deleteBucketDialog(" in text, view
+        # the delete request always carries the typed name once confirmed
+        call = "deleteBucket(b.name, b.name)" if view == "buckets.js" \
+            else "deleteCloudBucket(b.name, b.name)"
+        assert call in text, view
+        assert '"Delete bucket"' not in text.replace('label: "Delete bucket"', ""), view

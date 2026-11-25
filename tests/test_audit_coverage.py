@@ -52,6 +52,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "PUT /api/cloud/buckets/{name}/quota": ("cloud.bucket.quota",),
     "PUT /api/cloud/buckets/{name}/budget": ("cloud.bucket.budget",),
     "DELETE /api/cloud/buckets/{name}": ("cloud.bucket.delete",),
+    "POST /api/cloud/buckets/delete-jobs/{job_id}/retry": ("cloud.bucket.delete_retry",),
     "POST /api/subusers": ("subuser.create",),
     "PATCH /api/subusers/{name}": ("subuser.update",),
     "DELETE /api/subusers/{name}": ("subuser.delete",),
@@ -142,6 +143,8 @@ EVENTS = {
     "cloud.user.refused": "an IAM user with the person's name that Bucketeer did not make",
     "cloud.bucket.create_failed": "a cloud bucket set-up step failed after CreateBucket",
     "cloud.bucket.over_quota": "the daily check found a cloud bucket over its quota (system)",
+    "cloud.bucket.delete_started": "a cloud bucket with content: its delete job was queued",
+    "cloud.bucket.delete_failed": "a cloud delete job stopped (e.g. the person has two keys)",
 }
 
 ACTION_RE = re.compile(r"^(?:[a-z][a-z_]*)(?:\.[a-z][a-z_]*)+$")
@@ -299,8 +302,25 @@ def run(tmp_path_factory, moto_server):
         "Dimensions": [{"Name": "BucketName", "Value": "bucketeer-alice-cov"},
                        {"Name": "StorageType", "Value": "IntelligentTieringFAStorage"}]}])
     r.step("event", lambda: asyncio.run(cloud_buckets.alert_tick(env.app)))  # over quota
-    r.step("DELETE /api/cloud/buckets/{name}", lambda: a.delete(
-        "/api/cloud/buckets/cov", headers=H))
+    r.step("DELETE /api/cloud/buckets/{name}", lambda: a.request(
+        "DELETE", "/api/cloud/buckets/cov", headers=H, json={"confirmName": "cov"}))
+    # a cloud bucket with content: a job with a temporary key of the owner's IAM user; it
+    # fails while the person has two keys, then is retried (tests/test_cloud_delete.py)
+    ok(a.post("/api/cloud/buckets", json={**cb, "name": "full"}, headers=H))
+    cl.client("s3").put_object(Bucket="bucketeer-alice-full", Key="k", Body=b"x")
+    owner_iam = env.db.cloud_accounts.get("alice")["iam_user"]
+    while len(cl.client("iam").list_access_keys(UserName=owner_iam)["AccessKeyMetadata"]) < 2:
+        cl.client("iam").create_access_key(UserName=owner_iam)
+    cjob = r.step("event", lambda: a.request(  # cloud.bucket.delete_started
+        "DELETE", "/api/cloud/buckets/full", headers=H, json={"confirmName": "full"}))
+    cjob = cjob.json()["job"]["id"]
+    r.step("event", lambda: asyncio.run(bucket_delete.run_job(env.app, cjob)))  # _failed
+    spare = cl.client("iam").list_access_keys(UserName=owner_iam)["AccessKeyMetadata"][-1]
+    cl.client("iam").delete_access_key(UserName=owner_iam, AccessKeyId=spare["AccessKeyId"])
+    r.step("POST /api/cloud/buckets/delete-jobs/{job_id}/retry", lambda: a.post(
+        f"/api/cloud/buckets/delete-jobs/{cjob}/retry", headers=H))
+    r.step("event", lambda: asyncio.run(bucket_delete.run_job(env.app, cjob)))  # .delete
+    assert env.db.delete_jobs.get(cjob)["state"] == "done"
     real_grant = cl.grant_bucket_owner
 
     async def broken_grant(*_a):
@@ -449,10 +469,12 @@ def run(tmp_path_factory, moto_server):
     r.step("event", lambda: a.put("/api/buckets/alice-tag/versioning", json={"enabled": True},
                                   headers=H))
     fail("DELETE", "/s3/buckets")
-    r.step("event", lambda: a.request("DELETE", "/api/buckets/alice-tag", headers=H))
+    r.step("event", lambda: a.request("DELETE", "/api/buckets/alice-tag", headers=H,
+                                      json={"confirmName": "alice-tag"}))
     env.transport.fail = None
     r.step("DELETE /api/buckets/{name}", lambda: a.request("DELETE", "/api/buckets/alice-cov",
-                                                           headers=H))
+                                                           headers=H,
+                                                           json={"confirmName": "alice-cov"}))
 
     # rgw backend: delete job queued, blocked by a legal hold, then retried by the owner
     # (the run uses the croit backend, so the job path is switched on for these steps)
