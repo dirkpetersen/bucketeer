@@ -425,7 +425,8 @@ def test_revoke_keeps_the_row_when_the_policy_cannot_be_changed(env):
 def test_bucket_delete_revokes_its_keys(env):
     k = mk(env.alice, bucket="alice-empty").json()
     keep = mk(env.alice, bucket="alice-data", label="keep").json()
-    r = env.alice.delete("/api/buckets/alice-empty", headers=H)
+    r = env.alice.request("DELETE", "/api/buckets/alice-empty", headers=H,
+                          json={"confirmName": "alice-empty"})
     assert r.status_code == 200 and r.json() == {"name": "alice-empty", "keysRevoked": 1}
     assert "alice+backup" not in env.croit_state.users and "alice+keep" in env.croit_state.users
     assert env.db.bucket_keys.get(k["id"])["revoked_at"]
@@ -437,7 +438,8 @@ def test_bucket_delete_revokes_its_keys(env):
 def test_bucket_delete_with_a_stuck_key_user_still_deletes_and_warns(env):
     mk(env.alice, bucket="alice-empty")
     fail_when(env, "DELETE", "/s3/users/alice%2Bbackup")
-    r = env.alice.delete("/api/buckets/alice-empty", headers=H)
+    r = env.alice.request("DELETE", "/api/buckets/alice-empty", headers=H,
+                          json={"confirmName": "alice-empty"})
     assert r.status_code == 200 and "warning" in r.json()
     assert "alice-empty" not in env.croit_state.buckets
     (row,) = env.db.bucket_keys.list()

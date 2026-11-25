@@ -247,7 +247,9 @@ export const setOwnBucketQuota = (name, quotaTiB) =>
 // budgetMissing, tagPending}], region, currency}. options -> {prefix, maxNameLength, region,
 // refused, storageClasses: [{id, awsClass, product}], defaultStorageClass, defaultBudgetNumber,
 // budgetRequired, budgetExample, quota}. check -> {name, fullName, available, status, message,
-// suggestions: [{name, fullName}]}. Delete works for empty buckets only (409 notEmpty, objects).
+// suggestions: [{name, fullName}]}. Delete without confirmName answers 409 {requiresConfirmation,
+// objects, bytes|null, more, sizeAsOf, countsMayLag, storageClass}; with it 200 (empty) or 202
+// {job} (a background job empties it; jobs as for on premises, `bucket` = short name).
 export const listCloudBuckets = () => api("/cloud/buckets");
 export const cloudBucketOptions = () => api("/cloud/buckets/options");
 export const checkCloudBucketName = (name) => api(`/cloud/buckets/check?name=${encodeURIComponent(name)}`);
@@ -256,7 +258,10 @@ export const setCloudBucketQuota = (name, quotaTiB) =>
   api(`/cloud/buckets/${encodeURIComponent(name)}/quota`, { method: "PUT", json: { quotaTiB } });
 export const setCloudBucketBudget = (name, budgetNumber) =>
   api(`/cloud/buckets/${encodeURIComponent(name)}/budget`, { method: "PUT", json: { budgetNumber } });
-export const deleteCloudBucket = (name) => api(`/cloud/buckets/${encodeURIComponent(name)}`, { method: "DELETE" });
+export const deleteCloudBucket = (name, confirmName) =>
+  api(`/cloud/buckets/${encodeURIComponent(name)}`, { method: "DELETE", json: confirmName ? { confirmName } : {} });
+export const listCloudDeleteJobs = () => api("/cloud/buckets/delete-jobs");
+export const retryCloudDeleteJob = (id) => api(`/cloud/buckets/delete-jobs/${encodeURIComponent(id)}/retry`, { method: "POST" });
 // Bucket notifications (Advanced). get -> {notifications: [{id, endpoint|null, managed, kind, topic,
 // events, prefix|null, suffix|null}], endpoints: [{name, type}], etag}. put sends {notifications, etag}:
 // managed {id, endpoint, events, prefix?, suffix?}, external kept as {id, external: true}. A 422 body has

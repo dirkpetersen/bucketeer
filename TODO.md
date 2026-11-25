@@ -338,6 +338,7 @@ the item lands.
 - [x] P6-12 Backups to AWS (PLAN 5): when the global location is Cloud, back up to an AWS
   bucket with the same object-lock rules through a dedicated backup IAM user (keys made and deleted per
   run, `--restore-backup --from cloud`).
+- [x] P6-13 Typed-name confirmation for every bucket delete; cloud buckets with content (owner request 2026-11-25)
 
 ## Verify against a real croit cluster
 

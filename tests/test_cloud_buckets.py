@@ -1,7 +1,7 @@
 """Cloud (AWS) buckets, P6-10: names and availability, create (security settings, day-0
 storage class rule, owner policy, tags, SQLite row) and rollback, the bucket-policy retry while
 IAM propagates a new user, list with CloudWatch sizes and costs, quota (weekly limit shared with
-on premises), budget, delete (empty only), the over-quota email. moto `mock_aws`, no network."""
+on premises), budget, delete (typed name), the over-quota email. moto `mock_aws`, no network."""
 
 import asyncio
 import json
@@ -357,28 +357,20 @@ def test_budget_change(env):
 # -- delete ---------------------------------------------------------------------------
 
 
-def test_delete_only_when_empty(env):
+def test_delete_needs_the_typed_name(env):
+    # owner 2026-11-25; the content flows are in tests/test_cloud_delete.py
     assert env.user.post(B, json=NEW, headers=H).status_code == 201
     full = "bucketeer-alice-scans"
-    env.s3.put_object(Bucket=full, Key="a.txt", Body=b"x")
     r = env.user.delete(f"{B}/scans", headers=H)
-    assert r.status_code == 409 and r.json()["objects"] == 1 and r.json()["notEmpty"]
-    assert "own" in r.json()["detail"]
-    assert env.db.buckets.get(full) is not None
-    # versions left behind: S3 refuses, the owner keeps access
-    env.s3.delete_object(Bucket=full, Key="a.txt")
-    r = env.user.delete(f"{B}/scans", headers=H)
-    assert r.status_code == 409
-    assert json.loads(env.s3.get_bucket_policy(Bucket=full)["Policy"])["Statement"]
-    for v in env.s3.list_object_versions(Bucket=full).get("Versions", []) + \
-            env.s3.list_object_versions(Bucket=full).get("DeleteMarkers", []):
-        env.s3.delete_object(Bucket=full, Key=v["Key"], VersionId=v["VersionId"])
-    r = env.user.delete(f"{B}/scans", headers=H)
+    assert r.status_code == 409 and r.json()["requiresConfirmation"] is True
+    assert r.json()["objects"] == 0 and env.db.buckets.get(full) is not None
+    r = env.user.request("DELETE", f"{B}/scans", headers=H, json={"confirmName": "scans"})
     assert r.status_code == 200
     assert env.s3.list_buckets()["Buckets"] == [] and env.db.buckets.get(full) is None
     [a] = acts(env, "cloud.bucket.delete")
     assert a["target"] == full
-    assert env.user.delete(f"{B}/scans", headers=H).status_code == 404
+    assert env.user.request("DELETE", f"{B}/scans", headers=H,
+                            json={"confirmName": "scans"}).status_code == 404
 
 
 # -- over-quota alert -----------------------------------------------------------------

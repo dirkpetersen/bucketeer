@@ -40,12 +40,18 @@ mutations, `no-store`):
   audited the same way.
 - `PUT /{name}/quota {quotaTiB}` (weekly limit; tag re-synced), `PUT /{name}/budget
   {budgetNumber}` (admins may clear it) -> `{name, ..., changed, tagSynced, warning?}`.
-- `DELETE /{name}` -> `{name}`: EMPTY buckets only in v1 (409 `{detail, notEmpty, objects,
-  more}`: the person empties it with their own key and tool). `revoke_bucket_owner`, then
-  DeleteBucket (BucketNotEmpty: old versions or delete markers remain, the statement is put
-  back and 409).
-Audit `cloud.bucket.create|create_failed|quota|budget|delete|over_quota` (target_type `bucket`,
-the full AWS name).
+- `DELETE /{name}` `{confirmName?}` (P6-13, owner 2026-11-25): without `confirmName` equal to
+  the short name, 409 `{detail, requiresConfirmation, objects, bytes|null, more, sizeAsOf,
+  countsMayLag: true, storageClass}` (`contents`: one live ListObjectsV2 page by the admin,
+  plus CloudWatch `NumberOfObjects`/`BucketSizeBytes`, a day or two late; an empty first page
+  means 0). Confirmed and empty: `revoke_bucket_owner`, DeleteBucket -> 200 `{name}`
+  (BucketNotEmpty = old versions remain: statement back, then a job). Holding data: 202
+  `{job}`, a background job (`cloud_delete.py`) in `bucket_delete_jobs` with `location
+  'cloud'` that empties the bucket with a temporary key of the owner's IAM user; an active job
+  answers 409 `{job}`, a failed one is retried. `GET /delete-jobs` -> `{jobs}` (own cloud
+  jobs, `bucket` = short name, `fullName`), `POST /delete-jobs/{id}/retry` -> `{job}`.
+Audit `cloud.bucket.create|create_failed|quota|budget|delete|delete_started|delete_failed|
+delete_retry|over_quota` (target_type `bucket`, the full AWS name).
 
 Over-quota alert: `alert_loop` (lifespan task, `ALERT_ON_START`, off in tests; tests call
 `alert_tick(app, now)`) once a day reads every cloud bucket's size; above its quota the OWNER
@@ -61,6 +67,7 @@ import asyncio
 import logging
 import re
 import secrets
+import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
@@ -69,7 +76,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
-from . import bucket_facts, bucket_quota, catalog, location, s3docs
+from . import bucket_delete, bucket_facts, bucket_quota, catalog, location, s3docs
 from .auth import SessionUser, require_user
 from .buckets import _user_lock
 from .budget import BudgetNumberError, budget_example, validate_budget_number
@@ -573,50 +580,167 @@ async def set_budget(name: str, body: BudgetBody, request: Request, response: Re
 
 # -- delete -----------------------------------------------------------------------------
 
-NOT_EMPTY = ("This bucket still holds data. Bucketeer deletes only empty cloud buckets: empty "
-             "it first with your own cloud key and an S3 tool (all objects and, for versioned "
-             "buckets, all old versions), then delete it here.")
+
+class DeleteBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirmName: str | None = Field(default=None, max_length=256)
+
+
+async def contents(app, cloud: CloudAdmin, full: str) -> dict[str, Any]:
+    """What the bucket holds, for the confirmation: one live ListObjectsV2 page (current
+    objects only) plus CloudWatch's daily object count and size (a day or two late)."""
+    try:
+        live, more = await cloud.object_probe(full)
+    except CloudError as e:
+        if e.code != "NoSuchBucket":
+            raise
+        live, more = 0, False
+    if not live and not more:
+        return {"objects": 0, "bytes": 0, "more": False, "sizeAsOf": None}
+    now = bucket_quota.now_of(app)
+    try:
+        counted = await cloud.bucket_metric(full, "NumberOfObjects", "AllStorageTypes",
+                                            now - timedelta(days=4), now)
+    except CloudError:
+        counted = None
+    size = await size_of(app, full)
+    return {"objects": max(live, int(counted or 0)), "bytes": size["bytes"] if size else None,
+            "more": more and not counted, "sizeAsOf": size["asOf"] if size else None}
+
+
+def _confirmation(row: dict, found: dict) -> JSONResponse:
+    held = found["objects"] > 0
+    detail = ("This bucket still contains data. Type its name to delete it and everything "
+              "in it." if held else "Type the bucket name to delete it.")
+    return JSONResponse(status_code=409, content={
+        "detail": detail, "requiresConfirmation": True, **found, "countsMayLag": True,
+        "storageClass": row.get("storage_class")})
+
+
+def _job_view(job: dict, prefix: str) -> dict[str, Any]:
+    view = bucket_delete.job_view(job)
+    full = job["bucket"]
+    view["bucket"] = full[len(prefix):] if prefix and full.startswith(prefix) else full
+    view["fullName"] = full
+    return view
 
 
 @router.delete("/{name}")
 async def delete_cloud_bucket(name: str, request: Request, response: Response, acct: Account,
-                              user: User, cloud: Cloud):
+                              user: User, cloud: Cloud, body: DeleteBody | None = None):
+    """Every delete needs the typed name (owner 2026-11-25). Empty: revoke the owner
+    statement, DeleteBucket. Holding data: a background job (`cloud_delete.py`)."""
     response.headers["Cache-Control"] = "no-store"
     app, db = request.app, request.app.state.db
     async with _user_lock(request, acct.uid):
         row = await _own_row(app, cloud, acct, name)
         full = row["name"]
-        try:
-            count, more = await cloud.object_probe(full)
-        except CloudError as e:
-            if e.code != "NoSuchBucket":
-                raise cloud_http_error(e) from None
-            count, more = 0, False
-        if count:
+        prefix = full[: len(full) - len(name)]
+        prior = await db.run(db.delete_jobs.latest_for, full)
+        if prior and prior["state"] in ("queued", "running"):
             return JSONResponse(status_code=409, content={
-                "detail": NOT_EMPTY, "notEmpty": True, "objects": count, "more": more})
-        account = await db.run(db.cloud_accounts.get, acct.username)
+                "detail": "This bucket is already being deleted.",
+                "job": _job_view(prior, prefix)})
         try:
-            await cloud.revoke_bucket_owner(full)  # no new uploads from here on
-            await cloud.delete_bucket(full)
+            found = await contents(app, cloud, full)
         except CloudError as e:
-            if e.code == "BucketNotEmpty":
-                if account:  # old versions or delete markers: the owner keeps access
-                    try:
-                        await cloud.grant_bucket_owner(
-                            full, await cloud.user_arn(account["iam_user"]))
-                    except CloudError as g:
-                        log.warning("owner statement of %s not restored: %s", full, g.code)
-                return JSONResponse(status_code=409, content={
-                    "detail": NOT_EMPTY, "notEmpty": True, "objects": 0, "more": True})
-            if e.code != "NoSuchBucket":
-                raise cloud_http_error(e) from None
-        await db.run(db.buckets.delete, full, "cloud")
-        _sizes(app).pop(full, None)
-        await _audit(app, user.username, "cloud.bucket.delete", full, uid=acct.uid,
-                     storageClass=row.get("storage_class"), quotaTiB=row.get("quota_tib"))
+            raise cloud_http_error(e) from None
+        if body is None or body.confirmName != name:
+            return _confirmation(row, found)
+        if found["objects"] == 0:
+            done = await _delete_empty(app, cloud, acct, user, row, name)
+            if done is not None:
+                if prior and prior["state"] != "done":  # an earlier failed job is settled
+                    await db.run(db.delete_jobs.finish, prior["id"], "done", None)
+                return done
+            found["objects"] = 1  # old versions or delete markers remain: the job removes them
+        if prior and prior["state"] in ("blocked", "failed") and \
+                await db.run(db.delete_jobs.requeue, prior["id"]):
+            job = await db.run(db.delete_jobs.get, prior["id"])
+            await _audit(app, user.username, "cloud.bucket.delete_retry", full, uid=acct.uid,
+                         job=job["id"], confirmed=True)
+        else:
+            try:
+                job = await db.run(db.delete_jobs.create, full, acct.uid, user.username,
+                                   found["objects"], found["bytes"], "cloud")
+            except sqlite3.IntegrityError:
+                raise HTTPException(409, "This bucket is already being deleted.") from None
+            await _audit(app, user.username, "cloud.bucket.delete_started", full,
+                         uid=acct.uid, job=job["id"], objects=found["objects"],
+                         bytes=found["bytes"], storageClass=row.get("storage_class"))
+    bucket_delete.start(app, job["id"])
+    log.info("cloud bucket %s: delete job %s started by %s", full, job["id"], acct.username)
+    return JSONResponse(status_code=202, content={"job": _job_view(job, prefix)})
+
+
+async def _delete_empty(app, cloud: CloudAdmin, acct: RgwAccount, user: SessionUser,
+                        row: dict, name: str) -> dict | None:
+    """Revoke the owner statement and DeleteBucket. None when S3 says it is not empty (old
+    versions or delete markers): the statement is back and the caller starts a job."""
+    db: Database = app.state.db
+    full = row["name"]
+    account = await db.run(db.cloud_accounts.get, acct.username)
+    try:
+        await cloud.revoke_bucket_owner(full)  # no new uploads from here on
+        await cloud.delete_bucket(full)
+    except CloudError as e:
+        if e.code == "BucketNotEmpty":
+            if account:
+                try:
+                    await cloud.grant_bucket_owner(
+                        full, await cloud.user_arn(account["iam_user"]))
+                except CloudError as g:
+                    log.warning("owner statement of %s not restored: %s", full, g.code)
+            return None
+        if e.code != "NoSuchBucket":
+            raise cloud_http_error(e) from None
+    await db.run(db.buckets.delete, full, "cloud")
+    _sizes(app).pop(full, None)
+    await _audit(app, user.username, "cloud.bucket.delete", full, uid=acct.uid,
+                 storageClass=row.get("storage_class"), quotaTiB=row.get("quota_tib"),
+                 objects=0, dataDeleted=False)
     log.info("cloud bucket %s deleted by %s", full, acct.username)
     return {"name": name}
+
+
+@router.get("/delete-jobs")
+async def list_delete_jobs(request: Request, response: Response, acct: Account, cloud: Cloud):
+    response.headers["Cache-Control"] = "no-store"
+    db = request.app.state.db
+    since = (datetime.now(UTC) - bucket_delete.DONE_VISIBLE).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    rows = await db.run(db.delete_jobs.list_for, acct.uid, since, "cloud")
+    try:
+        prefix = _prefix(cloud, acct.username)
+    except CloudError:
+        prefix = ""
+    return {"jobs": [_job_view(r, prefix) for r in rows]}
+
+
+@router.post("/delete-jobs/{job_id}/retry")
+async def retry_delete_job(job_id: int, request: Request, response: Response, acct: Account,
+                           user: User, cloud: Cloud):
+    response.headers["Cache-Control"] = "no-store"
+    app, db = request.app, request.app.state.db
+    job = await db.run(db.delete_jobs.get, job_id)
+    if job is None or job["owner_uid"] != acct.uid or job.get("location") != "cloud":
+        raise HTTPException(404, "Delete job not found.")
+    previous = job["state"]
+    try:
+        requeued = previous in ("blocked", "failed") and \
+            await db.run(db.delete_jobs.requeue, job_id)
+    except sqlite3.IntegrityError:
+        requeued = False
+    if not requeued:
+        raise HTTPException(409, "This job is not waiting for a retry.")
+    job = await db.run(db.delete_jobs.get, job_id)
+    await _audit(app, user.username, "cloud.bucket.delete_retry", job["bucket"], uid=acct.uid,
+                 job=job_id, previous=previous)
+    bucket_delete.start(app, job_id)
+    try:
+        prefix = _prefix(cloud, acct.username)
+    except CloudError:
+        prefix = ""
+    return {"job": _job_view(job, prefix)}
 
 
 # -- daily over-quota alert -------------------------------------------------------------

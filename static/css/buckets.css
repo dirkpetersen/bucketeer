@@ -543,3 +543,12 @@
 .ccb-classes .set-warn[hidden] { display: none; }
 .ccb .qd-head h2 svg { width: 1.1rem; height: 1.1rem; vertical-align: -0.15rem; color: var(--accent-text); }
 @media (prefers-reduced-motion: reduce) { .ccb-name, .ccb-class { transition: none; } }
+
+/* Delete bucket dialog (components/bucket-delete.js, P6-13): what goes, and why it may stop. */
+.dbd { display: grid; gap: var(--sp-2); }
+.dbd-data { display: flex; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-3);
+  border: 1px solid var(--danger); border-radius: var(--r-md); background: var(--danger-bg); color: var(--text); }
+.dbd-data > .icon { flex: none; margin-top: 0.15rem; color: var(--danger); }
+.dbd-data .dbd-count { color: var(--danger); font-family: var(--font-sans); font-variant-numeric: tabular-nums; }
+.dbd-note { display: block; }
+.dbd-fee { color: var(--text); font-weight: 600; }

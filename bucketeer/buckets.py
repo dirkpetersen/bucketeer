@@ -44,10 +44,11 @@ or capitals never matches anything, so a user cannot address another tenant's bu
 - `POST /api/buckets/reconcile` -> `{synced: [...], pending: [...]}`: writes the managed
   tags for the user's rows with `tag_synced = 0`. A POST because it changes state.
 - `DELETE /api/buckets/{name}` `{confirmName?}`: ownership is verified in croit's list for
-  the user's uid (404 otherwise). An empty bucket is deleted directly. A non-empty one
-  answers 409 `{requiresConfirmation: true, objects, bytes}` unless `confirmName` equals
-  the bucket name exactly; then croit's confirmation handshake runs
-  (`delete_bucket_and_data(user_confirmed=True)`) and all data goes.
+  the user's uid (404 otherwise). EVERY delete (empty buckets too, owner 2026-11-25)
+  answers 409 `{requiresConfirmation: true, objects, bytes}` (admin stats, 0 when empty)
+  unless `confirmName` equals the bucket's short name exactly; then croit's confirmation
+  handshake runs (`delete_bucket_and_data(user_confirmed=True)`: a plain delete first,
+  the handshake only for a non-empty bucket) and all data goes.
 - `PUT /api/buckets/{name}/versioning {enabled}` -> `{name, versioning, changed}`. Through
   croit's `PATCH /s3/buckets/{name}` (admin plane, `versioning` ENABLED / SUSPENDED), after
   ownership is verified in croit's list (404 otherwise). off -> enabled, enabled ->
@@ -802,11 +803,10 @@ async def delete_bucket(name: str, request: Request, acct: Account, user: User,
     if bucket_delete.uses_jobs(request.app):  # rgw: empty through S3 as a background job
         return await bucket_delete.delete_on_rgw(request, acct, user, full, short, objects,
                                                  size, confirmed)
+    if not confirmed:  # every delete needs the typed name, empty buckets too
+        return bucket_delete.confirmation(objects, size)
     try:
-        if confirmed:
-            task = await croit.delete_bucket_and_data(full, user_confirmed=True)
-        else:
-            task = await croit.delete_bucket(full)
+        task = await croit.delete_bucket_and_data(full, user_confirmed=True)
         await croit.wait_for_task(task)
     except CroitWarning:
         return JSONResponse(status_code=409, content={

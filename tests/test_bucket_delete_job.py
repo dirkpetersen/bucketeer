@@ -85,7 +85,11 @@ def retry(env, job_id, client=None):
 
 
 def test_empty_bucket_is_deleted_directly_with_the_users_key(env):
-    r = delete(env, "alice-empty")
+    r = delete(env, "alice-empty")  # the typed name is needed for an empty bucket too
+    assert r.status_code == 409 and r.json()["requiresConfirmation"] is True
+    assert r.json()["objects"] == 0 and r.json()["bytes"] == 0
+    assert "alice-empty" in env.moto_buckets()
+    r = delete(env, "alice-empty", "alice-empty")
     assert r.status_code == 200 and r.json() == {"name": "alice-empty"}
     assert "alice-empty" not in env.moto_buckets() and "alice-empty" not in env.croit_state.buckets
     assert set(env.used) == {ALICE_KEY}

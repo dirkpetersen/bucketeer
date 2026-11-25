@@ -19,8 +19,9 @@ blocked and failed ones wait for a retry. At most one queued/running job per buc
 API (`delete_on_rgw` is called by `DELETE /api/buckets/{name}` in `buckets.py` when the
 backend is rgw; the croit backend keeps its own path):
 - `DELETE /api/buckets/{name}` `{confirmName?}`: 409 `{requiresConfirmation, objects, bytes}`
-  until `confirmName` equals the name; then 202 `{job}` for a non-empty bucket, or 200
-  `{name, keysRevoked?, warning?}` for an empty one (DeleteBucket with the user's key). A bucket
+  until `confirmName` equals the name (empty buckets too); then 202 `{job}` for a non-empty
+  bucket, or 200 `{name, keysRevoked?, warning?}` for an empty one (DeleteBucket with the
+  user's key). A bucket
   with a blocked/failed job is retried; one with an active job answers 409 `{job}`.
 - `GET /api/buckets/delete-jobs` -> `{jobs: [job]}` (own jobs only: not done, or done within the
   last hour); job = `{id, bucket, state, deletedObjects, deletedBytes, remainingObjects,
@@ -233,8 +234,14 @@ class _Stop(Exception):
 
 
 def _failure_text(e: Exception) -> str:
+    from .cloud import CloudError, CloudUnavailable
+
     if isinstance(e, HTTPException):
         return str(e.detail)
+    if isinstance(e, CloudUnavailable):
+        return "AWS could not be reached. Try again in a few minutes."
+    if isinstance(e, CloudError):
+        return f"AWS answered with an error ({e.code or 'unknown'}). Try again later."
     if isinstance(e, ClientError):
         code = _code(e)
         if code in ("AccessDenied", "403"):
@@ -256,7 +263,9 @@ async def run_job(app, job_id: int) -> None:
         except _Stop as e:
             await _end(app, job_id, "failed", str(e))
         except Exception as e:
-            if not isinstance(e, HTTPException | ClientError | BotoCoreError):
+            from .cloud import CloudError
+
+            if not isinstance(e, HTTPException | ClientError | BotoCoreError | CloudError):
                 log.exception("bucket delete job %s crashed", job_id)
             await _end(app, job_id, "failed", _failure_text(e), error=type(e).__name__)
         finally:
@@ -278,7 +287,8 @@ async def _end(app, job_id: int, state: str, message: str | None, **details) -> 
     # Before the new state is visible: a retry right after must be able to start a new task.
     _forget_task(app, job_id)
     await db.run(db.delete_jobs.finish, job_id, state, message)
-    action = {"failed": "bucket.delete_failed", "blocked": "bucket.delete_blocked"}[state]
+    area = "cloud.bucket" if job.get("location") == "cloud" else "bucket"
+    action = {"failed": f"{area}.delete_failed", "blocked": f"{area}.delete_blocked"}[state]
     await _audit(app, job["owner_ad"], action, job["bucket"], uid=job["owner_uid"], job=job_id,
                  reason=message, deleted=job["deleted_objects"],
                  remaining=job["remaining_objects"], **details)
@@ -314,6 +324,10 @@ async def _run(app, job_id: int) -> None:
     if job is None or job["state"] not in ("queued", "running"):
         return
     if not await db.run(db.delete_jobs.start, job_id):
+        return
+    if job.get("location") == "cloud":  # an AWS bucket (P6-13): its own steps
+        from .cloud_delete import run as run_cloud
+        await run_cloud(app, job_id)
         return
     uid, full = job["owner_uid"], job["bucket"]
     short = _short(full)
@@ -463,7 +477,7 @@ async def _delete_empty(request: Request, acct, user, full: str, short: str, obj
         err = _s3_error(e)
         if err.status_code >= 500:
             await _audit(app, user.username, "bucket.delete_failed", full, uid=acct.uid,
-                         error=type(e).__name__, confirmed=False)
+                         error=type(e).__name__, confirmed=True)
         raise err from None
     if outcome == "notempty":
         return None
@@ -484,11 +498,12 @@ async def _delete_empty(request: Request, acct, user, full: str, short: str, obj
     return out
 
 
-def _confirmation(objects: int, size: int) -> JSONResponse:
+def confirmation(objects: int, size: int) -> JSONResponse:
+    """409 for a delete without the typed name (every delete needs it, owner 2026-11-25)."""
+    detail = ("This bucket still contains data. Type its name to delete it and everything "
+              "in it." if objects > 0 else "Type the bucket name to delete it.")
     return JSONResponse(status_code=409, content={
-        "detail": "This bucket still contains data. Type its name to delete it and "
-                  "everything in it.",
-        "requiresConfirmation": True, "objects": objects, "bytes": size})
+        "detail": detail, "requiresConfirmation": True, "objects": objects, "bytes": size})
 
 
 async def delete_on_rgw(request: Request, acct, user, full: str, short: str, objects: int,
@@ -507,13 +522,13 @@ async def delete_on_rgw(request: Request, acct, user, full: str, short: str, obj
     if prior and prior["state"] in ("queued", "running"):
         return JSONResponse(status_code=409, content={
             "detail": "This bucket is already being deleted.", "job": job_view(prior)})
+    if not confirmed:  # every delete needs the typed name, empty buckets too
+        return confirmation(objects, size)
     if objects == 0:
         done = await _delete_empty(request, acct, user, full, short, objects, size)
         if done is not None:
             return done
-        objects = max(objects, 1)  # not empty after all (stats lag)
-    if not confirmed:
-        return _confirmation(objects, size)
+        objects = max(objects, 1)  # not empty after all (stats lag): the job empties it
     if prior and prior["state"] in ("blocked", "failed") and \
             await db.run(db.delete_jobs.requeue, prior["id"]):
         job = await db.run(db.delete_jobs.get, prior["id"])
@@ -543,7 +558,7 @@ async def list_jobs(request: Request, acct: Account):
 async def retry_job(job_id: int, request: Request, acct: Account, user: User):
     app, db = request.app, request.app.state.db
     job = await db.run(db.delete_jobs.get, job_id)
-    if job is None or job["owner_uid"] != acct.uid:
+    if job is None or job["owner_uid"] != acct.uid or job.get("location") == "cloud":
         raise HTTPException(404, "Delete job not found.")
     if job["state"] not in ("blocked", "failed"):
         raise HTTPException(409, "This job is not waiting for a retry.")

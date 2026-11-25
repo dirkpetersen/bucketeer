@@ -4,6 +4,7 @@ import { deleteBucket, listBuckets, listDeleteJobs, reconcileBuckets, retryDelet
 import { formatBytes, formatCount } from "../format.js";
 import { toast } from "../components/toast.js";
 import { confirmDialog, nameSpan } from "../components/confirm-dialog.js";
+import { deleteBucketDialog, deleteJobBlock } from "../components/bucket-delete.js";
 import { createBucketDialog } from "../components/create-bucket-dialog.js";
 import { bucketKeysDialog } from "../components/bucket-keys-dialog.js";
 import { isAdvanced, subscribe } from "../advanced.js";
@@ -92,25 +93,6 @@ function usageBlock(b, product) {
   return out;
 }
 
-// The delete job of a bucket: progress while it runs, the reason and Retry when it stopped.
-function jobBlock(job, onRetry) {
-  if (job.state === "queued" || job.state === "running") {
-    const done = job.deletedObjects || 0;
-    // Versions and delete markers are counted, so the number can exceed the object count.
-    const text = job.state === "queued" ? "Waiting to start deleting…"
-      : `Deleting… ${formatCount(done)} object ${done === 1 ? "version" : "versions"} removed`;
-    return h("div", { class: "bk-job", role: "status" },
-      h("span", { class: "spinner", "aria-hidden": "true" }), h("span", { class: "bk-job-t", text }));
-  }
-  const blocked = job.state === "blocked";
-  return h("div", { class: "bk-job bk-job-stopped", "data-kind": job.state, role: "status" },
-    icon(blocked ? "lock" : "alert", "icon"),
-    h("div", { class: "bk-job-body" },
-      h("b", { text: blocked ? "Deletion is blocked" : "Deletion paused" }),
-      h("span", { class: "bk-job-msg", text: job.message || "The bucket could not be deleted yet." })),
-    h("button", { class: "btn btn-sm", type: "button", on: { click: () => onRetry(job) } }, icon("refresh"), "Retry"));
-}
-
 function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPolicy, onAcl, onCors, onTags, onLock, onBudget, onRules, onNotify, onUploads, busy, job, onRetry, onQuota, product) {
   const created = b.createdAt ? new Date(b.createdAt) : null;
   const meta = h("div", { class: "bk-meta" });
@@ -158,7 +140,7 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPo
   const active = job && (job.state === "queued" || job.state === "running");
   return h("li", { class: "bk-row", "data-busy": String(!!busy), "data-deleting": String(!!active) },
     h("span", { class: "bk-ic", "aria-hidden": "true" }, icon("bucket")),
-    h("div", { class: "bk-main" }, h("b", { class: "bk-name", text: b.name }), meta, job ? jobBlock(job, onRetry) : null),
+    h("div", { class: "bk-main" }, h("b", { class: "bk-name", text: b.name }), meta, job ? deleteJobBlock(job, onRetry) : null),
     usageBlock(b, product),
     h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, vsw, peopleBtn, more)));
 }
@@ -280,21 +262,15 @@ function onpremBucketsCard() {
   }
   createBtn.addEventListener("click", create);
 
-  async function remove(b, confirmed = false) {
-    const nonEmpty = b.objects > 0;
-    if (!confirmed) {
-      const ok = await confirmDialog(nonEmpty
-        ? {
-          title: ["Delete ", nameSpan(b.name), " and its data?"], danger: true, confirmLabel: "Delete bucket and data", requireText: b.name,
-          message: dataWarning(b.objects, b.bytes),
-        }
-        : { title: ["Delete ", nameSpan(b.name), "?"], danger: true, confirmLabel: "Delete bucket", message: "This bucket is empty. Its name becomes available to everyone again." });
-      if (!ok) return;
-    }
+  // Every delete asks for the typed name (owner 2026-11-25); with content it shows how many
+  // objects and how much space go.
+  async function remove(b) {
+    const ok = await deleteBucketDialog({ name: b.name, objects: b.objects || 0, bytes: b.bytes || 0, objectLock: b.objectLock === true });
+    if (!ok) return;
     deleting.add(b.name);
     paint();
     try {
-      const res = await deleteBucket(b.name, confirmed || nonEmpty ? b.name : undefined);
+      const res = await deleteBucket(b.name, b.name);
       if (res?.job) {
         // A non-empty bucket on the rgw backend: emptied in the background.
         jobs.set(res.job.bucket, res.job);
@@ -313,16 +289,6 @@ function onpremBucketsCard() {
         jobs.set(err.body.job.bucket, err.body.job);
         paint();
         schedulePoll();
-        return;
-      }
-      if (err.status === 409 && err.body?.requiresConfirmation) {
-        // The statistics said "empty" but the bucket holds data: ask again with the real numbers.
-        paint();
-        const ok = await confirmDialog({
-          title: ["Delete ", nameSpan(b.name), " and its data?"], danger: true, confirmLabel: "Delete bucket and data", requireText: b.name,
-          message: dataWarning(err.body.objects, err.body.bytes),
-        });
-        if (ok) await remove({ ...b, objects: Math.max(1, err.body.objects) }, true);
         return;
       }
       if (err.status !== 401) toast.error(err.message);
@@ -438,12 +404,6 @@ function onpremBucketsCard() {
     }
     deleting.delete(key);
     await load({ quiet: true });
-  }
-
-  function dataWarning(objects, bytes) {
-    return h("span", {},
-      "This permanently deletes ", h("strong", { text: `${formatCount(objects)} ${objects === 1 ? "object" : "objects"}` }),
-      objects ? ` (${formatBytes(bytes)})` : "", " and every version of them. It cannot be undone.");
   }
 
   // The menu entry follows the Advanced toggle live; stop listening once the card is gone.

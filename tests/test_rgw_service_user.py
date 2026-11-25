@@ -143,7 +143,8 @@ def test_bucket_create_versioning_and_delete_work_without_failure_audits(env):
     assert create(env.alice, name="alice-new").status_code == 201
     r = env.alice.put("/api/buckets/alice-data/versioning", json={"enabled": True}, headers=H)
     assert r.status_code == 200
-    r = env.alice.request("DELETE", "/api/buckets/alice-empty", headers=H)
+    r = env.alice.request("DELETE", "/api/buckets/alice-empty", headers=H,
+                          json={"confirmName": "alice-empty"})
     assert r.status_code == 200, r.text
     assert [a["action"] for a in env.audit("bucket.") if a["action"].endswith("_failed")] == []
     names = {b["name"] for b in env.alice.get("/api/buckets").json()["buckets"]}
