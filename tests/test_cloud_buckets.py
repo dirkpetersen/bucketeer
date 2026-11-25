@@ -213,6 +213,21 @@ def test_failure_after_create_rolls_back(env, monkeypatch, step):
     assert env.db.quota_changes.list() == []  # nothing counted against the week
 
 
+def test_create_denied_by_the_admin_policy(env, monkeypatch, caplog):
+    # Real AWS when tools/aws-setup ran with another --prefix than CLOUD_BUCKET_PREFIX.
+    async def denied(full):
+        raise CloudError(403, "AccessDenied", "AWS refused create_bucket (AccessDenied)")
+    monkeypatch.setattr(env.cloud, "create_bucket", denied)
+    with caplog.at_level("WARNING", logger="bucketeer.cloud_buckets"):
+        r = env.user.post(B, json=NEW, headers=H)
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert "AccessDenied" in detail and "won't help" in detail and "Try again later" not in detail
+    assert "--prefix bucketeer-" in caplog.text and "bucketeer-alice-scans" in caplog.text
+    assert acts(env, "cloud.bucket.create_failed") == []  # a refusal changed nothing
+    assert env.db.buckets.get("bucketeer-alice-scans") is None
+
+
 def test_grant_retries_while_the_principal_propagates(env, monkeypatch):
     slept, calls = [], []
     monkeypatch.setattr(cloud, "GRANT_WAITS", (1.0, 2.0, 4.0))

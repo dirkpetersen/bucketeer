@@ -69,6 +69,7 @@ export async function cloudBucketDialog() {
   const error = h("p", { class: "qd-error", role: "alert", hidden: true });
   const cancel = h("button", { class: "btn", type: "button", text: "Cancel" });
   const submit = h("button", { class: "btn btn-primary", type: "submit", text: "Create cloud bucket" });
+  const actions = h("div", { class: "cd-actions" }, cancel, submit);
 
   // storage class: two radio cards
   const radios = {};
@@ -105,22 +106,27 @@ export async function cloudBucketDialog() {
     h("div", { class: "qd-head" },
       h("h2", { id: `${id}-t` }, icon("cloud"), " Create a cloud bucket"),
       h("p", { class: "cd-msg", id: `${id}-m`, text: `Stored at AWS (${opts.region}). The storage class is chosen now and can't be changed later. Bucket names are shared by everyone on AWS.` })),
-    h("div", { class: "field" },
-      h("label", { for: name.id, text: "Bucket name" }),
-      h("div", { class: "ccb-name" }, h("span", { class: "ccb-prefix", text: opts.prefix, "aria-hidden": "true" }), name),
-      full, status),
-    h("fieldset", { class: "ccb-classes" },
-      h("legend", { text: "Storage class" }), ...classCards, archiveWarn),
-    quota.el,
-    h("div", { class: "field" },
-      h("label", { for: budget.id }, "Budget number ", h("span", { class: "cb-opt", text: opts.budgetRequired ? "(required)" : "(optional for administrators)" })),
-      budget, budgetErr),
-    h("label", { class: "qd-check", for: versioning.id }, versioning,
-      h("span", {}, h("b", { text: "Keep every version of each object" }),
-        h("small", { text: "Protects against overwrites and deletes. Old versions are deleted after 30 days and are billed until then." }))),
-    h("p", { class: "set-hint", text: "Real AWS costs are billed to your budget number. To delete the bucket later, empty it first with your own cloud key and an S3 tool." }),
+    // Two columns on wide screens (what and where | how much and who pays), one on phones.
+    h("div", { class: "ccb-cols" },
+      h("div", { class: "ccb-col" },
+        h("div", { class: "field" },
+          h("label", { for: name.id, text: "Bucket name" }),
+          h("div", { class: "ccb-name" }, h("span", { class: "ccb-prefix", text: opts.prefix, "aria-hidden": "true" }), name),
+          full, status),
+        h("fieldset", { class: "ccb-classes" },
+          h("legend", { text: "Storage class" }), ...classCards)),
+      h("div", { class: "ccb-col" },
+        archiveWarn,
+        quota.el,
+        h("div", { class: "field" },
+          h("label", { for: budget.id }, "Budget number ", h("span", { class: "cb-opt", text: opts.budgetRequired ? "(required)" : "(optional for administrators)" })),
+          budget, budgetErr),
+        h("label", { class: "qd-check", for: versioning.id }, versioning,
+          h("span", {}, h("b", { text: "Keep every version of each object" }),
+            h("small", { text: "Protects against overwrites and deletes. Old versions are deleted after 30 days and are billed until then." }))),
+        h("p", { class: "set-hint", text: "Real AWS costs are billed to your budget number. To delete the bucket later, empty it first with your own cloud key and an S3 tool." }))),
     error,
-    h("div", { class: "cd-actions" }, cancel, submit));
+    actions);
   const dlg = h("dialog", { class: "cd qd cb ccb", "aria-labelledby": `${id}-t`, "aria-describedby": `${id}-m` }, form);
 
   // -- availability (debounced; only the latest answer counts) --
@@ -180,7 +186,12 @@ export async function cloudBucketDialog() {
     return m;
   };
   budget.addEventListener("input", () => { validateBudget(); showError(""); });
-  function showError(msg) { error.textContent = msg; error.hidden = !msg; }
+  // The error sits under both columns, so bring it into view (the form scrolls on short screens).
+  function showError(msg) {
+    error.textContent = msg;
+    error.hidden = !msg;
+    if (msg) actions.scrollIntoView({ block: "nearest" }); // the error sits just above
+  }
 
   let busy = false;
   let result = null;

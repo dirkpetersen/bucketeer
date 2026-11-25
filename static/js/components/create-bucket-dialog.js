@@ -60,6 +60,7 @@ export async function createBucketDialog() {
   const error = h("p", { class: "qd-error", role: "alert", hidden: true });
   const cancel = h("button", { class: "btn", type: "button", text: "Cancel" });
   const submit = h("button", { class: "btn btn-primary", type: "submit", text: "Create bucket" });
+  const actions = h("div", { class: "cd-actions" }, cancel, submit);
 
   const check = (input, label, hint, cls = "") =>
     h("label", { class: `qd-check ${cls}`, for: input.id }, input, h("span", {}, h("b", { text: label }), h("small", { text: hint })));
@@ -92,7 +93,7 @@ export async function createBucketDialog() {
     ncRow,
     advancedBlock,
     error,
-    h("div", { class: "cd-actions" }, cancel, submit));
+    actions);
 
   const dlg = h("dialog", { class: "cd qd cb", "aria-labelledby": `${id}-t`, "aria-describedby": `${id}-m` }, form);
 
@@ -111,7 +112,12 @@ export async function createBucketDialog() {
   };
   name.addEventListener("input", () => { validateName(); showError(""); });
   budget.addEventListener("input", () => { validateBudget(); showError(""); });
-  function showError(msg) { error.textContent = msg; error.hidden = !msg; }
+  // The error sits at the bottom of a long form: bring it into view.
+  function showError(msg) {
+    error.textContent = msg;
+    error.hidden = !msg;
+    if (msg) actions.scrollIntoView({ block: "nearest" }); // the error sits just above
+  }
   const syncLock = () => {
     const locked = lock.checked;
     const warn = dlg.querySelector(".cb-lock-warn");

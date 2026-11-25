@@ -76,6 +76,10 @@ class CloudRefused(Exception):
         self.reason, self.message = reason, message
 
 
+ACCESS_DENIED = ("AWS refused the request (AccessDenied): Bucketeer's AWS permissions don't "
+                 "allow it, so trying again won't help. Ask an administrator.")
+
+
 def cloud_http_error(e: Exception) -> HTTPException:
     if isinstance(e, CloudRefused):
         return HTTPException(409, e.message)
@@ -84,6 +88,8 @@ def cloud_http_error(e: Exception) -> HTTPException:
     if isinstance(e, CloudError):
         if e.code == "LimitExceeded":
             return HTTPException(409, f"AWS allows at most {MAX_ACCESS_KEYS} access keys.")
+        if e.code == "AccessDenied":  # Bucketeer's own AWS policy: trying again won't help
+            return HTTPException(502, ACCESS_DENIED)
         return HTTPException(502, f"AWS refused the request ({e.code}). Try again later or "
                                   "ask an administrator.")
     raise e

@@ -465,6 +465,11 @@ async def create_cloud_bucket(body: CreateBody, request: Request, response: Resp
         except CloudError as e:
             if e.code in ("BucketAlreadyExists", "BucketAlreadyOwnedByYou"):
                 raise HTTPException(409, taken) from None
+            if e.code == "AccessDenied":  # the admin policy's bucket prefix differs
+                log.warning("cloud bucket %s: AWS denied CreateBucket. Bucketeer's AWS policy must "
+                            "allow bucket names starting with CLOUD_BUCKET_PREFIX (%s): re-run "
+                            "tools/aws-setup with --prefix %s", full, cloud.bucket_prefix,
+                            cloud.bucket_prefix)
             if isinstance(e, CloudUnavailable) or e.status >= 500:  # it may exist now
                 await _audit(app, user.username, "cloud.bucket.create_failed", full,
                              uid=acct.uid, step="create", error=e.code, rolledBack=None)

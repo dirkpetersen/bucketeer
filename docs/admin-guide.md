@@ -319,7 +319,9 @@ same arguments (and `--billing-bucket` set to your `CLOUD_BILLING_BUCKET`): it g
 policies a new version. Do that after updating Bucketeer when a release changes the admin
 policy (for example the read-only `LookUpPersonUsersByName` statement, without which a
 person's first cloud key or setup command failed with "AWS refused the request
-(AccessDenied)").
+(AccessDenied)"). If creating a cloud bucket fails with AccessDenied, the policy was made
+with another `--prefix` than `CLOUD_BUCKET_PREFIX` (the log says which prefix to use):
+re-run the script with the matching `--prefix`.
 
 **2. Put the lines into `.env`** (`appmo env bucketeer`) and restart:
 

@@ -540,7 +540,14 @@
 .ccb-price { font-size: var(--fs-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .ccb-lead { font-size: var(--fs-sm); color: var(--text); }
 .ccb-points { margin: 0; padding-left: var(--sp-4); display: grid; gap: var(--sp-1); font-size: var(--fs-xs); color: var(--text-muted); }
-.ccb-classes .set-warn[hidden] { display: none; }
+/* Two columns once the dialog has room: name and storage class | quota, budget, versioning. */
+.ccb-cols, .ccb-col { display: grid; gap: var(--sp-4); align-content: start; min-width: 0; }
+@media (min-width: 60em) {
+  .cd.ccb { width: min(58rem, calc(100vw - 2 * var(--gutter))); }
+  .ccb .cd-msg { max-width: 62ch; }
+  .ccb-cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: var(--sp-6); }
+  .ccb-col + .ccb-col { padding-left: var(--sp-6); margin-left: calc(-1 * var(--sp-6) / 2); border-left: 1px solid var(--border); }
+}
 .ccb .qd-head h2 svg { width: 1.1rem; height: 1.1rem; vertical-align: -0.15rem; color: var(--accent-text); }
 @media (prefers-reduced-motion: reduce) { .ccb-name, .ccb-class { transition: none; } }
 
