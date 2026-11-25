@@ -63,7 +63,18 @@ export const revealSecret = (accessKey) => api("/credentials/reveal", { method: 
 
 // A one-time command that installs the user's key as an AWS profile on a computer:
 // {url, command, expiresAt, expiresIn, os}. The url is a bearer token: keep it in memory only.
-export const createSetupLink = (os) => api("/credentials/setup-link", { method: "POST", json: { os } });
+// `cloud: true` also installs the Cloud (AWS) profile with a fresh AWS key made when the
+// command runs (with two keys already, the oldest one is replaced).
+export const createSetupLink = (os, cloud = false) =>
+  api("/credentials/setup-link", { method: "POST", json: cloud ? { os, cloud: true } : { os } });
+
+// Cloud (AWS) keys. GET -> {profile, region, iamUser|null, keys: [{accessKey, status,
+// createdAt}], maxKeys}. create/rotate answer {accessKey, secretKey, ...}: AWS shows a secret
+// only once, so that answer is the only time it exists in the browser; never store it.
+export const getCloudCredentials = () => api("/cloud/credentials");
+export const createCloudKey = () => api("/cloud/credentials/keys", { method: "POST" });
+export const rotateCloudKey = (accessKey) => api(`/cloud/credentials/keys/${enc(accessKey)}/rotate`, { method: "POST" });
+export const deleteCloudKey = (accessKey) => api(`/cloud/credentials/keys/${enc(accessKey)}`, { method: "DELETE" });
 
 // Key management (the server holds the secrets; none of these returns one).
 // create -> {accessKey}; rotate -> {accessKey, oldKeyRemoved, message?}; delete -> {accessKey}.

@@ -24,6 +24,20 @@ export function configSnippet({ profile, region, endpointUrl, addressingStyle })
   ].join("\n");
 }
 
+/** ~/.aws/config for the Cloud (AWS) profile: AWS's own endpoint, so no endpoint_url or
+ * addressing style; the same checksum settings as on premises (bucketeer/setup_script.py). */
+export function cloudConfigSnippet({ profile, region }) {
+  if (![profile, region].every(isSafe)) return null;
+  return [
+    "# Merge this into ~/.aws/config (do not replace the file).",
+    section(profile),
+    `region = ${region}`,
+    "request_checksum_calculation = when_required",
+    "response_checksum_validation = when_required",
+    "",
+  ].join("\n");
+}
+
 export const SECRET_PLACEHOLDER = "<reveal the secret to fill this in>";
 
 /** Text for ~/.aws/credentials; the secret is a placeholder until it is revealed. */

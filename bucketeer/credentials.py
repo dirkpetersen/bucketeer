@@ -16,7 +16,9 @@ generated `~/.aws/config` / `~/.aws/credentials` snippets.
 - `DELETE /api/credentials/keys/{accessKey}` -> `{accessKey}`; the last key is
   refused (409). Never the whole-set `PUT .../keys`.
 Key mutations hold a per-uid lock and are audited (`credentials.key.*`, no secrets).
-- `POST /api/credentials/setup-link` `{os}` -> `{url, command, expiresAt, expiresIn, os}`:
+- `POST /api/credentials/setup-link` `{os, cloud?}` ->
+  `{url, command, expiresAt, expiresIn, os, cloud}`
+  (`cloud: true` also installs `[s3-cloud]` with a fresh AWS key, see `cloud_users.py`):
   a one-time link (15 minutes, 10 per user per 15 minutes) for the user's first own key.
   `POST /setup/{token}` (outside `/api`: the token is the only credential, no CSRF header)
   returns a script that installs the key as an AWS profile (`bucketeer/setup_script.py`).
@@ -49,12 +51,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
+from . import cloud_users
 from .admin import croit_http_error
+from .cloud import CloudError
 from .config import Settings
 from .croit import CroitClient, CroitClientError, CroitError
 from .profile import require_default_budget
 from .rgw_user import RgwAccount, require_active_rgw_user
-from .setup_script import SetupValues, command, error_script, script
+from .setup_script import CloudValues, SetupValues, command, error_script, script
 
 log = logging.getLogger("bucketeer.credentials")
 
@@ -335,6 +339,7 @@ def _hash(token: str) -> str:
 
 class SetupBody(BaseModel):
     os: Literal["windows", "macos", "linux"]
+    cloud: bool = False  # also install [s3-cloud] with a fresh AWS key (cloud_users.setup_key)
 
 
 @router.post("/setup-link", dependencies=[Depends(require_default_budget)])
@@ -350,16 +355,26 @@ async def setup_link(body: SetupBody, request: Request, response: Response, acct
     recent = await db.run(db.setup_tokens.count_since, acct.username, _iso(now - SETUP_WINDOW))
     if recent >= SETUP_LIMIT:
         raise HTTPException(429, "Too many setup commands. Wait a few minutes and try again.")
+    if body.cloud:
+        # The cloud account is made now, so "ask an administrator" shows here, not in a
+        # terminal; the key itself is made when the script is fetched.
+        cloud_users.require_cloud(request)
+        try:
+            await cloud_users.ensure_account(request.app, acct.username)
+        except (cloud_users.CloudRefused, CloudError) as e:
+            log.info("setup-link: cloud refused for %s: %s", acct.username, e)
+            raise cloud_users.cloud_http_error(e) from None
     token = secrets.token_urlsafe(32)
     access = keys[0]["access_key"]
     expires = now + SETUP_TTL
     row_id = await db.run(db.setup_tokens.create, _hash(token), acct.username, acct.uid, access,
-                          body.os, _iso(now), _iso(expires), _iso(now - SETUP_KEEP))
+                          body.os, _iso(now), _iso(expires), _iso(now - SETUP_KEEP), body.cloud)
     await db.run(db.audit.add, acct.username, "credentials.setup_link", "access_key", access,
-                 {"uid": acct.uid, "os": body.os, "setupId": row_id, "expiresAt": _iso(expires)})
+                 {"uid": acct.uid, "os": body.os, "setupId": row_id, "expiresAt": _iso(expires),
+                  "cloud": body.cloud})
     url = f"{request.base_url}setup/{token}"
     return {"url": url, "command": command(body.os, url), "expiresAt": _iso(expires),
-            "expiresIn": SETUP_TTL, "os": body.os}
+            "expiresIn": SETUP_TTL, "os": body.os, "cloud": body.cloud}
 
 
 setup_router = APIRouter(tags=["setup"])  # mounted at the app root: no session, no CSRF header
@@ -419,7 +434,26 @@ async def run_setup(token: str, request: Request):
                          settings.s3_addressing_style, key["access_key"], key["secret_key"])
     if not values.valid():
         return await refuse("unsafe_value", "This key cannot be installed automatically.")
+    cloud_values = None
+    if row["cloud"]:
+        cloud = getattr(state, "cloud", None)
+        if cloud is None or not cloud.available:
+            return await refuse("cloud_unavailable", "Cloud storage is not available right "
+                                "now. Make a new setup command in Bucketeer later.")
+        try:
+            key = await cloud_users.setup_key(request.app, ad)
+        except cloud_users.CloudRefused as e:
+            return await refuse("cloud_refused", e.message)
+        except CloudError:
+            return await refuse("cloud_unavailable", "Bucketeer could not reach AWS. Make a "
+                                "new setup command in Bucketeer and try again.")
+        cloud_values = CloudValues(settings.cloud_profile_name, settings.cloud_region,
+                                   key["accessKey"], key["secretKey"])
+        if not cloud_values.valid():
+            await cloud_users.discard_key(request.app, ad, key["accessKey"])
+            return await refuse("unsafe_value", "This key cannot be installed automatically.")
+        info["cloudKey"] = key["accessKey"]
     # Audit first: if the log cannot be written, the secret is not handed out.
     await db.run(db.audit.add, ad, "credentials.setup", "access_key", row["access_key"],
                  {**info, "ip": ip})
-    return _script_response(script(os_name, values))
+    return _script_response(script(os_name, values, cloud_values))

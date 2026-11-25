@@ -32,6 +32,19 @@ class SetupValues:
                 and all(_ACCESS.match(v) for v in (self.access_key, self.secret_key)))
 
 
+@dataclass(frozen=True)
+class CloudValues:
+    """The `[s3-cloud]` profile (P6-9): AWS's own endpoint, so no endpoint_url or style."""
+    profile: str
+    region: str
+    access_key: str
+    secret_key: str
+
+    def valid(self) -> bool:
+        return (all(_PLAIN.match(v) for v in (self.profile, self.region))
+                and all(_ACCESS.match(v) for v in (self.access_key, self.secret_key)))
+
+
 # Windows PowerShell 5.1 may not offer TLS 1.2 by default.
 TLS12 = ("[Net.ServicePointManager]::SecurityProtocol = "
          "[Net.ServicePointManager]::SecurityProtocol -bor 3072; ")
@@ -58,7 +71,17 @@ def _config_lines(v: SetupValues) -> list[str]:
     ]
 
 
-def _cred_lines(v: SetupValues) -> list[str]:
+def _cloud_config_lines(v: CloudValues) -> list[str]:
+    head = "[default]" if v.profile == "default" else f"[profile {v.profile}]"
+    return [
+        head,
+        f"region = {v.region}",
+        "request_checksum_calculation = when_required",
+        "response_checksum_validation = when_required",
+    ]
+
+
+def _cred_lines(v: SetupValues | CloudValues) -> list[str]:
     return [f"[{v.profile}]", f"aws_access_key_id = {v.access_key}",
             f"aws_secret_access_key = {v.secret_key}"]
 
@@ -85,8 +108,10 @@ install_section() {
   mkdir -p "$(dirname "$file")"
   tmp="$file.bucketeer-tmp.$$"
   if [ -f "$file" ]; then
-    cp -p "$file" "$file.bucketeer-backup-$STAMP"
-    chmod 600 "$file.bucketeer-backup-$STAMP"
+    if [ ! -e "$file.bucketeer-backup-$STAMP" ]; then
+      cp -p "$file" "$file.bucketeer-backup-$STAMP"
+      chmod 600 "$file.bucketeer-backup-$STAMP"
+    fi
     awk -v h="$header" '
       { t = $0; sub(/\r$/, "", t); sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t) }
       substr(t, 1, 1) == "[" { skip = (t == h) }
@@ -105,20 +130,14 @@ main() {
   CRED="${AWS_SHARED_CREDENTIALS_FILE:-$HOME/.aws/credentials}"
   CFG="${AWS_CONFIG_FILE:-$HOME/.aws/config}"
   STAMP=$(date +%Y%m%d%H%M%S)
-  install_section "$CRED" '@CRED_HEADER@' '@CRED_BODY@'
-  install_section "$CFG" '@CFG_HEADER@' '@CFG_BODY@'
+@INSTALLS@
   chmod 600 "$CRED"
-  echo "Done. The AWS profile '@PROFILE@' is installed."
+  echo "Done. @DONE@"
   echo "  keys:   $CRED"
   echo "  config: $CFG"
   echo "Earlier versions of these files were kept next to them as *.bucketeer-backup-$STAMP."
   if command -v aws >/dev/null 2>&1; then
-    echo "Testing: @TEST@"
-    if @TEST@ </dev/null; then
-      echo "It works."
-    else
-      echo "The test did not work. Check your network and VPN, then run: @TEST@"
-    fi
+@TESTS@
   else
     echo "The AWS CLI is not installed. Install it from https://aws.amazon.com/cli/ , then run: @TEST@"
   fi
@@ -144,7 +163,9 @@ _PS = r"""# Bucketeer setup: installs one AWS profile on this computer. Safe to 
       if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
       $lines = @()
       if (Test-Path -LiteralPath $file) {
-        Copy-Item -LiteralPath $file -Destination "$file.bucketeer-backup-$stamp"
+        if (-not (Test-Path -LiteralPath "$file.bucketeer-backup-$stamp")) {
+          Copy-Item -LiteralPath $file -Destination "$file.bucketeer-backup-$stamp"
+        }
         $lines = [System.IO.File]::ReadAllLines($file)
       }
       $out = New-Object System.Collections.Generic.List[string]
@@ -161,23 +182,19 @@ _PS = r"""# Bucketeer setup: installs one AWS profile on this computer. Safe to 
       Move-Item -LiteralPath $tmp -Destination $file -Force
     }
 
-    Install-Section $credFile '@CRED_HEADER@' @(@CRED_ITEMS@)
-    Install-Section $cfgFile '@CFG_HEADER@' @(@CFG_ITEMS@)
+@INSTALLS@
     try {
       $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
       icacls $credFile /inheritance:r /grant:r "*${sid}:F" | Out-Null
     } catch { }
 
-    Write-Host "Done. The AWS profile '@PROFILE@' is installed."
+    Write-Host "Done. @DONE@"
     Write-Host "  keys:   $credFile"
     Write-Host "  config: $cfgFile"
     Write-Host "Earlier versions of these files were kept next to them as *.bucketeer-backup-$stamp."
     if (Get-Command aws -ErrorAction SilentlyContinue) {
-      Write-Host "Testing: @TEST@"
       $ErrorActionPreference = 'Continue'
-      & aws @TEST_ARGS@
-      if ($LASTEXITCODE -eq 0) { Write-Host 'It works.' }
-      else { Write-Host 'The test did not work. Check your network and VPN, then run: @TEST@' }
+@TESTS@
     } else {
       Write-Host 'The AWS CLI is not installed. Install it from https://aws.amazon.com/cli/ , then run: @TEST@'
     }
@@ -194,23 +211,63 @@ def _fill(template: str, **parts: str) -> str:
     return template
 
 
-def sh_script(v: SetupValues) -> str:
-    assert v.valid()
-    cred, cfg = _cred_lines(v), _config_lines(v)
-    return _fill(_SH, CRED_HEADER=cred[0], CRED_BODY="\n".join(cred),
-                 CFG_HEADER=cfg[0], CFG_BODY="\n".join(cfg),
-                 PROFILE=v.profile, TEST=_test_cmd(v.profile))
+def _profiles(v: SetupValues, cloud: CloudValues | None) -> list[tuple[str, list[str], list[str], bool]]:
+    """(profile, credentials lines, config lines, is_cloud) for each profile to install."""
+    out = [(v.profile, _cred_lines(v), _config_lines(v), False)]
+    if cloud is not None:
+        assert cloud.valid() and cloud.profile != v.profile
+        out.append((cloud.profile, _cred_lines(cloud), _cloud_config_lines(cloud), True))
+    return out
 
 
-def ps_script(v: SetupValues) -> str:
+def _done(names: list[str]) -> str:
+    if len(names) == 1:
+        return f"The AWS profile '{names[0]}' is installed."
+    return "The AWS profiles " + " and ".join(f"'{n}'" for n in names) + " are installed."
+
+
+# A new AWS access key can take a few seconds to work everywhere.
+_CLOUD_LATE = "A new AWS key can take a minute to start working; try again shortly"
+
+
+def sh_script(v: SetupValues, cloud: CloudValues | None = None) -> str:
     assert v.valid()
-    cred, cfg = _cred_lines(v), _config_lines(v)
+    profiles = _profiles(v, cloud)
+    installs, tests = [], []
+    for name, cred, cfg, is_cloud in profiles:
+        installs += [f"  install_section \"$CRED\" '{cred[0]}' '" + "\n".join(cred) + "'",
+                     f"  install_section \"$CFG\" '{cfg[0]}' '" + "\n".join(cfg) + "'"]
+        t = _test_cmd(name)
+        hint = _CLOUD_LATE if is_cloud else "Check your network and VPN"
+        tests += [f'    echo "Testing: {t}"',
+                  f"    if {t} </dev/null; then",
+                  '      echo "It works."',
+                  "    else",
+                  f'      echo "The test did not work. {hint}, then run: {t}"',
+                  "    fi"]
+    return _fill(_SH, INSTALLS="\n".join(installs), TESTS="\n".join(tests),
+                 DONE=_done([p[0] for p in profiles]),
+                 TEST=" and ".join(_test_cmd(p[0]) for p in profiles))
+
+
+def ps_script(v: SetupValues, cloud: CloudValues | None = None) -> str:
+    assert v.valid()
+    profiles = _profiles(v, cloud)
     items = lambda ls: ",".join(f"'{x}'" for x in ls)  # noqa: E731
-    test = _test_cmd(v.profile)
-    return _fill(_PS, CRED_HEADER=cred[0], CFG_HEADER=cfg[0],
-                 CRED_ITEMS=items(cred), CFG_ITEMS=items(cfg),
-                 PROFILE=v.profile, TEST=test, TEST_ARGS=" ".join(test.split()[1:]))
+    installs, tests = [], []
+    for name, cred, cfg, is_cloud in profiles:
+        installs += [f"    Install-Section $credFile '{cred[0]}' @({items(cred)})",
+                     f"    Install-Section $cfgFile '{cfg[0]}' @({items(cfg)})"]
+        t = _test_cmd(name)
+        hint = _CLOUD_LATE if is_cloud else "Check your network and VPN"
+        tests += [f'      Write-Host "Testing: {t}"',
+                  f"      & aws {' '.join(t.split()[1:])}",
+                  "      if ($LASTEXITCODE -eq 0) { Write-Host 'It works.' }",
+                  f"      else {{ Write-Host 'The test did not work. {hint}, then run: {t}' }}"]
+    return _fill(_PS, INSTALLS="\n".join(installs), TESTS="\n".join(tests),
+                 DONE=_done([p[0] for p in profiles]),
+                 TEST=" and ".join(_test_cmd(p[0]) for p in profiles))
 
 
-def script(os_name: str, v: SetupValues) -> str:
-    return ps_script(v) if os_name == "windows" else sh_script(v)
+def script(os_name: str, v: SetupValues, cloud: CloudValues | None = None) -> str:
+    return ps_script(v, cloud) if os_name == "windows" else sh_script(v, cloud)

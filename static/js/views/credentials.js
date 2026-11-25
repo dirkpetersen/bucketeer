@@ -7,6 +7,7 @@ import { toast } from "../components/toast.js";
 import { confirmDialog } from "../components/confirm-dialog.js";
 import { configSnippet, credentialsSnippet, testCommand } from "../awsconfig.js";
 import { subusersSection } from "./subusers.js";
+import { cloudSection } from "./cloud-keys.js";
 import { setupPanel } from "../components/setup-panel.js";
 import { isAdvanced, subscribe } from "../advanced.js";
 
@@ -200,7 +201,7 @@ function accountStatus() {
       const show = (d, select) => paint("chip-ok", "Account ready",
         h("p", { class: "acct-line" }, "Signed in to S3 as ", h("code", { class: "acct-uid", text: a.uid }),
           h("span", { class: "acct-sub", text: `Storage limit: ${quotaText(a.quota)}` })),
-        setupPanel(d), advancedKeys(d, select, reload), subusersSection(d));
+        setupPanel(d), advancedKeys(d, select, reload), subusersSection(d), cloudSection());
       // Re-read the key list after a change; the old panel (and any revealed secret) is dropped.
       const reload = async (select) => {
         try {

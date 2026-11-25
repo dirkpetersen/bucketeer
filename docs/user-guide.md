@@ -63,6 +63,29 @@ aws --profile s3-onprem s3 ls
     working. Switch them to `--profile s3-onprem` (or `AWS_PROFILE=s3-onprem`), then delete
     the old section from `~/.aws/config` and `~/.aws/credentials` when you no longer need it.
 
+### Cloud (AWS) keys { #cloud-keys }
+
+When your administrator has set up cloud storage and you work in **Cloud**, the
+Credentials card also shows **Cloud (AWS)**. Your first cloud key also creates your AWS
+user. Cloud keys are separate from your on-premises keys and use the profile `s3-cloud`:
+
+```bash
+aws --profile s3-cloud s3 ls
+```
+
+- **The secret is shown once.** AWS hands out a secret only when the key is made, and
+  Bucketeer does not keep it. Copy it (or the ready-made `~/.aws/credentials` text) right
+  away, then click **Done, I saved it**. If you lose it, create a new key or rotate.
+- **At most two keys.** AWS allows two keys per user. **Rotate** makes a new key and then
+  deletes the old one, so it needs a free slot: with two keys, delete the one you don't use
+  first. Your last key can't be deleted, only rotated.
+- **Setup command.** Tick **Also set up Cloud (AWS)** in *Set up this computer* (it is ticked
+  when you work in Cloud). The command then installs `s3-cloud` next to `s3-onprem` with a
+  new AWS key; if you already have two keys, the oldest is replaced. A new AWS key can take
+  a minute before it works everywhere, so if the test at the end fails, try again shortly.
+- If the card says to **ask an administrator**, an AWS user with your name already exists
+  that Bucketeer did not make. An administrator has to remove it first.
+
 ## 4. Create a bucket
 
 Click **Create bucket**. Bucket names use lowercase letters, digits and hyphens (no dots).
