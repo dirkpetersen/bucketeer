@@ -222,7 +222,8 @@ def test_partial_cloud_settings_stop_startup(monkeypatch, tmp_path):
     ("cloud_user_prefix", "S3-"), ("cloud_user_prefix", "-s3-"),
     ("cloud_user_prefix", "a" * 17 + "-"), ("cloud_user_prefix", "s3.x-"),
     ("cloud_region", "us west"), ("cloud_profile_name", "[x]"),
-    ("cloud_admin_access_key", "akia-lower"),
+    ("cloud_admin_access_key", "akia-lower"), ("cloud_billing_bucket", "Billing_Bucket"),
+    ("cloud_billing_bucket", "a.b"), ("cloud_billing_bucket", "x" * 64),
 ])
 def test_cloud_values_are_checked(field, value):
     with pytest.raises(ValidationError):
@@ -236,6 +237,18 @@ def test_cloud_values_are_checked(field, value):
 ])
 def test_cloud_values_accepted(field, value):
     Settings(_env_file=None, **REQUIRED, **{**CLOUD_VALUES, field: value})
+
+
+def test_cloud_billing_bucket():
+    """Default empty (no cloud rows); on only together with cloud itself."""
+    s = Settings(_env_file=None, **REQUIRED)
+    assert s.cloud_billing_bucket == "" and s.cloud_billing_configured is False
+    s = Settings(_env_file=None, **REQUIRED, cloud_billing_bucket=" bucketeer-billing-0a ")
+    assert s.cloud_billing_bucket == "bucketeer-billing-0a"
+    assert s.cloud_billing_configured is False  # cloud itself is off
+    s = Settings(_env_file=None, **REQUIRED, **CLOUD_VALUES,
+                 cloud_billing_bucket="bucketeer-billing-0a")
+    assert s.cloud_billing_configured is True
 
 
 def test_cloud_profile_must_differ():

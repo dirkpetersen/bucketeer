@@ -5,8 +5,15 @@ Sheet 1 "Chargeback": one row per bucket with readings in the month, exactly the
 `Tier-3-S3`); Quantity = the month's daily average QUOTA in TiB (2^40), rounded up: the sum
 of each day's quota over the days of the month, a day without a reading counts 0. A day
 without a size quota (unlimited) counts the measured size instead, and the bucket is listed
-on the Problems sheet. Cloud rows (P6-11) are other products from the same catalog;
-`_lines` is where they join. E/F are real Excel dates (`m/d/yyyy`), G and I the
+on the Problems sheet. Cloud rows (P6-11, `cloud_rows`): one per cloud bucket with a cost
+in the month's AWS data export (`cloud_costs.month_costs`), Quantity = that cost in CENTS
+(rounded to the nearest cent), product from the bucket's `bucketeer-product` tag
+(catalog `archive` / `cloud`, by name or id), A/B from its `bucketeer-owner-email` /
+`bucketeer-budget` tags (read with the AWS admin user, `cloud_costs.bucket_facts_for`).
+On the Problems sheet, with their amounts: buckets with our prefix but no owner tag
+("Unknown cloud bucket", not billed), an unknown product, system costs (billing and backup
+buckets), S3 costs without a bucket name, an unreadable export and a month that is not
+final yet. E/F are real Excel dates (`m/d/yyyy`), G and I the
 tenant-qualified bucket name, H and J empty. A = the owner's AD `mail` (AD names of the uid
 from `known_accounts` and `rgw_user.ad_names_for_uid`, looked up without a password; else
 the RGW user's email; else the uid, listed on Problems). B = the budget number, empty when
@@ -16,14 +23,20 @@ through `admin.csv_safe` (formula injection works in xlsx too).
 * `GET /api/admin/billing/chargeback.xlsx?month=YYYY-MM` (not a future month) -> the file,
   attachment `bucketeer-chargeback-YYYY-MM.xlsx`, `no-store`; audit
   `admin.export.billing_xlsx` (target_type `report`, details month, rows, problems).
+* `GET /api/admin/billing/cloud?month=YYYY-MM` -> `{enabled, month, available, final,
+  generatedAt, fetchedAt, stale, reason, exportTotal, rowsTotal, rows, unknownTotal,
+  systemTotal, unattributed, currency}` (amounts in USD, the export's currency): the
+  export's S3 total for our buckets next to the sum of the sheet's cloud rows.
 * `POST /api/admin/billing/report/send {month}` mails that month's sheet to the billing
   contacts now (for testing; does not count as the scheduled send) -> `{month, sent,
   failed, rows, problems}`; 409 while email is off or no contact is set, 502 when no
   address took it.
 * `report_loop` (lifespan task, `billing.REPORT_ON_START`) checks every minute: on the send
   day at 06:00 server local time (or at the first tick after it, so a missed day is caught
-  up at the next start) it mails LAST month's sheet, then records `lastSentMonth` in the
-  settings key `billing_report`; a failed try is retried hourly.
+  up at the next start; with cloud billing set up the send day is at least the 5th,
+  `cloud_costs.FINAL_DAY`, so AWS has finished the month) it mails LAST month's sheet,
+  then records `lastSentMonth` in the settings key `billing_report`; a failed try is
+  retried hourly.
 * Audit `billing.report_sent` / `billing.report_failed` (target_type `report`, target
   `billing`; details month, recipients, failed, trigger, reason; never the content);
   actor `system` for the schedule, else the admin.
@@ -34,12 +47,13 @@ import calendar
 import io
 import logging
 from datetime import date, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, StrictStr
 
-from . import billing
+from . import billing, cloud_costs
 from .auth import SessionUser, require_admin
 from .budget import budget_matches, load_budget_rules
 from .db import Database, get_db
@@ -117,6 +131,145 @@ def build_rows(lines: list[dict], month: str, budgets: dict[str, tuple[str | Non
         })
     rows.sort(key=lambda r: (r["email"].lower(), r["note"]))
     return rows, problems
+
+
+CLOUD_PRODUCTS = ("archive", "cloud")
+EXPORT_CURRENCY = "USD"
+
+
+def cloud_product(settings: dict, value: str | None) -> str | None:
+    """The catalog id (`archive` / `cloud`) a `bucketeer-product` tag names: the current
+    product name, its default name (renamed since) or the id, any case; else None."""
+    v = (value or "").strip().lower()
+    if not v:
+        return None
+    for p in [*settings["products"], *billing.DEFAULT_PRODUCTS]:
+        if p["id"] in CLOUD_PRODUCTS and v in (p["id"], p["name"].strip().lower()):
+            return p["id"]
+    return None
+
+
+def cents(cost: float) -> int:
+    return int((Decimal(str(cost)) * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
+def _usd(cost: float) -> str:
+    amount = Decimal(str(cost)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return f"{amount} {EXPORT_CURRENCY}"
+
+
+def cloud_rows(costs: dict, facts: dict[str, dict], month: str, settings: dict,
+               usable: dict[str | None, bool], billing_bucket: str = ""
+               ) -> tuple[list[dict], list[dict], dict[str, Any]]:
+    """Cloud sheet rows, Problems rows and the totals for the Billing tab. `usable[number]`
+    says whether a budget number matches the admin pattern."""
+    first, last, _ = month_bounds(month)
+    rows: list[dict] = []
+    problems: list[dict] = []
+    summary: dict[str, Any] = {"rowsTotal": 0.0, "rows": 0, "unknownTotal": 0.0}
+
+    def problem(bucket, owner, what, details):
+        problems.append({"bucket": bucket, "owner": owner, "problem": what,
+                         "details": details})
+
+    if not costs.get("available"):
+        problem("(cloud)", "", "Cloud costs unavailable",
+                costs.get("reason") or "The billing export is unreadable")
+        return rows, problems, summary
+    if costs.get("stale"):
+        problem("(cloud)", "", "Cloud costs not current",
+                f"Export read {costs.get('fetchedAt')}; reading it again failed: "
+                f"{costs.get('reason')}")
+    if not costs.get("final"):
+        problem("(cloud)", "", "Cloud costs not final",
+                f"AWS finishes a month by the {cloud_costs.FINAL_DAY}th of the next one; "
+                f"export generated {costs.get('generatedAt') or 'never'}")
+    unknown = Decimal(0)
+    row_cents = 0
+    for bucket, cost in costs["buckets"].items():
+        f = facts.get(bucket) or {}
+        owner = (f.get("owner") or "").strip()
+        if not owner:
+            unknown += Decimal(str(cost))
+            problem(bucket, "", "Unknown cloud bucket",
+                    f"{_usd(cost)} not billed: no bucketeer-owner tag"
+                    + (f" ({f['reason']})" if f.get("reason") else ""))
+            continue
+        pid = cloud_product(settings, f.get("product"))
+        if pid is None:
+            unknown += Decimal(str(cost))
+            problem(bucket, owner, "Unknown product",
+                    f"{_usd(cost)} not billed: the bucketeer-product tag is "
+                    f"{f.get('product') or 'missing'}")
+            continue
+        quantity = cents(cost)
+        if quantity == 0:
+            continue
+        number = (f.get("budget") or "").strip() or None
+        ok = bool(number) and usable.get(number, False)
+        if not number:
+            problem(bucket, owner, "No budget number", "Index left empty")
+        elif not ok:
+            problem(bucket, owner, "Budget number does not match the format",
+                    f"Stored value {number}; Index left empty")
+        email = (f.get("email") or "").strip()
+        if "@" not in email:
+            email = ""
+            problem(bucket, owner, "No email address for the owner",
+                    "Column A shows the owner tag")
+        row_cents += quantity
+        rows.append({
+            "email": email or owner, "index": number if ok else None,
+            "product": billing.product(settings, pid)["name"], "quantity": quantity,
+            "orderDate": first, "fulfillmentDate": last, "note": bucket, "referenceId": bucket,
+        })
+    for name, cost in (costs.get("system") or {}).items():
+        if cost:
+            kind = "billing export" if name == billing_bucket else "backups"
+            problem(name, "Bucketeer", "System cost",
+                    f"{_usd(cost)} for Bucketeer's {kind}; not billed")
+    if costs.get("unattributed"):
+        problem("(no bucket)", "", "S3 cost without a bucket name",
+                f"{_usd(costs['unattributed'])} (taxes or account-level S3 charges); "
+                f"not billed")
+    summary.update(rowsTotal=row_cents / 100, rows=len(rows), unknownTotal=float(unknown))
+    return rows, problems, summary
+
+
+async def cloud_part(app, month: str, pattern: str | None
+                     ) -> tuple[list[dict], list[dict], dict[str, Any]]:
+    """The month's cloud rows, problems and Billing-tab summary; nothing when cloud
+    billing is not set up."""
+    summary: dict[str, Any] = {"enabled": cloud_costs.billing_enabled(app), "month": month,
+                               "currency": EXPORT_CURRENCY}
+    if not summary["enabled"]:
+        return [], [], summary
+    db: Database = app.state.db
+    costs = await cloud_costs.month_costs(app, month)
+    facts = (await cloud_costs.bucket_facts_for(app, list(costs["buckets"]))
+             if costs.get("available") else {})
+    numbers = {(f.get("budget") or "").strip() or None for f in facts.values()}
+
+    def judge():
+        out = {}
+        for n in numbers:
+            try:
+                out[n] = budget_matches(n, pattern) is not False
+            except TimeoutError:
+                out[n] = True  # unjudged: keep it, as the admin list does
+        return out
+
+    usable = await asyncio.to_thread(judge)
+    settings = await db.run(billing.load, db)
+    rows, problems, part = cloud_rows(costs, facts, month, settings, usable,
+                                      app.state.settings.cloud_billing_bucket)
+    summary.update(part)
+    summary.update({k: costs.get(k) for k in ("available", "final", "generatedAt",
+                                               "fetchedAt", "reason", "exportTotal",
+                                               "unattributed")})
+    summary["stale"] = bool(costs.get("stale"))
+    summary["systemTotal"] = round(sum((costs.get("system") or {}).values()), 8)
+    return rows, problems, summary
 
 
 def _text(value: Any) -> str | None:
@@ -212,6 +365,9 @@ async def build(app, month: str) -> tuple[bytes, dict[str, int]]:
     budgets = await asyncio.to_thread(judge)
     emails = await owner_emails(app, {line["owner"] for line in lines})
     rows, problems = build_rows(lines, month, budgets, emails, settings)
+    c_rows, c_problems, _ = await cloud_part(app, month, pattern)
+    rows = sorted(rows + c_rows, key=lambda r: (r["email"].lower(), r["note"]))
+    problems += c_problems
     data = await asyncio.to_thread(to_xlsx, rows, problems)
     return data, {"rows": len(rows), "problems": len(problems)}
 
@@ -273,6 +429,14 @@ async def send_report(app, month: str, *, actor: str, trigger: str) -> dict[str,
         return result
 
 
+def send_settings(app, settings: dict) -> dict:
+    """The billing settings as the scheduler uses them: with cloud billing set up, the
+    send day is at least `cloud_costs.FINAL_DAY` (AWS finishes a month by then)."""
+    if cloud_costs.billing_enabled(app) and settings["sendDay"] < cloud_costs.FINAL_DAY:
+        return {**settings, "sendDay": cloud_costs.FINAL_DAY}
+    return settings
+
+
 def _last(result: dict, trigger: str, now: datetime) -> dict[str, Any]:
     return {"month": result["month"], "at": now.isoformat(timespec="seconds"),
             "trigger": trigger, "sent": result["sent"], "failed": result["failed"],
@@ -283,7 +447,7 @@ async def report_tick(app, now: datetime | None = None) -> dict[str, Any] | None
     """One scheduler check; sends last month's sheet when it is due. Returns the result."""
     db: Database = app.state.db
     now = now or datetime.fromtimestamp(app.state.clock())
-    settings = await db.run(billing.load, db)
+    settings = send_settings(app, await db.run(billing.load, db))
     state = await db.run(billing.load_state, db)
     month = billing.due_month(now, settings, state, RETRY_SECONDS)
     if month is None or not app.state.mailer.enabled:
@@ -335,6 +499,15 @@ async def chargeback_xlsx(request: Request, admin: Admin, db: Db,
     return Response(data, media_type=XLSX_MIME, headers={
         "Content-Disposition": f'attachment; filename="{filename(month)}"',
         "Cache-Control": "no-store"})
+
+
+@router.get("/cloud")
+async def cloud_summary(request: Request, db: Db,
+                        month: Annotated[str, Query(pattern=MONTH_PATTERN)]):
+    month = _check_month(request, month)
+    pattern = (await db.run(load_budget_rules, db.settings))["pattern"]
+    _, _, summary = await cloud_part(request.app, month, pattern)
+    return summary
 
 
 class SendBody(BaseModel):

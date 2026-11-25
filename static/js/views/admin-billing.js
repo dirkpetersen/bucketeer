@@ -6,6 +6,8 @@ import { toast } from "../components/toast.js";
 // Admin "Billing" tab: product catalog (Tier-3-S3 price = the billing price), fiscal year
 // start, the monthly chargeback .xlsx (download, send now, contacts and monthly email), and
 // the monthly charges per user or per bucket for the last 12 months plus fiscal year to date.
+// With cloud billing (CLOUD_BILLING_BUCKET), the sheet card also shows the AWS export's S3
+// total for the picked month next to the sum of the sheet's cloud rows.
 // The server computes every figure; this view only shows them.
 
 const FY = [[1, "January 1"], [4, "April 1"], [7, "July 1"], [10, "October 1"]];
@@ -89,6 +91,56 @@ export function renderBilling() {
 
   const fmtWhen = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
+  const usd = (v) => {
+    try {
+      return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(v);
+    } catch {
+      return `${Number(v).toFixed(2)} USD`;
+    }
+  };
+
+  // The AWS side of the picked month: export total vs. the sheet's cloud rows.
+  function cloudPanel() {
+    const box = h("div", { class: "bl-cloud", "aria-live": "polite" });
+    let seq = 0;
+    async function show(m) {
+      const mine = ++seq;
+      box.replaceChildren(h("p", { class: "set-hint", text: `Reading the AWS billing export for ${m}…` }));
+      let c;
+      try {
+        c = await api(`/admin/billing/cloud?month=${encodeURIComponent(m)}`);
+      } catch (err) {
+        if (err.status === 401 || mine !== seq) return;
+        box.replaceChildren(h("p", { class: "set-err", text: err.message }));
+        return;
+      }
+      if (mine !== seq) return;
+      if (!c.available) {
+        box.replaceChildren(h("div", { class: "set-warn", role: "note" }, icon("alert"),
+          h("span", { text: `Cloud costs for ${m} are not available: ${c.reason || "the billing export could not be read"}.` })));
+        return;
+      }
+      const stat = (label, value, extra) => h("div", { class: "bl-stat" },
+        h("span", { class: "bl-stat-label", text: label }), h("b", { class: "bl-stat-value", text: value }),
+        extra ? h("small", { class: "bl-stat-note", text: extra }) : null);
+      const gap = Math.round((c.exportTotal - c.rowsTotal) * 100) / 100;
+      box.replaceChildren(
+        h("div", { class: "bl-cloud-head" },
+          h("b", { text: `Cloud (AWS), ${m}` }),
+          h("span", { class: c.final ? "chip chip-ok" : "chip", text: c.final ? "Final" : "Not final yet" }),
+          c.stale ? h("span", { class: "chip chip-warn", text: "Older figures" }) : null),
+        h("div", { class: "bl-stats" },
+          stat("Export total, our buckets", usd(c.exportTotal)),
+          stat("Sheet cloud rows", usd(c.rowsTotal), `${c.rows} ${c.rows === 1 ? "row" : "rows"}`),
+          stat("Not billed", usd(gap), gap ? "See the Problems sheet" : "Nothing left over"),
+          stat("System and unassigned", usd((c.systemTotal || 0) + (c.unattributed || 0)), "Billing and backup buckets, S3 costs without a bucket")),
+        h("p", { class: "set-hint", text: c.generatedAt
+          ? `Export generated ${fmtWhen(c.generatedAt)}, read ${fmtWhen(c.fetchedAt)}. AWS finishes a month by the 5th of the next one.`
+          : (c.reason || "No export for this month yet.") }));
+    }
+    return { box, show };
+  }
+
   function sheetCard() {
     const s = data.settings;
     const rep = data.report;
@@ -97,6 +149,15 @@ export function renderBilling() {
     const sync = () => { download.href = `/api/admin/billing/chargeback.xlsx?month=${encodeURIComponent(month.value)}`; };
     month.addEventListener("input", sync);
     sync();
+    const cloud = rep.cloudBilling ? cloudPanel() : null;
+    if (cloud) {
+      let timer = 0;
+      month.addEventListener("input", () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { if (month.checkValidity()) cloud.show(month.value); }, 300);
+      });
+      cloud.show(month.value);
+    }
     const sendNow = h("button", { class: "btn", type: "button", disabled: !data.email.enabled || !s.contacts.length }, icon("bell"), "Send now");
     sendNow.addEventListener("click", async () => {
       sendNow.disabled = true;
@@ -118,7 +179,8 @@ export function renderBilling() {
     const form = h("form", { class: "bl-form", novalidate: true },
       h("div", { class: "field bl-wide" }, h("label", { for: "bl-contacts", text: "Billing contacts" }), contacts,
         h("small", { class: "set-hint", id: "bl-contacts-hint", text: "One email address per line, at most 10." })),
-      h("div", { class: "field" }, h("label", { for: "bl-day", text: "Send on day of the month" }), day),
+      h("div", { class: "field" }, h("label", { for: "bl-day", text: "Send on day of the month" }), day,
+        rep.cloudBilling && s.sendDay < rep.sendDay ? h("small", { class: "set-hint", text: `Cloud billing is on, so the email waits until day ${rep.sendDay}, when AWS has finished the month.` }) : null),
       h("label", { class: "qd-check set-check", for: "bl-on" }, on,
         h("span", {}, h("b", { text: "Email last month's sheet" }), h("small", { text: "On the send day at 06:00 server time" }))),
       h("div", { class: "set-actions" }, save));
@@ -147,11 +209,13 @@ export function renderBilling() {
 
     return h("section", { class: "card set-card", "aria-labelledby": "bl-x" },
       h("div", { class: "set-head" }, h("h2", { id: "bl-x", text: "Chargeback sheet" }),
-        h("span", { class: "chip", text: s.sendEnabled ? `Emailed on day ${s.sendDay}` : "Email off" })),
+        h("span", { class: "chip", text: s.sendEnabled ? `Emailed on day ${rep.sendDay || s.sendDay}` : "Email off" })),
       h("p", { class: "set-lead", text: "One row per bucket and month for finance. On-premises buckets are billed on their quota: the month's daily average in TiB, rounded up. A bucket without a quota is billed on its measured size. Buckets without a budget number, or owners without an email address, are listed on the Problems sheet." }),
+      rep.cloudBilling ? h("p", { class: "set-hint", text: "Cloud buckets are billed at their real AWS cost from the billing export, in cents (Quantity 1234 = $12.34). Cloud buckets Bucketeer can't place, system costs and S3 costs without a bucket are listed on the Problems sheet with their amounts." }) : null,
       h("div", { class: "bl-month" },
         h("div", { class: "field" }, h("label", { for: "bl-month", text: "Month" }), month),
         h("div", { class: "bl-tools" }, download, sendNow)),
+      cloud ? cloud.box : null,
       data.email.enabled ? null : h("div", { class: "set-warn", role: "note" }, icon("alert"),
         h("span", { text: "Email is off (SMTP_FROM is empty in the server settings), so the sheet can only be downloaded." })),
       form, status);

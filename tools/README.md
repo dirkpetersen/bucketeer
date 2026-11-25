@@ -203,6 +203,8 @@ A='--admin-user <admin-user> --user-prefix <user-prefix>'
 tools/aws-setup $A --print                    # show both policies, change nothing
 tools/aws-setup $A --create-key               # policies + admin user + one key
 tools/aws-setup $A --activate-tags            # later: turn on the cost allocation tags
+tools/aws-setup $A --billing-export           # billing bucket + CUR 2.0 data export
+tools/aws-setup $A --billing-bucket <bucket> --print   # the policies with the billing parts
 tools/aws-setup $A --prefix bucketeer-test- --region us-west-2
 ```
 
@@ -212,3 +214,19 @@ per-person IAM user can do; their names start with `--user-prefix`), the policy 
 access; CloudWatch S3 metrics; Cost Explorer and the cost allocation tags, `bucketeer-bucket` first, since cloud buckets are billed by it) and Bucketeer's own IAM user
 (`--admin-user`) under `/bucketeer-admin/`. It is idempotent: a re-run gives the
 policies a new default version. `--create-key` prints the `.env` lines once.
+
+`--billing-export` sets up cloud billing (PLAN.md section 3, decision 18): the billing
+bucket `<prefix>billing-<12 hex>` in `--region` (or `--billing-bucket <bucket>`, else the
+bucket the export already delivers to, else an existing `<prefix>billing-*` bucket) with
+Block Public Access and a bucket policy that lets only `billingreports.amazonaws.com` and
+`bcm-data-exports.amazonaws.com` deliver (`s3:PutObject`, `s3:GetBucketPolicy`, limited to
+this account by `aws:SourceAccount` and `aws:SourceArn`), and the CUR 2.0 data export
+`<prefix>s3-costs` in us-east-1 (daily, with resource ids, gzip CSV, overwritten each
+refresh, under `cur/`; created, or updated when it exists). It prints
+`CLOUD_BILLING_BUCKET=<bucket>` for Bucketeer's `.env`. Whenever a billing bucket is
+known (also on later runs without the option), `BucketeerAdmin` lets the admin user list
+and read that bucket only: the "no object read" Deny gets a `NotResource` exception for
+it, an allow statement grants `ListBucket`/`GetObject` on it, and another Deny stops the
+admin user from changing its policy or deleting it; the person boundary denies it
+entirely. The AWS administrator running the script needs `bcm-data-exports` rights;
+Bucketeer's admin user never manages the export.

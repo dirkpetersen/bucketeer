@@ -88,8 +88,8 @@ Pick a month and click **Download .xlsx** for the sheet finance imports
 |---|---|
 | A Username / Email | the owner's email address from AD (the S3 user id when none is found) |
 | B Index | the bucket's budget number (empty when missing or not in the right format) |
-| C Product Name | `Tier-3-S3` for on-premises buckets |
-| D Quantity | the month's daily average **quota** in TiB, rounded up |
+| C Product Name | `Tier-3-S3` for on-premises buckets; `Archive-S3` or `Cloud-S3` for cloud buckets |
+| D Quantity | on premises: the month's daily average **quota** in TiB, rounded up; cloud: the real AWS cost in **cents** |
 | E, F Order / Fulfillment Date | the first and last day of the month |
 | G Note, I Reference ID | the bucket name (`tenant:bucket` with a tenant) |
 | H Order, J Project Name | empty |
@@ -102,7 +102,11 @@ measured size instead.
 
 The second sheet, **Problems**, lists what needs chasing: buckets without a budget number
 or with one in the wrong format, owners without an email address, and buckets without a
-quota.
+quota. With [cloud billing](#cloud-billing) it also lists, each with its amount: cloud
+buckets Bucketeer can't place (no `bucketeer-owner` tag, or an unknown
+`bucketeer-product`), Bucketeer's own system costs (the billing and backup buckets), S3
+costs without a bucket name (taxes, account-level charges), and a note while the month is
+not final yet or the billing export can't be read.
 
 ### Monthly email
 
@@ -113,7 +117,9 @@ never sends the same month twice. A failed send is retried every hour. Switching
 on after this month's send day starts with next month's.
 
 The email needs Bucketeer's email to be on (`SMTP_FROM` and `APP_URL`, see the deployment
-guide); while it is off, the tab says so and the email can't be switched on. **Send now**
+guide); while it is off, the tab says so and the email can't be switched on. With cloud
+billing set up, the email waits until **the 5th** (a send day of 1-4 counts as 5), because
+AWS finishes a month's costs only a few days after it ends. **Send now**
 mails the chosen month at once, for testing. Every send or failure is in the audit log
 (`billing.report_sent`, `billing.report_failed`).
 
@@ -357,6 +363,36 @@ permissions boundary `BucketeerUserBoundary` and the tag `bucketeer-owner=<usern
     The on-premises profile on users' computers is now `s3-onprem` (`AWS_PROFILE_NAME`; it
     was `bucketeer`) and cloud keys use `s3-cloud` (`CLOUD_PROFILE_NAME`). Existing `[bucketeer]` sections on
     users' computers are left alone; the user guide tells people to switch.
+
+### Cloud billing { #cloud-billing }
+
+Cloud buckets are billed at their real AWS cost: storage per tier, requests, retrievals,
+transitions, early-deletion fees and transfer. AWS writes these costs into a daily **data
+export** (CUR 2.0) in a billing bucket of the account, and Bucketeer sums them per bucket
+name. No cost allocation tags or Cost Explorer access are needed (a member account of an
+AWS Organization doesn't get them).
+
+1. An AWS administrator runs the setup again with `--billing-export`. It creates the
+   billing bucket `<prefix>billing-<random>` (public access blocked, a policy that lets
+   only AWS billing for this account deliver into it), the export `<prefix>s3-costs`, and
+   lets Bucketeer's admin user read that one bucket (and still no other objects):
+
+    ```bash
+    tools/aws-setup --admin-user <name> --user-prefix <prefix> --billing-export
+    ```
+
+2. Put the printed `CLOUD_BILLING_BUCKET=<bucket>` into `.env` and restart.
+3. AWS delivers the first export within about 24 hours and refreshes it daily. Until then
+   the Billing tab says that no export exists yet.
+
+On the **Billing** tab, under the month picker, Bucketeer shows for that month the
+export's S3 total for the cloud buckets next to the sum of the sheet's cloud rows, what
+is not billed (see the Problems sheet), the system and unassigned costs, whether the month
+is **final** (from the 5th of the next month) and when AWS generated the export. Bucketeer
+reads the export at most once a day per month, and never again once a month is final.
+Each cloud row's product, owner email and budget number come from the bucket's
+`bucketeer-*` tags; a bucket deleted during the month is billed on the tags Bucketeer saw
+last.
 
 For installation and the cluster side, see [Deployment](deployment.md) and
 [Admin Ops setup](admin-ops-setup.md).

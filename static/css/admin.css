@@ -213,6 +213,12 @@
 .bl-contacts { resize: vertical; min-height: 5rem; }
 .bl-status { display: grid; gap: var(--sp-1); }
 .bl-status:empty { display: none; }
+.bl-cloud { display: grid; gap: var(--sp-3); padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
+.bl-cloud-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.bl-stats { display: grid; gap: var(--sp-3); grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); }
+.bl-stat { display: grid; gap: var(--sp-1); min-width: 0; }
+.bl-stat-label, .bl-stat-note { font-size: var(--fs-xs); color: var(--text-muted); }
+.bl-stat-value { font-variant-numeric: tabular-nums; font-size: var(--fs-lg); }
 @media (max-width: 47.99em) {
   .bl-prod { grid-template-columns: 1fr; }
   .bl-prod-head { display: none; }

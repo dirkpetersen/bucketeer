@@ -321,10 +321,11 @@ the item lands.
   check with suggestions, storage class Intelligent-Tiering or Deep Archive via day-0
   lifecycle, Block Public Access, SSE-S3, versioning, tags; list and delete; daily
   CloudWatch over-quota email to the owner (at most weekly).
-- [ ] P6-11 Cloud billing (PLAN 3, decision 18): `tools/aws-setup` creates the billing
-  bucket, its policy and the CUR 2.0 export, and lets the admin user read that bucket
-  only; Bucketeer sums `line_item_unblended_cost` per bucket from the export; cloud rows
-  in the sheet in cents, unknown lines on the Problems sheet, export total shown.
+- [x] P6-11 Cloud billing (PLAN 3, decision 18): `tools/aws-setup --billing-export` creates
+  the billing bucket, its policy and the CUR 2.0 export, and lets the admin user read that
+  bucket only; Bucketeer sums `line_item_unblended_cost` per bucket from the export
+  (`CLOUD_BILLING_BUCKET`, `cloud_costs.py`); cloud rows in the sheet in cents, unknown
+  lines on the Problems sheet, export total shown; the email waits until the 5th.
 - [x] P6-12 Backups to AWS (PLAN 5): when the global location is Cloud, back up to an AWS
   bucket with the same object-lock rules through a dedicated backup IAM user (keys made and deleted per
   run, `--restore-backup --from cloud`).
