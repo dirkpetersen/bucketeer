@@ -168,11 +168,17 @@ One row per bucket per month:
   Premises. Cloud can only be chosen once the AWS account is set up and its connection
   check passes.
 - **Per user:** with Advanced on, a **Cloud / On Premises** switch sits to the left of
-  the Advanced toggle in the header, starting at the global default. With Advanced off,
-  the user sees the global default only. So once an admin sets Cloud, everyone works in
-  Cloud by default, Advanced or not. The user's choice is remembered like `advancedMode`.
-- The switch picks which buckets the bucket list shows and where new buckets go. Keys
-  and setup are shown for both locations.
+  the Advanced toggle in the header, starting at the global default. Advanced only
+  unlocks the switch: the user's saved choice keeps applying when Advanced is turned off,
+  and a user with no saved choice gets the global default (changed 2026-11-25; it used to
+  fall back to the global default with Advanced off). So once an admin sets Cloud, everyone
+  without a saved choice works in Cloud. Cloud applies only while cloud is available. The
+  user's choice is remembered like `advancedMode`.
+- The switch picks which buckets the bucket list shows and where new buckets go. The
+  Credentials card and the setup command follow it too and show only the selected side:
+  on premises the on-prem keys and subusers (Advanced), in Cloud only the Cloud (AWS)
+  keys (Advanced). "Shared with you" is shown only on premises (changed 2026-11-25; keys
+  and setup were shown for both locations).
 
 ### AWS side (decided)
 
@@ -235,9 +241,12 @@ One row per bucket per month:
 ### Profiles (decided)
 
 - `S3_PROFILE_NAME` default changes from `bucketeer` to `s3-onprem`. A new
-  `CLOUD_PROFILE_NAME` defaults to `s3-cloud`. The setup script and the snippets write
-  `[s3-onprem]` and, when the person has cloud keys, `[s3-cloud]` (region `us-west-2`,
-  AWS's own endpoint, no `endpoint_url`). Existing `[bucketeer]` sections on users'
+  `CLOUD_PROFILE_NAME` defaults to `s3-cloud`. The setup script follows the user's
+  location and writes one profile only: on premises `[s3-onprem]`, in Cloud `[s3-cloud]`
+  (region `us-west-2`, AWS's own endpoint, no `endpoint_url`) with a fresh AWS key made
+  when the command runs; with two keys already, an inactive one or the oldest is replaced
+  (changed 2026-11-25; it wrote `[s3-onprem]` plus `[s3-cloud]`). The old name
+  `AWS_PROFILE_NAME` is ignored; the app logs a startup warning while it is set. Existing `[bucketeer]` sections on users'
   computers are left alone; the docs tell users to switch.
 
 ## 5. Backup bucket
@@ -344,7 +353,8 @@ Feature 6 (database upgrade) goes in with step 2, since a restore needs it.
 5. AWS, one shared account, an IAM user per person (prefix plus username), default region
    `us-west-2`. No restore requests in the UI (a different tool does them).
 6. The global location setting picks where backups go. Once it is Cloud, Cloud is the
-   default for everyone, even with Advanced off.
+   default for everyone without a saved choice, even with Advanced off (a saved choice
+   wins, changed 2026-11-25).
 7. Cloud users choose per bucket between Intelligent-Tiering (`Cloud-S3`, advertised
    $13-18 per TiB-month) and Glacier Deep Archive (`Archive-S3`, $1 per TiB-month).
 8. Bucketeer's AWS identity is its own IAM admin user, set up by

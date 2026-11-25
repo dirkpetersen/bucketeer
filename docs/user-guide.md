@@ -66,8 +66,9 @@ aws --profile s3-onprem s3 ls
 ### Cloud (AWS) keys { #cloud-keys }
 
 When your administrator has set up cloud storage and you work in **Cloud**, the
-Credentials card also shows **Cloud (AWS)**. Your first cloud key also creates your AWS
-user. Cloud keys are separate from your on-premises keys and use the profile `s3-cloud`:
+Credentials card shows only your cloud side: with **Advanced** on, the **Cloud (AWS)** keys
+(your on-premises keys and subusers show again when you switch back to **On Premises**).
+Your first cloud key also creates your AWS user. Cloud keys are separate from your on-premises keys and use the profile `s3-cloud`:
 
 ```bash
 aws --profile s3-cloud s3 ls
@@ -144,7 +145,7 @@ Each bucket row has the tasks you need most. Rare ones are in the **More** menu.
 
 | Task | Where |
 |---|---|
-| Share a bucket with a colleague (read-only or read-write) | **Share** on the bucket row. They see it under **Shared with you** (and get an email when the portal sends mail). |
+| Share a bucket with a colleague (read-only or read-write) | **Share** on the bucket row. They see it under **Shared with you** (on premises only; cloud has no sharing yet), and get an email when the portal sends mail. |
 | Send one file to anyone, for up to 7 days | **More, Share link** |
 | A key for one bucket only (for a script or instrument) | **More, Keys** |
 | Delete old files or old versions automatically | **More, Lifecycle** |
@@ -177,6 +178,10 @@ right now. You can add 60 TiB after Dec 1". Ask an admin if you need more at onc
 The **Advanced** switch at the top shows more: your access keys and config files, key
 rotation, subusers, bucket policies, ACLs, CORS, tags, object lock, notifications and the
 full lifecycle editor. Your choice is remembered.
+
+When your administrator has set up cloud storage, Advanced also shows the **Cloud / On
+Premises** switch next to it. Your choice of location stays when you turn Advanced off. If
+you never chose one, you work where your administrator's default says.
 
 !!! tip "Lost a file?"
     If versioning is on, an older version is usually still there for 30 days. Ask your admin
