@@ -211,12 +211,18 @@ def _fill(template: str, **parts: str) -> str:
     return template
 
 
-def _profiles(v: SetupValues, cloud: CloudValues | None) -> list[tuple[str, list[str], list[str], bool]]:
-    """(profile, credentials lines, config lines, is_cloud) for each profile to install."""
-    out = [(v.profile, _cred_lines(v), _config_lines(v), False)]
+def _profiles(v: SetupValues | None, cloud: CloudValues | None) -> list[tuple[str, list[str], list[str], bool]]:
+    """(profile, credentials lines, config lines, is_cloud) for each profile to install.
+
+    The setup follows the user's storage location: `v` (on premises) or `cloud` alone, never
+    both (`v` None = the cloud-only script)."""
+    out = []
+    if v is not None:
+        out.append((v.profile, _cred_lines(v), _config_lines(v), False))
     if cloud is not None:
-        assert cloud.valid() and cloud.profile != v.profile
+        assert cloud.valid() and (v is None or cloud.profile != v.profile)
         out.append((cloud.profile, _cred_lines(cloud), _cloud_config_lines(cloud), True))
+    assert out, "a setup script needs a profile"
     return out
 
 
@@ -230,8 +236,8 @@ def _done(names: list[str]) -> str:
 _CLOUD_LATE = "A new AWS key can take a minute to start working; try again shortly"
 
 
-def sh_script(v: SetupValues, cloud: CloudValues | None = None) -> str:
-    assert v.valid()
+def sh_script(v: SetupValues | None, cloud: CloudValues | None = None) -> str:
+    assert v is None or v.valid()
     profiles = _profiles(v, cloud)
     installs, tests = [], []
     for name, cred, cfg, is_cloud in profiles:
@@ -250,8 +256,8 @@ def sh_script(v: SetupValues, cloud: CloudValues | None = None) -> str:
                  TEST=" and ".join(_test_cmd(p[0]) for p in profiles))
 
 
-def ps_script(v: SetupValues, cloud: CloudValues | None = None) -> str:
-    assert v.valid()
+def ps_script(v: SetupValues | None, cloud: CloudValues | None = None) -> str:
+    assert v is None or v.valid()
     profiles = _profiles(v, cloud)
     items = lambda ls: ",".join(f"'{x}'" for x in ls)  # noqa: E731
     installs, tests = [], []
@@ -269,5 +275,5 @@ def ps_script(v: SetupValues, cloud: CloudValues | None = None) -> str:
                  TEST=" and ".join(_test_cmd(p[0]) for p in profiles))
 
 
-def script(os_name: str, v: SetupValues, cloud: CloudValues | None = None) -> str:
+def script(os_name: str, v: SetupValues | None, cloud: CloudValues | None = None) -> str:
     return ps_script(v, cloud) if os_name == "windows" else sh_script(v, cloud)

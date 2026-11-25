@@ -30,9 +30,9 @@ no-store, a per-person lock around changes):
 - `DELETE /keys/{accessKey}` -> `{accessKey}`; the last key is refused (409).
 - **No reveal.** AWS hands out a secret only in the CreateAccessKey answer, and Bucketeer
   stores none, so the create/rotate answer is the only time a cloud secret is shown (an
-  owner-approved exception to the reveal rule). The setup link with `cloud: true` makes a
-  fresh key when the script is fetched (`setup_key`, deleting the oldest key, an inactive one
-  first, when there are already 2) and embeds it.
+  owner-approved exception to the reveal rule). A setup link made in Cloud (the user's
+  location decides) makes a fresh key when the script is fetched (`setup_key`, deleting the
+  oldest key, an inactive one first, when there are already 2) and embeds it.
 Audit `cloud.key.create|rotate|delete` (target_type `access_key`, details `iamUser`, `via`),
 never a secret. Refusals are logged.
 

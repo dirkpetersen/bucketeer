@@ -38,7 +38,8 @@ export function cloudSection() {
   let busy = false;
   let loading = false;
 
-  const shouldShow = () => cloudAvailable() && (getLocation() === "cloud" || !!data?.iamUser);
+  // Only while the storage location is Cloud (AWS): an on-premises user sees no cloud keys.
+  const shouldShow = () => cloudAvailable() && getLocation() === "cloud";
 
   const act = async (btn, fn) => {
     if (busy) return;
@@ -197,9 +198,9 @@ export function cloudSection() {
   const unsub = onLocation(() => {
     if (host.isConnected) seen = true;
     else if (seen) { fresh = null; return unsub(); } // the card was rebuilt
-    if (cloudAvailable() && !data) load();
+    if (shouldShow() && !data) load();
     else paint();
   });
-  if (cloudAvailable()) load();
+  if (shouldShow()) load();
   return host;
 }

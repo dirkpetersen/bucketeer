@@ -161,8 +161,8 @@ def test_a_user_bucketeer_did_not_make_is_refused(env, how):
     [refused] = acts(env, "cloud.user.refused")
     assert refused["details"]["reason"] == "not_ours"
     # and the setup link with cloud says so too, before any command exists
-    r = env.user.post("/api/credentials/setup-link", json={"os": "linux", "cloud": True},
-                      headers=H)
+    _set_location(env, "cloud")
+    r = env.user.post("/api/credentials/setup-link", json={"os": "linux"}, headers=H)
     assert r.status_code == 409
 
 
@@ -348,31 +348,47 @@ def setup_secret(env):
         k["secret_key"] = "AliceSetupSecret0001"
 
 
-def test_setup_link_with_cloud_installs_both_profiles(env, tmp_path):
+def _set_location(env, location):
+    r = env.user.put("/api/profile", json={"location": location}, headers=H)
+    assert r.status_code == 200 and r.json()["location"] == location
+
+
+def test_setup_on_cloud_installs_only_the_cloud_profile(env, tmp_path):
     setup_secret(env)
-    r = env.user.post("/api/credentials/setup-link", json={"os": "linux", "cloud": True},
-                      headers=H)
-    assert r.status_code == 200 and r.json()["cloud"] is True
+    _set_location(env, "cloud")
+    r = env.user.post("/api/credentials/setup-link", json={"os": "linux"}, headers=H)
+    assert r.status_code == 200 and r.json()["location"] == "cloud"
     path = r.json()["url"].replace("https://testserver", "")
     text = env.anon.post(path).text
     [key] = env.iam.list_access_keys(UserName="s3-alice")["AccessKeyMetadata"]
-    assert "[profile s3-onprem]" in text and "[profile s3-cloud]" in text
-    assert "region = us-west-2" in text and text.count("endpoint_url") == 1
+    # cloud only: no on-premises profile, no endpoint, no on-premises key
+    assert "[profile s3-cloud]" in text and "[profile s3-onprem]" not in text
+    assert "endpoint_url" not in text and "AliceSetupSecret0001" not in text
     assert key["AccessKeyId"] in text
     [setup] = [a for a in acts(env, "credentials.setup") if a["action"] == "credentials.setup"]
     assert setup["details"]["cloudKey"] == key["AccessKeyId"]
-    # the script really writes both sections
+    assert setup["details"]["location"] == "cloud"
+    # the script really writes the cloud section only
     script = tmp_path / "s.sh"
     script.write_text(text)
     out = subprocess.run(["/bin/sh", str(script)], env={"HOME": str(tmp_path),
                          "PATH": "/usr/bin:/bin"}, capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
     cred = (tmp_path / ".aws/credentials").read_text()
-    assert "[s3-onprem]" in cred and "[s3-cloud]" in cred and key["AccessKeyId"] in cred
+    assert "[s3-cloud]" in cred and "[s3-onprem]" not in cred and key["AccessKeyId"] in cred
     cfg = (tmp_path / ".aws/config").read_text()
-    cloud_part = cfg.split("[profile s3-cloud]")[1]
-    assert "endpoint_url" not in cloud_part and "when_required" in cloud_part
-    assert "profiles 's3-onprem' and 's3-cloud' are installed" in out.stdout
+    assert "endpoint_url" not in cfg and "when_required" in cfg
+    assert "The AWS profile 's3-cloud' is installed." in out.stdout
+
+
+def test_setup_on_premises_installs_only_the_on_premises_profile(env):
+    setup_secret(env)
+    _set_location(env, "onprem")
+    r = env.user.post("/api/credentials/setup-link", json={"os": "linux"}, headers=H)
+    assert r.status_code == 200 and r.json()["location"] == "onprem"
+    text = env.anon.post(r.json()["url"].replace("https://testserver", "")).text
+    assert "[profile s3-onprem]" in text and "[profile s3-cloud]" not in text
+    assert env.db.cloud_accounts.get("alice") is None  # no cloud account made
 
 
 def test_setup_with_cloud_makes_room_at_two_keys(env):
@@ -380,8 +396,8 @@ def test_setup_with_cloud_makes_room_at_two_keys(env):
     env.user.post(f"{C}/keys", headers=H)
     env.user.post(f"{C}/keys", headers=H)
     first = sorted(statuses(env))
-    r = env.user.post("/api/credentials/setup-link", json={"os": "macos", "cloud": True},
-                      headers=H)
+    _set_location(env, "cloud")
+    r = env.user.post("/api/credentials/setup-link", json={"os": "macos"}, headers=H)
     env.anon.post(r.json()["url"].replace("https://testserver", ""))
     keys = statuses(env)
     assert len(keys) == 2 and len(set(keys) & set(first)) == 1

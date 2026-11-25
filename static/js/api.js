@@ -62,11 +62,12 @@ export const getCredentials = () => api("/credentials");
 export const revealSecret = (accessKey) => api("/credentials/reveal", { method: "POST", json: { accessKey } });
 
 // A one-time command that installs the user's key as an AWS profile on a computer:
-// {url, command, expiresAt, expiresIn, os}. The url is a bearer token: keep it in memory only.
-// `cloud: true` also installs the Cloud (AWS) profile with a fresh AWS key made when the
-// command runs (with two keys already, the oldest one is replaced).
-export const createSetupLink = (os, cloud = false) =>
-  api("/credentials/setup-link", { method: "POST", json: cloud ? { os, cloud: true } : { os } });
+// {url, command, expiresAt, expiresIn, os, location}. The url is a bearer token: keep it in
+// memory only. The server picks what to install from the user's storage location: on premises
+// the on-premises profile only, in cloud the Cloud (AWS) profile only (a fresh key is made
+// when the command runs; with two keys already, the oldest one is replaced).
+export const createSetupLink = (os) =>
+  api("/credentials/setup-link", { method: "POST", json: { os } });
 
 // Cloud (AWS) keys. GET -> {profile, region, iamUser|null, keys: [{accessKey, status,
 // createdAt}], maxKeys}. create/rotate answer {accessKey, secretKey, ...}: AWS shows a secret

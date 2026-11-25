@@ -10,6 +10,7 @@ import { subusersSection } from "./subusers.js";
 import { cloudSection } from "./cloud-keys.js";
 import { setupPanel } from "../components/setup-panel.js";
 import { isAdvanced, subscribe } from "../advanced.js";
+import { getLocation, subscribe as onLocation } from "../location.js";
 
 // The Credentials card: account status first, then (account ready) the access key,
 // the masked secret and the ready-to-paste ~/.aws snippets. The secret exists in
@@ -169,6 +170,14 @@ function advancedKeys(d, select, reload) {
 // Status states from /api/account: ready / suspended / creation_failed / unavailable.
 function accountStatus() {
   const body = h("div", { class: "acct", "aria-live": "polite" });
+  // A storage location change re-renders the card (only then, not on every Advanced toggle).
+  let shownLoc = getLocation();
+  let seen = false;
+  const unsubLoc = onLocation(() => {
+    if (body.isConnected) seen = true;
+    else if (seen) return unsubLoc(); // this card was replaced
+    if (body.isConnected && getLocation() !== shownLoc) { shownLoc = getLocation(); refresh(); }
+  });
   const chip = h("span", { class: "chip" });
   const paint = (cls, label, ...content) => {
     chip.className = `chip ${cls}`;
@@ -198,10 +207,18 @@ function accountStatus() {
       } catch (err) {
         return loadFailed(err);
       }
-      const show = (d, select) => paint("chip-ok", "Account ready",
-        h("p", { class: "acct-line" }, "Signed in to S3 as ", h("code", { class: "acct-uid", text: a.uid }),
-          h("span", { class: "acct-sub", text: a.quota?.enabled ? `Storage limit: ${quotaText(a.quota)}` : "Storage limit: set per bucket (its quota)" })),
-        setupPanel(d), advancedKeys(d, select, reload), subusersSection(d), cloudSection());
+      // The card follows the storage location: on premises shows the S3 keys, Cloud (AWS) only
+      // the cloud section. Nothing of the other location is shown or set up.
+      const show = (d, select) => {
+        const cloud = getLocation() === "cloud";
+        paint("chip-ok", "Account ready",
+          h("p", { class: "acct-line" }, "Signed in to S3 as ", h("code", { class: "acct-uid", text: a.uid }),
+            h("span", { class: "acct-sub", text: !cloud && a.quota?.enabled ? `Storage limit: ${quotaText(a.quota)}` : "Storage limit: set per bucket (its quota)" })),
+          setupPanel(d),
+          !cloud && advancedKeys(d, select, reload),
+          !cloud && subusersSection(d),
+          cloudSection());
+      };
       // Re-read the key list after a change; the old panel (and any revealed secret) is dropped.
       const reload = async (select) => {
         try {

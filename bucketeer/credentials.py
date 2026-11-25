@@ -16,9 +16,10 @@ generated `~/.aws/config` / `~/.aws/credentials` snippets.
 - `DELETE /api/credentials/keys/{accessKey}` -> `{accessKey}`; the last key is
   refused (409). Never the whole-set `PUT .../keys`.
 Key mutations hold a per-uid lock and are audited (`credentials.key.*`, no secrets).
-- `POST /api/credentials/setup-link` `{os, cloud?}` ->
-  `{url, command, expiresAt, expiresIn, os, cloud}`
-  (`cloud: true` also installs `[s3-cloud]` with a fresh AWS key, see `cloud_users.py`):
+- `POST /api/credentials/setup-link` `{os}` ->
+  `{url, command, expiresAt, expiresIn, os, location}`
+  (the user's effective storage location decides: on premises installs `[s3-onprem]` only,
+  Cloud installs `[s3-cloud]` only with a fresh AWS key, see `cloud_users.py`):
   a one-time link (15 minutes, 10 per user per 15 minutes) for the user's first own key.
   `POST /setup/{token}` (outside `/api`: the token is the only credential, no CSRF header)
   returns a script that installs the key as an AWS profile (`bucketeer/setup_script.py`).
@@ -56,6 +57,7 @@ from .admin import croit_http_error
 from .cloud import CloudError
 from .config import Settings
 from .croit import CroitClient, CroitClientError, CroitError
+from .location import cloud_available, effective_location, load_default_location
 from .profile import require_default_budget
 from .rgw_user import RgwAccount, require_active_rgw_user
 from .setup_script import CloudValues, SetupValues, command, error_script, script
@@ -338,8 +340,15 @@ def _hash(token: str) -> str:
 
 
 class SetupBody(BaseModel):
+    # Only the OS: the storage location (the user's effective location) decides what is installed.
     os: Literal["windows", "macos", "linux"]
-    cloud: bool = False  # also install [s3-cloud] with a fresh AWS key (cloud_users.setup_key)
+
+
+async def _setup_location(request: Request, username: str) -> str:
+    db = request.app.state.db
+    profile = await db.run(db.profiles.get, username)
+    default = load_default_location(db.settings)
+    return effective_location(profile.get("location"), default, cloud_available(request.app))
 
 
 @router.post("/setup-link", dependencies=[Depends(require_default_budget)])
@@ -347,15 +356,18 @@ async def setup_link(body: SetupBody, request: Request, response: Response, acct
     response.headers["Cache-Control"] = "no-store"
     state = request.app.state
     db, now = state.db, state.clock()
-    if not await state.endpoints.resolve(acct.uid):
-        raise HTTPException(409, "The S3 endpoint is not configured. Ask an administrator.")
-    keys = [k for k in await _own_keys(request, acct.uid) if k.get("secret_key")]
-    if not keys:
-        raise HTTPException(409, "You have no access key yet.")
+    cloud = await _setup_location(request, acct.username) == "cloud"
+    keys: list[dict] = []
+    if not cloud:  # on premises: the first own key and the endpoint are needed
+        if not await state.endpoints.resolve(acct.uid):
+            raise HTTPException(409, "The S3 endpoint is not configured. Ask an administrator.")
+        keys = [k for k in await _own_keys(request, acct.uid) if k.get("secret_key")]
+        if not keys:
+            raise HTTPException(409, "You have no access key yet.")
     recent = await db.run(db.setup_tokens.count_since, acct.username, _iso(now - SETUP_WINDOW))
     if recent >= SETUP_LIMIT:
         raise HTTPException(429, "Too many setup commands. Wait a few minutes and try again.")
-    if body.cloud:
+    if cloud:
         # The cloud account is made now, so "ask an administrator" shows here, not in a
         # terminal; the key itself is made when the script is fetched.
         cloud_users.require_cloud(request)
@@ -365,16 +377,17 @@ async def setup_link(body: SetupBody, request: Request, response: Response, acct
             log.info("setup-link: cloud refused for %s: %s", acct.username, e)
             raise cloud_users.cloud_http_error(e) from None
     token = secrets.token_urlsafe(32)
-    access = keys[0]["access_key"]
+    access = keys[0]["access_key"] if keys else ""  # cloud-only: no on-premises key (NOT NULL)
     expires = now + SETUP_TTL
     row_id = await db.run(db.setup_tokens.create, _hash(token), acct.username, acct.uid, access,
-                          body.os, _iso(now), _iso(expires), _iso(now - SETUP_KEEP), body.cloud)
-    await db.run(db.audit.add, acct.username, "credentials.setup_link", "access_key", access,
+                          body.os, _iso(now), _iso(expires), _iso(now - SETUP_KEEP), cloud)
+    target_type, target = ("access_key", access) if access else ("rgw_user", acct.uid)
+    await db.run(db.audit.add, acct.username, "credentials.setup_link", target_type, target,
                  {"uid": acct.uid, "os": body.os, "setupId": row_id, "expiresAt": _iso(expires),
-                  "cloud": body.cloud})
+                  "location": "cloud" if cloud else "onprem"})
     url = f"{request.base_url}setup/{token}"
     return {"url": url, "command": command(body.os, url), "expiresAt": _iso(expires),
-            "expiresIn": SETUP_TTL, "os": body.os, "cloud": body.cloud}
+            "expiresIn": SETUP_TTL, "os": body.os, "location": "cloud" if cloud else "onprem"}
 
 
 setup_router = APIRouter(tags=["setup"])  # mounted at the app root: no session, no CSRF header
@@ -408,12 +421,13 @@ async def run_setup(token: str, request: Request):
                      {**info, "reason": reason, "ip": ip})
         return _script_response(error_script(os_name, message))
 
+    cloud_only = bool(row["cloud"])  # the user's location is cloud: install [s3-cloud] alone
     try:
         user = await state.croit.get_user(uid)
         keys = [k for k in await state.croit.list_keys(uid) or []
                 if isinstance(k, dict) and k.get("access_key") and k.get("user") == uid
                 ] if user else []
-        endpoint = await state.endpoints.resolve(uid)
+        endpoint = None if cloud_only else await state.endpoints.resolve(uid)
     except Exception:  # any admin trouble: refuse with a script, never a JSON error
         return await refuse("admin_unavailable", "Bucketeer could not reach the storage "
                             "service. Make a new setup command in Bucketeer and try again.")
@@ -422,20 +436,22 @@ async def run_setup(token: str, request: Request):
     if user.get("suspended"):
         return await refuse("suspended",
                             "Your S3 account is suspended. Contact your administrator.")
-    key = next((k for k in keys
-                if k["access_key"] == row["access_key"] and k.get("secret_key")), None)
-    if key is None:
-        return await refuse("key_gone", "This key was rotated or deleted. Make a new setup "
-                            "command in Bucketeer.")
-    if not endpoint:
-        return await refuse("no_endpoint",
-                            "The S3 endpoint is not configured. Ask an administrator.")
-    values = SetupValues(settings.s3_profile_name, settings.s3_region, endpoint,
-                         settings.s3_addressing_style, key["access_key"], key["secret_key"])
-    if not values.valid():
-        return await refuse("unsafe_value", "This key cannot be installed automatically.")
+    values = None
+    if not cloud_only:
+        key = next((k for k in keys
+                    if k["access_key"] == row["access_key"] and k.get("secret_key")), None)
+        if key is None:
+            return await refuse("key_gone", "This key was rotated or deleted. Make a new setup "
+                                "command in Bucketeer.")
+        if not endpoint:
+            return await refuse("no_endpoint",
+                                "The S3 endpoint is not configured. Ask an administrator.")
+        values = SetupValues(settings.s3_profile_name, settings.s3_region, endpoint,
+                             settings.s3_addressing_style, key["access_key"], key["secret_key"])
+        if not values.valid():
+            return await refuse("unsafe_value", "This key cannot be installed automatically.")
     cloud_values = None
-    if row["cloud"]:
+    if cloud_only:
         cloud = getattr(state, "cloud", None)
         if cloud is None or not cloud.available:
             return await refuse("cloud_unavailable", "Cloud storage is not available right "
@@ -453,7 +469,12 @@ async def run_setup(token: str, request: Request):
             await cloud_users.discard_key(request.app, ad, key["accessKey"])
             return await refuse("unsafe_value", "This key cannot be installed automatically.")
         info["cloudKey"] = key["accessKey"]
+    else:
+        info["location"] = "onprem"
+    if cloud_only:
+        info["location"] = "cloud"
     # Audit first: if the log cannot be written, the secret is not handed out.
-    await db.run(db.audit.add, ad, "credentials.setup", "access_key", row["access_key"],
-                 {**info, "ip": ip})
+    target_type, target = (("access_key", row["access_key"]) if row["access_key"]
+                           else ("rgw_user", uid))
+    await db.run(db.audit.add, ad, "credentials.setup", target_type, target, {**info, "ip": ip})
     return _script_response(script(os_name, values, cloud_values))

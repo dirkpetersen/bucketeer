@@ -4,7 +4,7 @@ import { createSetupLink } from "../api.js";
 import { copyText } from "../clipboard.js";
 import { toast } from "./toast.js";
 import { zipOne } from "../zip.js";
-import { cloudAvailable, getLocation } from "../location.js";
+import { getLocation } from "../location.js";
 
 // "Set up this computer": the user makes a one-time command, pastes it in a terminal, and the
 // server answers with a script that installs the AWS profile. No secret is shown or fetched
@@ -50,13 +50,8 @@ function downloadFor(os, link) {
 
 export function setupPanel({ endpointUrl, docsUrl, profile = "s3-onprem" }) {
   let os = detectOs();
-  // Cloud (AWS): also install the cloud profile, with a fresh AWS key made when the command runs.
-  const cloudBox = h("input", { type: "checkbox", id: "sp-cloud", checked: getLocation() === "cloud" });
-  const cloudRow = h("div", { class: "sp-cloud", hidden: !cloudAvailable() },
-    cloudBox,
-    h("label", { for: "sp-cloud" }, h("b", { text: "Also set up Cloud (AWS)" }),
-      h("span", { class: "acct-sub", text: " Makes a new AWS key when the command runs. With two keys already, the oldest one is replaced." })));
-  cloudBox.addEventListener("change", () => { stop(); paintIdle(); });
+  // The panel installs what the user's storage location says: on premises or Cloud (AWS), never both.
+  const cloud = getLocation() === "cloud";
   let link = null;
   let deadline = 0;
   let timer = 0;
@@ -79,7 +74,7 @@ export function setupPanel({ endpointUrl, docsUrl, profile = "s3-onprem" }) {
     btn.disabled = true;
     try {
       const mine = os;
-      const r = await createSetupLink(mine, cloudAvailable() && cloudBox.checked);
+      const r = await createSetupLink(mine);
       if (mine !== os) return; // the tab changed while waiting
       link = r;
       deadline = performance.now() + r.expiresIn * 1000;
@@ -129,10 +124,11 @@ export function setupPanel({ endpointUrl, docsUrl, profile = "s3-onprem" }) {
 
   append(root, [
     h("h3", { id: "sp-title", class: "sp-title", text: "Set up this computer" }),
-    h("p", { class: "acct-sub" }, "Installs your keys as the AWS profile ", h("code", { text: profile }),
-      " on this computer. No secret is shown here."),
+    h("p", { class: "acct-sub" }, cloud
+      ? "Installs your Cloud (AWS) key as its AWS profile on this computer. A new key is made when the command runs. No secret is shown here."
+      : ["Installs your keys as the AWS profile ", h("code", { text: profile }), " on this computer. No secret is shown here."]),
     !endpointUrl && h("p", { class: "cred-warn", role: "status", text: "The S3 endpoint is not configured. Ask an administrator to set S3_ENDPOINT_URL." }),
-    tabs, cloudRow, body,
+    tabs, body,
     docsUrl && h("a", { class: "sp-help", href: `${docsUrl}s3-clients/`, target: "_blank", rel: "noopener" },
       icon("book"), h("span", {}, h("b", { text: "Which app can I use?" }), " Compare S3 clients and set up rclone, Cyberduck and more"), icon("right"))]);
   paintTabs();
