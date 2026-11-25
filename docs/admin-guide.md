@@ -381,7 +381,7 @@ delete one first). Audit: `cloud.bucket.create`, `quota`, `budget`, `delete`,
 `delete_started`, `delete_failed`, `delete_retry`.
 
 !!! note "Profile names changed"
-    The on-premises profile on users' computers is now `s3-onprem` (`AWS_PROFILE_NAME`; it
+    The on-premises profile on users' computers is now `s3-onprem` (`S3_PROFILE_NAME`; it
     was `bucketeer`) and cloud keys use `s3-cloud` (`CLOUD_PROFILE_NAME`). Existing `[bucketeer]` sections on
     users' computers are left alone; the user guide tells people to switch.
 

@@ -140,7 +140,7 @@ async def get_credentials(request: Request, response: Response, acct: Account):
     keys = await _own_keys(request, acct.uid)
     endpoint = await request.app.state.endpoints.resolve(acct.uid)
     return {
-        "profile": settings.aws_profile_name,
+        "profile": settings.s3_profile_name,
         "region": settings.s3_region,
         "endpointUrl": endpoint,
         "addressingStyle": settings.s3_addressing_style,
@@ -430,7 +430,7 @@ async def run_setup(token: str, request: Request):
     if not endpoint:
         return await refuse("no_endpoint",
                             "The S3 endpoint is not configured. Ask an administrator.")
-    values = SetupValues(settings.aws_profile_name, settings.s3_region, endpoint,
+    values = SetupValues(settings.s3_profile_name, settings.s3_region, endpoint,
                          settings.s3_addressing_style, key["access_key"], key["secret_key"])
     if not values.valid():
         return await refuse("unsafe_value", "This key cannot be installed automatically.")

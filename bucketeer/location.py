@@ -6,8 +6,9 @@
   connection check when cloud is configured); `PUT {default}` -> the same. `cloud` is
   refused with 422 unless cloud is configured and a fresh check passes. Audited
   `admin.settings.location` (before/after) when changed.
-- **Per user** (`user_profiles.location`, NULL = follow the default): the user's choice
-  counts only while Advanced mode is on; otherwise everyone works in the global default.
+- **Per user** (`user_profiles.location`, NULL = follow the default): the saved choice
+  always applies. Advanced mode only decides whether the switch can be changed, so turning
+  Advanced off keeps the location the user had.
   `view()` gives `/api/me` and `/api/profile` `{location (effective), locationChoice,
   defaultLocation, cloudAvailable}`. Cloud is effective only while `cloudAvailable`
   (configured and the last connection check passed); else on premises.
@@ -38,9 +39,8 @@ def cloud_available(app) -> bool:
     return cloud is not None and cloud.available
 
 
-def effective_location(choice: str | None, advanced: bool, default: str,
-                       available: bool) -> str:
-    loc = choice if advanced and choice in LOCATIONS else default
+def effective_location(choice: str | None, default: str, available: bool) -> str:
+    loc = choice if choice in LOCATIONS else default
     return loc if loc != "cloud" or available else "onprem"
 
 
@@ -50,8 +50,7 @@ def view(app, profile: dict) -> dict[str, Any]:
     default = load_default_location(db.settings)
     available = cloud_available(app)
     return {
-        "location": effective_location(profile.get("location"), profile["advanced_mode"],
-                                       default, available),
+        "location": effective_location(profile.get("location"), default, available),
         "locationChoice": profile.get("location"),
         "defaultLocation": default,
         "cloudAvailable": available,

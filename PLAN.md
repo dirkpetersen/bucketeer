@@ -234,7 +234,7 @@ One row per bucket per month:
 
 ### Profiles (decided)
 
-- `AWS_PROFILE_NAME` default changes from `bucketeer` to `s3-onprem`. A new
+- `S3_PROFILE_NAME` default changes from `bucketeer` to `s3-onprem`. A new
   `CLOUD_PROFILE_NAME` defaults to `s3-cloud`. The setup script and the snippets write
   `[s3-onprem]` and, when the person has cloud keys, `[s3-cloud]` (region `us-west-2`,
   AWS's own endpoint, no `endpoint_url`). Existing `[bucketeer]` sections on users'

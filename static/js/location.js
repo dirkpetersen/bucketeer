@@ -6,7 +6,7 @@
 // is available; otherwise the admin's default (and on premises when cloud is not
 // available). The server computes the same (bucketeer/location.py).
 import { saveProfile } from "./api.js";
-import { isAdvanced, subscribe as onAdvanced } from "./advanced.js";
+import { subscribe as onAdvanced } from "./advanced.js";
 
 let choice = null;          // the user's saved choice, null = follow the default
 let fallback = "onprem";    // the admin's default
@@ -15,7 +15,7 @@ let current = "onprem";
 const subs = new Set();
 
 const compute = () => {
-  const loc = isAdvanced() && choice ? choice : fallback;
+  const loc = choice || fallback;  // the saved choice always applies; Advanced only unlocks the switch
   return loc === "cloud" && !available ? "onprem" : loc;
 };
 

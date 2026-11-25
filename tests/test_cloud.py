@@ -167,13 +167,13 @@ def test_create_app_builds_the_client_only_when_configured(tmp_path):
 
 
 def test_effective_location():
-    assert effective_location(None, False, "onprem", True) == "onprem"
-    assert effective_location("cloud", False, "onprem", True) == "onprem"  # Advanced off
-    assert effective_location("cloud", True, "onprem", True) == "cloud"
-    assert effective_location("cloud", True, "onprem", False) == "onprem"  # unavailable
-    assert effective_location(None, False, "cloud", True) == "cloud"
-    assert effective_location("onprem", True, "cloud", True) == "onprem"
-    assert effective_location(None, True, "cloud", False) == "onprem"
+    # the saved choice always applies, whatever Advanced is (it only unlocks the switch)
+    assert effective_location(None, "onprem", True) == "onprem"
+    assert effective_location("cloud", "onprem", True) == "cloud"
+    assert effective_location("cloud", "onprem", False) == "onprem"  # unavailable
+    assert effective_location(None, "cloud", True) == "cloud"
+    assert effective_location("onprem", "cloud", True) == "onprem"
+    assert effective_location(None, "cloud", False) == "onprem"
 
 
 # -- the admin setting -----------------------------------------------------------------
@@ -261,15 +261,19 @@ def test_user_location_needs_cloud(env):
     assert me["location"] == "onprem" and me["cloudAvailable"] is False
 
 
-def test_user_location_follows_advanced(cloud_env):
+def test_user_location_is_kept_when_advanced_is_off(cloud_env):
     env = cloud_env
     run(env.app.state.cloud.check())
     r = env.user.put("/api/profile", json={"location": "cloud"}, headers=H)
     assert r.status_code == 200
     body = r.json()
-    assert body["locationChoice"] == "cloud" and body["location"] == "onprem"  # Advanced off
+    assert body["locationChoice"] == body["location"] == "cloud"  # Advanced off, kept
     r = env.user.put("/api/profile", json={"advancedMode": True}, headers=H)
     assert r.json()["location"] == "cloud"
+    assert env.user.get("/api/me").json()["location"] == "cloud"
+    # turning Advanced off must not move the location back
+    r = env.user.put("/api/profile", json={"advancedMode": False}, headers=H)
+    assert r.json()["location"] == "cloud" and r.json()["locationChoice"] == "cloud"
     assert env.user.get("/api/me").json()["location"] == "cloud"
     # cloud goes away: back to on premises, the choice is kept
     env.app.state.cloud.last_check = {**env.app.state.cloud.last_check, "ok": False}

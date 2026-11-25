@@ -289,7 +289,7 @@ def test_docs_url_setting(make_env):
 
 @pytest.mark.parametrize("name", ["bucketeer", "default", "my-lab_2.s3", "A1"])
 def test_profile_name_accepts_safe_names(name):
-    assert Settings(_env_file=None, **REQUIRED, aws_profile_name=name).aws_profile_name == name
+    assert Settings(_env_file=None, **REQUIRED, s3_profile_name=name).s3_profile_name == name
 
 
 BAD_PROFILES = ["", "a b", "a]\nb", "x]\n[default", "-x", "a=b", "a#b", "a\n", "é", "x" * 64]
@@ -298,7 +298,7 @@ BAD_PROFILES = ["", "a b", "a]\nb", "x]\n[default", "-x", "a=b", "a#b", "a\n", "
 @pytest.mark.parametrize("name", BAD_PROFILES)
 def test_profile_name_rejects_ini_injection(name):
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, **REQUIRED, aws_profile_name=name)
+        Settings(_env_file=None, **REQUIRED, s3_profile_name=name)
 
 
 @pytest.mark.parametrize("region", ["", "us east", "us-east-1\nfoo = bar", "a=b"])

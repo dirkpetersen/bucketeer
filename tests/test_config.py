@@ -190,7 +190,7 @@ def test_cloud_defaults_and_profile_names():
     s = Settings(_env_file=None, **REQUIRED)
     assert (s.cloud_region, s.cloud_bucket_prefix, s.cloud_profile_name) == (
         "us-west-2", "bucketeer-", "s3-cloud")
-    assert s.aws_profile_name == "s3-onprem" and s.cloud_configured is False
+    assert s.s3_profile_name == "s3-onprem" and s.cloud_configured is False
     assert Settings(_env_file=None, **REQUIRED, **CLOUD_VALUES).cloud_configured is True
 
 

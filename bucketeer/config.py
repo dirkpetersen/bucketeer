@@ -130,7 +130,7 @@ class Settings(BaseSettings):
     s3_endpoint_url: str = ""
     s3_region: str = "us-east-1"
     s3_addressing_style: Literal["path", "virtual", "auto"] = "virtual"
-    aws_profile_name: str = "s3-onprem"
+    s3_profile_name: str = "s3-onprem"
     s3_tenant: str = ""
     s3_ca_cert_file: str = ""
     s3_tls_verify: bool = True
@@ -213,7 +213,7 @@ class Settings(BaseSettings):
                 raise ValueError("BACKUP_BUCKET: " + " ".join(errors))
         return v
 
-    @field_validator("aws_profile_name", "cloud_profile_name")
+    @field_validator("s3_profile_name", "cloud_profile_name")
     @classmethod
     def _check_profile(cls, v: str) -> str:
         if not PROFILE_NAME_RE.match(v):
@@ -266,8 +266,8 @@ class Settings(BaseSettings):
                 "CLOUD_ADMIN_ACCESS_KEY": self.cloud_admin_access_key,
                 "CLOUD_ADMIN_SECRET_KEY": self.cloud_admin_secret_key.get_secret_value()}):
             raise ValueError(f"{', '.join(missing)}: {CLOUD_PARTIAL}")
-        if self.cloud_profile_name == self.aws_profile_name:
-            raise ValueError("CLOUD_PROFILE_NAME must differ from AWS_PROFILE_NAME")
+        if self.cloud_profile_name == self.s3_profile_name:
+            raise ValueError("CLOUD_PROFILE_NAME must differ from S3_PROFILE_NAME")
         return self
 
     @model_validator(mode="after")
