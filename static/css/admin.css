@@ -81,7 +81,7 @@
 .who b { font-weight: 600; overflow-wrap: anywhere; }
 .sub { font-size: var(--fs-xs); color: var(--text-muted); overflow-wrap: anywhere; }
 .muted { color: var(--text-faint); }
-.chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
 .td-acts { width: 1%; white-space: nowrap; }
 .acts { display: flex; gap: var(--sp-2); justify-content: flex-end; }
 

@@ -58,7 +58,7 @@ const confirmFull = (what) => confirmDialog({
 /** subusersSection(creds) -> element. `creds` is the GET /api/credentials data (endpoint, region). */
 export function subusersSection(creds) {
   const id = `su${++seq}`;
-  const root = h("section", { class: "sub", "aria-labelledby": `${id}-h` });
+  const root = h("section", { class: "subs", "aria-labelledby": `${id}-h` });
   let data = null; // {subusers, permissions, limits}
   let loadError = "";
   let open = null; // name of the subuser whose details are shown

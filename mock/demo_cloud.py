@@ -21,6 +21,7 @@ No network, no real AWS: every call ends in moto. The account id is a made-up nu
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import gzip
 import io
@@ -46,6 +47,10 @@ BOUNDARY_DOC = {"Version": "2012-10-17", "Statement": [
 DEMO_BUCKETS = {f"{BUCKET_PREFIX}alice-scans": ("IntelligentTieringFAStorage", 0.42 * 2**40),
                 f"{BUCKET_PREFIX}alice-archive": ("DeepArchiveStorage", 3.1 * 2**40)}
 TAKEN_BUCKET = f"{BUCKET_PREFIX}alice-photos"
+# Those buckets also get a few sample objects when the UI creates them (moto holds a few
+# bytes; CloudWatch above pretends the real size), so the delete dialog shows a bucket
+# with content and its delete job has work to do.
+DEMO_OBJECTS = 24
 CUR_HEADER = ["bill_billing_period_start_date", "line_item_usage_start_date",
               "line_item_product_code", "line_item_resource_id", "line_item_line_item_type",
               "line_item_unblended_cost"]
@@ -175,4 +180,19 @@ def make_cloud_admin(settings):
 
     cloud.GRANT_WAITS = ()
     backup.KEY_WAITS = ()
-    return cloud.CloudAdmin(settings, session_factory=boundary_session_factory())
+    admin = cloud.CloudAdmin(settings, session_factory=boundary_session_factory())
+    real_create = admin.create_bucket
+
+    async def create_bucket(name: str) -> None:
+        await real_create(name)
+        if name in DEMO_BUCKETS:
+            await asyncio.to_thread(_fill, name)
+
+    admin.create_bucket = create_bucket
+    return admin
+
+
+def _fill(bucket: str) -> None:
+    s3 = _boot_client("s3")
+    for i in range(DEMO_OBJECTS):
+        s3.put_object(Bucket=bucket, Key=f"demo/sample-{i:03d}.txt", Body=b"demo data\n")
