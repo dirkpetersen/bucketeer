@@ -327,9 +327,15 @@ the item lands.
   CloudWatch over-quota email to the owner (at most weekly).
   - `cloud_buckets.py`, migration v18 (`buckets.location|storage_class|quota_tib|
     over_quota_alert_at`), tests `tests/test_cloud_buckets.py`. v1 deletes empty buckets only.
-  - (needs AWS) Check that a day-0 lifecycle transition to INTELLIGENT_TIERING and to
-    DEEP_ARCHIVE is accepted and applied, and that HeadBucket by the admin user answers 403
-    for another account's bucket and 301 for one in another region.
+  - [x] (needs AWS, checked 2026-11-25) The day-0 transition rule to INTELLIGENT_TIERING and
+    to DEEP_ARCHIVE is accepted together with the noncurrent-expiry and abort-multipart rules
+    on a versioned bucket. HeadBucket by the admin user: 200 for its own bucket, 404 for a free
+    name, 403 for another account's bucket (also when the bucket is in another region; the
+    CLI follows the region, so a 301 was not seen; Bucketeer treats 301 as taken anyway).
+    AWS answers `TransitionDefaultMinimumObjectSize: all_storage_classes_128K`: objects under
+    128 KB are NOT transitioned and stay in S3 Standard (billed at Standard price).
+  - [ ] (needs AWS, next day) The transition actually runs: lifecycle works asynchronously (about
+    once a day), so check the test objects' storage class a day later.
 - [x] P6-11 Cloud billing (PLAN 3, decision 18): `tools/aws-setup --billing-export` creates
   the billing bucket, its policy and the CUR 2.0 export, and lets the admin user read that
   bucket only; Bucketeer sums `line_item_unblended_cost` per bucket from the export
