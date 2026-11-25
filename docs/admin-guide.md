@@ -320,7 +320,7 @@ admin user, and with `--create-key` prints the `CLOUD_*` lines. `--prefix` (defa
 | Variable | Meaning |
 |---|---|
 | `CLOUD_REGION` | AWS region, default `us-west-2`. |
-| `CLOUD_BUCKET_PREFIX` | Every cloud bucket is `<prefix><username>-<name>`; default `bucketeer-`. |
+| `CLOUD_BUCKET_PREFIX` | Every cloud bucket is `<prefix><username>-<name>`; default `bucketeer-`. While cloud is configured, new on-premises bucket names may not start with it. |
 | `CLOUD_USER_PREFIX` | Name prefix of the per-person IAM users (the `--user-prefix`). |
 | `CLOUD_ADMIN_ACCESS_KEY`, `CLOUD_ADMIN_SECRET_KEY` | The admin user's key from `--create-key`. |
 | `CLOUD_PROFILE_NAME` | Profile name for cloud keys on users' computers, default `s3-cloud`. |

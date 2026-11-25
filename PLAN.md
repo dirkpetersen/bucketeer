@@ -1,5 +1,7 @@
 # Plan: next features (draft, 2026-11-24)
 
+Implemented in TODO Phase 6 (2026-11-25); CLAUDE.md is authoritative.
+
 Requested by the owner on 2026-11-24. Decisions taken the same day are marked
 **(decided)**. Items marked **(Q)** are still open (list at the end); the proposal next
 to them is what gets built unless the owner says otherwise. Once work starts, decisions
