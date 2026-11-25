@@ -146,7 +146,12 @@ async def ensure_account(app, username: str) -> dict[str, Any]:
                     raise
                 user = await cloud.get_user(name)  # made meanwhile: judge it below
                 if user is None:
-                    raise
+                    # the name exists outside /bucketeer/ (we may not even read it): not ours
+                    log.warning("cloud: refused %s: IAM user %s exists outside Bucketeer's "
+                                "path", u, name)
+                    await _audit(db, u, "cloud.user.refused", "cloud_user", name,
+                                 {"adUsername": u, "reason": "not_ours"})
+                    raise CloudRefused("not_ours", ASK_ADMIN) from None
         if created:
             row = await db.run(db.cloud_accounts.record, u, name, "created")
             log.info("cloud: created IAM user %s for %s", name, u)

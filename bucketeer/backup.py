@@ -512,9 +512,17 @@ class AwsDestination:
         boundary = c.boundary_arn((await c.caller_identity())["account"])
         user = await c.get_user(self.owner)
         if user is None:
-            await c.call("iam", "create_user", UserName=self.owner, Path=USER_PATH,
-                         PermissionsBoundary=boundary,
-                         Tags=[{"Key": "bucketeer-role", "Value": "backup"}])
+            try:
+                await c.call("iam", "create_user", UserName=self.owner, Path=USER_PATH,
+                             PermissionsBoundary=boundary,
+                             Tags=[{"Key": "bucketeer-role", "Value": "backup"}])
+            except CloudError as e:
+                if e.code != "EntityAlreadyExists":
+                    raise
+                raise BackupError(
+                    f"The backup IAM user name {self.owner} already exists outside "
+                    f"Bucketeer's path {USER_PATH}, or Bucketeer may not read it. An AWS "
+                    "administrator must check that user (or re-run tools/aws-setup).") from None
             log.info("created the backup IAM user %s", self.owner)
         # (the admin may create users under /bucketeer/ only WITH the boundary, so an
         # existing one has it unless an AWS administrator made it by hand)
@@ -540,7 +548,8 @@ class AwsDestination:
         """An S3 client on a key made for this one operation, deleted afterwards."""
         c = self.cloud
         if await c.get_user(self.owner) is None:
-            raise BackupError(f"The backup IAM user {self.owner} does not exist (yet).")
+            raise BackupError(f"The backup IAM user {self.owner} does not exist (yet), "
+                              "or Bucketeer may not read it (re-run tools/aws-setup).")
         res = await c.call("iam", "list_access_keys", UserName=self.owner)
         left = []
         for k in res.get("AccessKeyMetadata") or []:

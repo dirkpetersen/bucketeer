@@ -9,7 +9,15 @@ from pathlib import Path
 
 import pytest
 
-from bucketeer.setup_script import SetupValues, command, error_script, ps_script, sh_script
+from bucketeer.setup_script import (
+    CloudValues,
+    SetupValues,
+    _profiles,
+    command,
+    error_script,
+    ps_script,
+    sh_script,
+)
 
 SECRET = "s3cr3tSECRETvalue0123456789ABCDEFGHIJKLmn"
 V = SetupValues("s3-onprem", "us-east-1", "https://s3.example.org", "path", "AKIAEXAMPLE0123456789", SECRET)
@@ -21,9 +29,13 @@ OLD_CFG = ("[default]\nregion = eu-west-1\n\n[profile s3-onprem]\nregion = old\n
            "  addressing_style = virtual\n\n[profile other]\nregion = ap-south-1\n")
 
 
-def run_sh(tmp_path, values=V, extra_env=None, aws=False):
+CLOUD_SECRET = "cl0udSECRETvalue0123456789ABCDEFGHIJKLmn"
+C = CloudValues("s3-cloud", "us-west-2", "AKIACLOUD0123456789X", CLOUD_SECRET)
+
+
+def run_sh(tmp_path, values=V, extra_env=None, aws=False, cloud=None):
     script = tmp_path / "setup.sh"
-    script.write_text(sh_script(values))
+    script.write_text(sh_script(values, cloud))
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     for tool in ("awk", "cp", "chmod", "mv", "mkdir", "date", "tail", "tr", "dirname", "cat"):
@@ -138,3 +150,21 @@ def test_ps_runs(tmp_path):
     cred = Path(tmp_path / ".aws/credentials").read_bytes()
     assert not cred.startswith(b"\xef\xbb\xbf") and cred.count(b"[s3-onprem]") == 1
     assert b"[other]" in cred and b"OLDKEY" not in cred and SECRET.encode() not in r.stdout.encode()
+
+
+def test_cloud_only_scripts_have_only_the_cloud_profile(tmp_path):
+    for t in (ps_script(None, C), sh_script(None, C)):
+        assert "[profile s3-cloud]" in t and "[s3-cloud]" in t and CLOUD_SECRET in t
+        assert "s3-onprem" not in t and "endpoint_url" not in t and SECRET not in t
+        assert "addressing_style" not in t and "region = us-west-2" in t
+    r = run_sh(tmp_path, values=None, cloud=C)
+    assert r.returncode == 0, r.stderr
+    cred = (tmp_path / ".aws" / "credentials").read_text()
+    cfg = (tmp_path / ".aws" / "config").read_text()
+    assert cred.count("[") == 1 and f"aws_secret_access_key = {CLOUD_SECRET}" in cred
+    assert cfg.count("[") == 1 and "[profile s3-cloud]" in cfg and "endpoint_url" not in cfg
+
+
+def test_a_script_needs_a_profile():
+    with pytest.raises(AssertionError):
+        _profiles(None, None)

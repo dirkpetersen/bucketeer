@@ -391,6 +391,30 @@ def test_setup_on_premises_installs_only_the_on_premises_profile(env):
     assert env.db.cloud_accounts.get("alice") is None  # no cloud account made
 
 
+def test_old_cloud_flag_is_ignored_on_premises(env):
+    setup_secret(env)
+    _set_location(env, "onprem")
+    r = env.user.post("/api/credentials/setup-link", json={"os": "linux", "cloud": True},
+                      headers=H)
+    assert r.status_code == 200 and r.json()["location"] == "onprem"
+    text = env.anon.post(r.json()["url"].replace("https://testserver", "")).text
+    assert "[profile s3-onprem]" in text and "[profile s3-cloud]" not in text
+
+
+def test_refused_cloud_setup_audits_the_rgw_user(env):
+    setup_secret(env)
+    _set_location(env, "cloud")
+    r = env.user.post("/api/credentials/setup-link", json={"os": "linux"}, headers=H)
+    assert r.status_code == 200 and r.json()["location"] == "cloud"
+    env.cloud.last_check = {**env.cloud.last_check, "ok": False}  # cloud goes away
+    text = env.anon.post(r.json()["url"].replace("https://testserver", "")).text
+    assert "Cloud storage is not available" in text
+    [refused] = acts(env, "credentials.setup_refused")
+    assert refused["target_type"] == "rgw_user" and refused["target"] == "alice"
+    assert refused["details"]["location"] == "cloud"
+    assert refused["details"]["reason"] == "cloud_unavailable"
+
+
 def test_setup_with_cloud_makes_room_at_two_keys(env):
     setup_secret(env)
     env.user.post(f"{C}/keys", headers=H)
@@ -427,3 +451,50 @@ def test_cloud_panel_keeps_the_secret_in_memory_only():
                 "setAttribute"):
         assert bad not in js
     assert "You won't see it again" in js
+
+
+# -- real IAM: GetUser on a name outside /bucketeer/ (or missing) is AccessDenied ---------
+
+def _real_iam_get_user(env, monkeypatch):
+    """Make moto answer GetUser like real IAM does under the admin policy (GetUser only on
+    user/bucketeer/<prefix>*): a missing user or one under another path is AccessDenied."""
+    orig = env.cloud.call
+
+    async def call(service, op, **kw):
+        if service == "iam" and op == "get_user":
+            try:
+                path = env.iam.get_user(UserName=kw["UserName"])["User"]["Path"]
+            except env.iam.exceptions.NoSuchEntityException:
+                path = None
+            if path != "/bucketeer/":
+                raise CloudError(403, "AccessDenied", "AWS refused get_user (AccessDenied)")
+        return await orig(service, op, **kw)
+
+    monkeypatch.setattr(env.cloud, "call", call)
+
+
+def test_first_cloud_use_works_when_iam_denies_get_user(env, monkeypatch):
+    _real_iam_get_user(env, monkeypatch)
+    r = env.user.post(f"{C}/keys", headers=H)
+    assert r.status_code == 201, r.text
+    user = env.iam.get_user(UserName="s3-alice")["User"]
+    assert user["Path"] == "/bucketeer/"
+    assert env.db.cloud_accounts.get("alice")["iam_user"] == "s3-alice"
+
+
+def test_first_cloud_setup_link_works_when_iam_denies_get_user(env, monkeypatch):
+    _real_iam_get_user(env, monkeypatch)
+    _set_location(env, "cloud")
+    r = env.user.post("/api/credentials/setup-link", json={"os": "linux"}, headers=H)
+    assert r.status_code == 200 and r.json()["location"] == "cloud", r.text
+    assert env.db.cloud_accounts.get("alice") is not None
+
+
+def test_a_name_taken_outside_our_path_is_refused_when_iam_denies_get_user(env, monkeypatch):
+    env.iam.create_user(UserName="s3-alice")  # someone else's, at the root path
+    _real_iam_get_user(env, monkeypatch)
+    r = env.user.post(f"{C}/keys", headers=H)
+    assert r.status_code == 409 and "administrator" in r.json()["detail"]
+    assert env.db.cloud_accounts.get("alice") is None
+    [refused] = acts(env, "cloud.user.refused")
+    assert refused["details"]["reason"] == "not_ours"

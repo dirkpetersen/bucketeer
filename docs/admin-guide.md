@@ -314,7 +314,12 @@ tools/aws-setup --admin-user <name> --user-prefix <prefix> --create-key   # set 
 The script creates the permissions boundary for person users, the admin policy and the
 admin user, and with `--create-key` prints the `CLOUD_*` lines. `--prefix` (default
 `bucketeer-`) and `--region` (default `us-west-2`) must match `CLOUD_BUCKET_PREFIX` and
-`CLOUD_REGION`. See `tools/README.md` for details.
+`CLOUD_REGION`. See `tools/README.md` for details. The script is safe to run again with the
+same arguments (and `--billing-bucket` set to your `CLOUD_BILLING_BUCKET`): it gives the
+policies a new version. Do that after updating Bucketeer when a release changes the admin
+policy (for example the read-only `LookUpPersonUsersByName` statement, without which a
+person's first cloud key or setup command failed with "AWS refused the request
+(AccessDenied)").
 
 **2. Put the lines into `.env`** (`appmo env bucketeer`) and restart:
 

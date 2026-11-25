@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -71,6 +72,14 @@ SECURITY_HEADERS = {
 ASSET_CACHE = "public, max-age=86400"  # fonts and images: stable, not fingerprinted
 
 
+def warn_renamed_env(settings: Settings) -> None:
+    """Log a warning for environment variables that were renamed (Settings ignore them)."""
+    if "AWS_PROFILE_NAME" in os.environ:
+        logging.getLogger("bucketeer.config").warning(
+            "AWS_PROFILE_NAME is no longer read; set S3_PROFILE_NAME instead (now %s)",
+            settings.s3_profile_name)
+
+
 def create_app(
     settings: Settings,
     croit: CroitClient | RgwAdminClient | None = None,
@@ -97,6 +106,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         ldapca.startup_report(settings)
+        warn_renamed_env(settings)
         logging.getLogger("bucketeer.mailer").info("%s", _app.state.mailer.describe())
         owned = db is None
         if owned:

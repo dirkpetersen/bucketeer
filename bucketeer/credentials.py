@@ -414,14 +414,18 @@ async def run_setup(token: str, request: Request):
     now = _iso(state.clock())
     if not await db.run(db.setup_tokens.claim, row["id"], now, ip):
         return gone
-    info = {"uid": uid, "os": os_name, "setupId": row["id"]}
+    cloud_only = bool(row["cloud"])  # the user's location is cloud: install [s3-cloud] alone
+    info = {"uid": uid, "os": os_name, "setupId": row["id"],
+            "location": "cloud" if cloud_only else "onprem"}
+    # A cloud-only link has no on-premises key: its audit target is the RGW user.
+    target_type, target = (("access_key", row["access_key"]) if row["access_key"]
+                           else ("rgw_user", uid))
 
     async def refuse(reason: str, message: str):
-        await db.run(db.audit.add, ad, "credentials.setup_refused", "access_key", row["access_key"],
+        await db.run(db.audit.add, ad, "credentials.setup_refused", target_type, target,
                      {**info, "reason": reason, "ip": ip})
         return _script_response(error_script(os_name, message))
 
-    cloud_only = bool(row["cloud"])  # the user's location is cloud: install [s3-cloud] alone
     try:
         user = await state.croit.get_user(uid)
         keys = [k for k in await state.croit.list_keys(uid) or []
@@ -469,12 +473,6 @@ async def run_setup(token: str, request: Request):
             await cloud_users.discard_key(request.app, ad, key["accessKey"])
             return await refuse("unsafe_value", "This key cannot be installed automatically.")
         info["cloudKey"] = key["accessKey"]
-    else:
-        info["location"] = "onprem"
-    if cloud_only:
-        info["location"] = "cloud"
     # Audit first: if the log cannot be written, the secret is not handed out.
-    target_type, target = (("access_key", row["access_key"]) if row["access_key"]
-                           else ("rgw_user", uid))
     await db.run(db.audit.add, ad, "credentials.setup", target_type, target, {**info, "ip": ip})
     return _script_response(script(os_name, values, cloud_values))

@@ -406,11 +406,23 @@ class CloudAdmin:
         return doc
 
     async def get_user(self, name: str) -> dict | None:
-        """The IAM user, or None when it does not exist."""
+        """The IAM user under `/bucketeer/`, or None when there is none we can see.
+
+        The admin policy allows GetUser only on `user/bucketeer/<prefix>*`. IAM checks a name
+        it cannot find, or one under another path, as `user/<name>`, so real AWS answers
+        AccessDenied (not NoSuchEntity) for both: neither is one of ours. CreateUser then
+        tells them apart (EntityAlreadyExists = the name is taken outside our path)."""
         try:
             return (await self.call("iam", "get_user", UserName=name))["User"]
         except CloudError as e:
             if e.code == "NoSuchEntity":
+                return None
+            if e.code == "AccessDenied":
+                # Expected for a missing user or one outside our path, but a broken AWS policy
+                # looks the same. Never log AWS's message: it holds ARNs and the account id.
+                log.info("IAM GetUser for %s answered AccessDenied: treated as no such user "
+                         "under %s. If this user should exist, the AWS policy may be out of "
+                         "date (re-run tools/aws-setup).", name, USER_PATH)
                 return None
             raise
 

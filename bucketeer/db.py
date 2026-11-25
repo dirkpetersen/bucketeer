@@ -275,7 +275,8 @@ MIGRATIONS: list[Migration] = [
     # made for that person (`policy_synced` 0 = the inline policy still has to be written).
     # `cloud_key_suspensions` lists the access keys Bucketeer deactivated because their owner
     # was suspended ('owner' = an admin, 'offboarding' = the job), so waking the owner
-    # reactivates exactly those. `setup_tokens.cloud` 1 = the link also installs `[s3-cloud]`.
+    # reactivates exactly those. `setup_tokens.cloud` 1 = a cloud-only link (`[s3-cloud]`),
+    # 0 = on premises only.
     """
     CREATE TABLE cloud_accounts (
         ad_username   TEXT PRIMARY KEY COLLATE NOCASE,

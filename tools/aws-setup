@@ -119,6 +119,9 @@ fi
 BOUNDARY_ARN="arn:aws:iam::${ACCOUNT}:policy${USER_PATH}${BOUNDARY_POLICY}"
 ADMIN_POLICY_ARN="arn:aws:iam::${ACCOUNT}:policy${ADMIN_PATH}${ADMIN_POLICY}"
 USERS_ARN="arn:aws:iam::${ACCOUNT}:user${USER_PATH}${USER_PREFIX}*"
+# IAM checks GetUser on a name it cannot find as user/<name> (no path), so without this
+# a person's first use answers AccessDenied instead of NoSuchEntity. Read-only.
+USERS_BY_NAME_ARN="arn:aws:iam::${ACCOUNT}:user/${USER_PREFIX}*"
 BUCKETS_ARN="arn:aws:s3:::${PREFIX}*"
 OBJECTS_ARN="arn:aws:s3:::${PREFIX}*/*"
 
@@ -254,6 +257,12 @@ admin_policy() {
         "iam:ListUserPolicies", "iam:ListAttachedUserPolicies", "iam:ListGroupsForUser"
       ],
       "Resource": "${USERS_ARN}"
+    },
+    {
+      "Sid": "LookUpPersonUsersByName",
+      "Effect": "Allow",
+      "Action": ["iam:GetUser"],
+      "Resource": "${USERS_BY_NAME_ARN}"
     },
     {
       "Sid": "ListUsers",
