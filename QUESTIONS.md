@@ -45,6 +45,20 @@ Each question has a recommendation. Answering "ok" accepts it.
   deployed (`appmo update`) until the owner says so.
 - **Recommendation:** push after each item that passes its tests; deploy by hand.
 
+**Answer:** "push once you are ready" (2026-11-25): push when the merged work passes its tests; deploying stays by hand.
+
+### Q19: Should cloud buckets appear on the admin Buckets tab and in the chargeback CSV?
+
+- **Blocks:** nothing.
+- **Context:** the admin Buckets tab and the CSV chargeback export list the buckets the
+  on-prem admin plane (Ceph) reports. Cloud buckets show up only in the user's own list
+  and in the monthly .xlsx (through the AWS data export). Rebuild-from-Ceph also skips
+  cloud buckets (their facts are in their AWS tags).
+- **Default being built:** unchanged for now.
+- **Recommendation:** add cloud buckets to the admin Buckets tab with a "Cloud" badge,
+  size from CloudWatch and quota from SQLite, and add a rebuild step that reads cloud
+  bucket tags from AWS.
+
 **Answer:**
 
 ## Resolved
