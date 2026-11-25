@@ -15,7 +15,7 @@ from .test_credentials import BOB as SEED_BOB
 from .test_credentials import H
 from .test_credentials import env as base_env  # noqa: F401,F811  (fixture)
 
-# The mock's seed secrets hold "-", which real RGW secrets do not; the script refuses them.
+# Secrets of their own (RGW alphabet), so these tests do not depend on the mock seed.
 ALICE = (*SEED_ALICE[:3], "AliceSecret0001abcDEF")
 BOB = (*SEED_BOB[:3], "BobSecret0002abcDEF")
 

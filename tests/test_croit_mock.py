@@ -218,7 +218,7 @@ def test_tenant_uid_encoding(c):
 def test_keys_get_single_and_cfg_file(c):
     keys = c.get("/s3/users/alice/keys").json()
     assert keys == [{"user": "alice", "access_key": "ALICEACCESSKEY00001",
-                     "secret_key": "alice-secret-0001"}]
+                     "secret_key": "MPbMLemHiE1kL2zVF7SZc63OSV2vWrrdt4KZi8vk"}]
     assert c.get("/s3/users/alice/key").json() == keys[0]
     cfg = c.get("/s3/users/alice/cfg-file/download").json()
     assert "access_key = ALICEACCESSKEY00001" in cfg["fileContents"]

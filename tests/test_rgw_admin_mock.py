@@ -175,7 +175,7 @@ def test_user_info_shape(ops):
     assert u["user_id"] == "alice" and u["display_name"] == "Alice Anderson"
     assert u["suspended"] == 0 and u["tenant"] == "" and u["caps"] == []
     assert u["keys"] == [{"user": "alice", "access_key": "ALICEACCESSKEY00001",
-                          "secret_key": "alice-secret-0001"}]
+                          "secret_key": "MPbMLemHiE1kL2zVF7SZc63OSV2vWrrdt4KZi8vk"}]
     assert u["user_quota"] == {"enabled": False, "check_on_raw": False, "max_size": -1,
                                "max_size_kb": 0, "max_objects": -1}
     assert u["bucket_quota"]["enabled"] is False
@@ -274,7 +274,8 @@ def test_key_of_another_user(admin_ops, ops):
                                                           "secret-key": "stolen"})
     assert code(r, 409) == "KeyExists"
     assert admin_ops.state.access_keys[bob_key] == "bob"
-    assert [k["secret_key"] for k in admin_ops.state.users["bob"].keys] == ["bob-secret-0002"]
+    assert [k["secret_key"] for k in admin_ops.state.users["bob"].keys] == [
+        "J32GjEbuEbJ9kZEAdXkuniAGPR2nbg7FP9qLPI3x"]
     r = ops.delete("/admin/user", key=None, uid="alice", **{"access-key": bob_key})
     assert code(r, 403) == "InvalidAccessKeyId"
     assert admin_ops.state.access_keys[bob_key] == "bob"

@@ -256,19 +256,19 @@ def run(tmp_path_factory, moto_server):
     r.step("DELETE /api/credentials/keys/{access_key}", lambda: a.delete(
         f"/api/credentials/keys/{k2}", headers=H))
 
-    # one-time setup command (the seed secret has a "-", which real RGW secrets never have)
-    for k in env.croit_state.users["alice"].keys:
-        k["secret_key"] = "AliceSetupSecret0001"
+    # one-time setup command (seed secrets look like RGW's, so the script accepts them)
     run_link = r.step("POST /api/credentials/setup-link", lambda: a.post(
         "/api/credentials/setup-link", json={"os": "linux"}, headers=H)).json()["url"]
     path = run_link.replace("https://testserver", "")
     r.step("POST /setup/{token}", lambda: env.anon().post(path))
     bad_link = a.post("/api/credentials/setup-link", json={"os": "linux"}, headers=H).json()["url"]
-    for k in env.croit_state.users["alice"].keys:
+    alice_keys = env.croit_state.users["alice"].keys
+    saved = [k["secret_key"] for k in alice_keys]
+    for k in alice_keys:
         k["secret_key"] = "bad'secret"
     r.step("event", lambda: env.anon().post(bad_link.replace("https://testserver", "")))
-    for k in env.croit_state.users["alice"].keys:
-        k["secret_key"] = "AliceSetupSecret0001"
+    for k, secret in zip(alice_keys, saved, strict=True):
+        k["secret_key"] = secret
 
     # cloud keys on the moto server (the AWS side is tested in tests/test_cloud_users.py);
     # the client stays until the location step, so admin suspend/unsuspend reach it too

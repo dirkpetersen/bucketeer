@@ -160,7 +160,9 @@ def _rand_access() -> str:
 
 
 def _rand_secret() -> str:
-    return secrets.token_urlsafe(30)[:40]
+    # 40 x [A-Za-z0-9] like RGW's own (token_urlsafe's - and _ never occur there).
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    return "".join(secrets.choice(alphabet) for _ in range(40))
 
 
 ADMIN_ACCESS_KEY = os.environ.get("CROIT_MOCK_ADMIN_OPS_ACCESS_KEY") or _rand_access()

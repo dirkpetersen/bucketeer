@@ -233,7 +233,7 @@ async def test_get_bucket_versioning(backend):
 async def test_keys_get_put_delete(backend):
     before = await backend.list_keys("alice")
     assert before == [{"user": "alice", "access_key": "ALICEACCESSKEY00001",
-                       "secret_key": "alice-secret-0001"}]
+                       "secret_key": "MPbMLemHiE1kL2zVF7SZc63OSV2vWrrdt4KZi8vk"}]
     await backend.put_key("alice", "NEWACCESSKEY0000001", "new-secret-1")
     keys = await backend.list_keys("alice")
     assert {k["access_key"] for k in keys} == {"ALICEACCESSKEY00001", "NEWACCESSKEY0000001"}

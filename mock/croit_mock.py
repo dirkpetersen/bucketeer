@@ -54,12 +54,17 @@ ADMIN_TOKEN = os.environ.get("CROIT_MOCK_ADMIN_TOKEN") or "mock-admin-" + secret
 VIEWER_TOKEN = os.environ.get("CROIT_MOCK_VIEWER_TOKEN") or "mock-viewer-" + secrets.token_hex(12)
 # Seeded croit login users: name -> (password, roles).
 LOGIN_USERS = {"admin": ("admin", ["admin", "viewer"]), "viewer": ("viewer", ["viewer"])}
-# Seeded S3 users: uid -> (display name, email, access key, secret key).
+# Seeded S3 users: uid -> (display name, email, access key, secret key). Secrets look
+# like RGW's own (40 x [A-Za-z0-9]), so the setup script accepts them.
 SEED_USERS = {
-    "alice": ("Alice Anderson", "alice@example.org", "ALICEACCESSKEY00001", "alice-secret-0001"),
-    "bob": ("Bob Brown", "bob@example.org", "BOBACCESSKEY0000002", "bob-secret-0002"),
-    "acme$carol": ("Carol Clark", "carol@acme.example", "CAROLACCESSKEY00003", "carol-secret-0003"),
+    "alice": ("Alice Anderson", "alice@example.org", "ALICEACCESSKEY00001",
+              "MPbMLemHiE1kL2zVF7SZc63OSV2vWrrdt4KZi8vk"),
+    "bob": ("Bob Brown", "bob@example.org", "BOBACCESSKEY0000002",
+            "J32GjEbuEbJ9kZEAdXkuniAGPR2nbg7FP9qLPI3x"),
+    "acme$carol": ("Carol Clark", "carol@acme.example", "CAROLACCESSKEY00003",
+                   "EU0go7kM3rP3e2ud9rNJvQsbxGApC0HhQwJKUUHQ"),
 }
+SECRET_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 # Seeded buckets: tenant-qualified name -> (owner, objects, bytes).
 SEED_BUCKETS = {
     "alice-data": ("alice", 42, 1048576),
@@ -194,7 +199,7 @@ def gen_access_key() -> str:
 
 
 def gen_secret_key() -> str:
-    return secrets.token_urlsafe(30)[:40]
+    return "".join(secrets.choice(SECRET_ALPHABET) for _ in range(40))
 
 
 class CroitState:

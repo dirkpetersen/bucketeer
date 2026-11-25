@@ -63,7 +63,7 @@ DEMO_USERS = {
     "dana": ("Dana Diaz", True),
     "erin": ("Erin Evans", False),
 }
-BOB_EXTRA_KEY = ("BOBSECONDKEY0000003", "bob-secret-0003-demo")
+BOB_EXTRA_KEY = ("BOBSECONDKEY0000003", "ehmGyPTVeeXsknuYMzcRh1RskmhtqmzwBt65pcuh")
 
 
 class DemoDirectory:
