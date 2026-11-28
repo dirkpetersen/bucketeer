@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from bucketeer import backup, bucket_delete, bucket_quota, cloud_buckets, rebuild
+from bucketeer import backup, bucket_delete, bucket_quota, cloud_buckets, notices, rebuild
 from bucketeer.bucket_keys import cleanup_pending
 from bucketeer.cloud import CloudAdmin, CloudError
 
@@ -106,6 +106,7 @@ ROUTES: dict[str, tuple[str, ...]] = {
     f"POST {S}/budget-number/test": (),
     f"PUT {S}/placement": ("admin.settings.placement",),
     f"PUT {S}/location": ("admin.settings.location",),
+    f"PUT {S}/notices": ("admin.settings.notices",),
     f"PUT {S}/bucket-quota": ("admin.settings.bucket_quota",),
     f"PUT {S}/default-quota": ("admin.settings.bucket_quota",),
     f"DELETE {S}/default-quota": ("admin.settings.bucket_quota",),
@@ -146,6 +147,8 @@ EVENTS = {
     "cloud.bucket.over_quota": "the daily check found a cloud bucket over its quota (system)",
     "cloud.bucket.delete_started": "a cloud bucket with content: its delete job was queued",
     "cloud.bucket.delete_failed": "a cloud delete job stopped (e.g. the person has two keys)",
+    "bucket.near_full_notice": "the daily pass found an on-premises bucket nearly full (system)",
+    "credentials.key.age_notice": "the daily pass found an access key older than the limit",
 }
 
 ACTION_RE = re.compile(r"^(?:[a-z][a-z_]*)(?:\.[a-z][a-z_]*)+$")
@@ -611,6 +614,15 @@ def run(tmp_path_factory, moto_server):
     # the one-time step: a person still on the old 1 TiB user quota becomes unlimited
     env.croit_state.users["alice"].user_quota.update(enabled=True, maxSize=2**40, maxObjects=-1)
     r.step("event", lambda: asyncio.run(bucket_quota.unlimit_user_quotas(env.app)))
+    # user notices: the settings, then a daily pass with a full bucket and old keys
+    r.step(f"PUT {S}/notices", lambda: b.put(f"{S}/notices", json={"maxKeyAgeDays": 30},
+                                             headers=H))
+    full = env.croit_state.buckets["alice-data"]
+    env.croit_state.refresh_usage(full)
+    full.quota.update(enabled=True, maxSize=max(1, full.size_bytes), maxObjects=-1)
+    asyncio.run(notices.notice_tick(env.app))  # first sightings of the keys
+    r.step("event", lambda: asyncio.run(notices.notice_tick(
+        env.app, datetime.now(UTC) + timedelta(days=60))))
     yield r
     backup.ENV_FILE = saved_env_file
     env.db.close()

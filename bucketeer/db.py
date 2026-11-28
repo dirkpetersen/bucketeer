@@ -315,6 +315,22 @@ MIGRATIONS: list[Migration] = [
         CHECK (location IN ('onprem', 'cloud'));
     ALTER TABLE bucket_delete_jobs ADD COLUMN temp_key TEXT;
     """,
+    # User notices (`notices.py`): how old an access key is. RGW keys carry no creation date,
+    # so `first_seen` is the creation when Bucketeer made the key (`created` = 1), else the
+    # first time Bucketeer saw it (the age is then "at least"). `kind` 'user' = an own key of
+    # `uid`, 'subuser' = a key of one of its subusers, 'cloud' = an AWS key (`uid` = the AD
+    # name, `first_seen` = IAM's CreateDate). `reminded_at` = the last key age email.
+    """
+    CREATE TABLE key_ages (
+        access_key  TEXT PRIMARY KEY,
+        uid         TEXT NOT NULL,
+        kind        TEXT NOT NULL CHECK (kind IN ('user', 'subuser', 'cloud')),
+        first_seen  TEXT NOT NULL,
+        created     INTEGER NOT NULL DEFAULT 0,
+        reminded_at TEXT
+    );
+    CREATE INDEX key_ages_uid ON key_ages (uid);
+    """,
 ]
 
 _MISSING: Any = object()
@@ -403,6 +419,7 @@ class Database:
         self.quota_changes = QuotaChanges(self)
         self.cloud_accounts = CloudAccounts(self)
         self.cloud_key_suspensions = CloudKeySuspensions(self)
+        self.key_ages = KeyAges(self)
         self.audit = AuditLog(self)
 
     # -- plumbing -----------------------------------------------------------
@@ -727,10 +744,14 @@ class Buckets(_Repo):
             return c.execute("UPDATE buckets SET quota_tib = ? WHERE name = ?",
                              (tib, name)).rowcount > 0
 
-    def set_alerted(self, name: str, ts: str | None) -> bool:
+    def set_alerted(self, name: str, ts: str | None, location: str | None = None) -> bool:
+        """The last over-quota (cloud) or near-full (on premises) email of the bucket."""
         with self.db.tx() as c:
-            return c.execute("UPDATE buckets SET over_quota_alert_at = ? WHERE name = ?",
-                             (ts, name)).rowcount > 0
+            if location is None:
+                return c.execute("UPDATE buckets SET over_quota_alert_at = ? WHERE name = ?",
+                                 (ts, name)).rowcount > 0
+            return c.execute("UPDATE buckets SET over_quota_alert_at = ? WHERE name = ? "
+                             "AND location = ?", (ts, name, location)).rowcount > 0
 
     def set_budget_number(self, name: str, budget_number: str | None) -> bool:
         with self.db.tx() as c:
@@ -1262,6 +1283,71 @@ class CloudKeySuspensions(_Repo):
             return c.execute(
                 "UPDATE cloud_key_suspensions SET suspended_by = ? "
                 "WHERE ad_username = ? AND suspended_by = ?", (new, ad_username, old)).rowcount
+
+
+class KeyAges(_Repo):
+    """How old access keys are (`notices.py`). Access keys are unique across RGW (and AWS)."""
+
+    def created(self, access_key: str, uid: str, kind: str, ts: str | None = None) -> None:
+        """Bucketeer made `access_key` just now: its age is exact from here."""
+        with self.db.tx() as c:
+            c.execute(
+                "INSERT INTO key_ages (access_key, uid, kind, first_seen, created) "
+                "VALUES (?, ?, ?, ?, 1) ON CONFLICT (access_key) DO UPDATE SET "
+                "uid = excluded.uid, kind = excluded.kind, first_seen = excluded.first_seen, "
+                "created = 1, reminded_at = NULL",
+                (access_key, uid, kind, ts or now()))
+
+    def _rows(self, keys: list[str]) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        for i in range(0, len(keys), 500):
+            part = keys[i:i + 500]
+            out.update({r["access_key"]: r for r in self.db.query(
+                f"SELECT * FROM key_ages WHERE access_key IN ({', '.join('?' * len(part))})",
+                tuple(part))})
+        return out
+
+    def seen(self, items: list[tuple[str, str, str]], ts: str) -> dict[str, dict[str, Any]]:
+        """`items` = [(access_key, uid, kind)]: a key not recorded yet is recorded as first
+        seen at `ts`. Returns the rows of all `items` by access key."""
+        if items:
+            with self.db.tx() as c:
+                c.executemany(
+                    "INSERT OR IGNORE INTO key_ages (access_key, uid, kind, first_seen) "
+                    "VALUES (?, ?, ?, ?)", [(a, u, k, ts) for a, u, k in items])
+        return self._rows([a for a, _, _ in items])
+
+    def cloud(self, ad_username: str, keys: list[tuple[str, str]]) -> dict[str, dict[str, Any]]:
+        """AWS keys `[(access_key, CreateDate)]` of one person: IAM's date is exact."""
+        if keys:
+            with self.db.tx() as c:
+                c.executemany(
+                    "INSERT INTO key_ages (access_key, uid, kind, first_seen, created) "
+                    "VALUES (?, ?, 'cloud', ?, 1) ON CONFLICT (access_key) DO UPDATE SET "
+                    "uid = excluded.uid, kind = 'cloud', first_seen = excluded.first_seen, "
+                    "created = 1", [(a, ad_username, ts) for a, ts in keys])
+        return self._rows([a for a, _ in keys])
+
+    def set_reminded(self, access_key: str, ts: str) -> bool:
+        with self.db.tx() as c:
+            return c.execute("UPDATE key_ages SET reminded_at = ? WHERE access_key = ?",
+                             (ts, access_key)).rowcount > 0
+
+    def remove(self, *access_keys: str) -> int:
+        with self.db.tx() as c:
+            return sum(c.execute("DELETE FROM key_ages WHERE access_key = ?", (a,)).rowcount
+                       for a in access_keys)
+
+    def prune(self, uid: str, kinds: tuple[str, ...], keep: set[str]) -> int:
+        """Forget the keys of `uid` (of these kinds) that no longer exist."""
+        rows = self.db.query(
+            f"SELECT access_key FROM key_ages WHERE uid = ? AND kind IN "
+            f"({', '.join('?' * len(kinds))})", (uid, *kinds))
+        gone = [r["access_key"] for r in rows if r["access_key"] not in keep]
+        return self.remove(*gone) if gone else 0
+
+    def list(self) -> list[dict[str, Any]]:
+        return self.db.query("SELECT * FROM key_ages ORDER BY uid, access_key")
 
 
 class UsageDaily(_Repo):

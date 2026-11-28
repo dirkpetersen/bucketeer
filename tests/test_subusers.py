@@ -54,7 +54,7 @@ def test_list_empty(env):
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
     assert r.json() == {
         "subusers": [], "permissions": ["read", "write", "read-write", "full-control"],
-        "limits": {"maxSubusers": MAX_SUBUSERS, "maxKeys": MAX_KEYS}}
+        "limits": {"maxSubusers": MAX_SUBUSERS, "maxKeys": MAX_KEYS}, "maxKeyAgeDays": 180}
 
 
 def test_create_makes_exactly_one_key_and_audits(env):
@@ -69,8 +69,9 @@ def test_create_makes_exactly_one_key_and_audits(env):
     assert all(secret not in str(body) for secret in keys.values())
     assert env.db.subusers.used("alice") == ["ci"]
     listed = env.alice.get(SUB).json()["subusers"]
-    assert listed == [{"name": "ci", "permission": "read-write",
-                       "keys": [{"accessKey": key["accessKey"]}]}]
+    assert [{**s, "keys": [k["accessKey"] for k in s["keys"]]} for s in listed] == [
+        {"name": "ci", "permission": "read-write", "keys": [key["accessKey"]]}]
+    assert listed[0]["keys"][0]["ageExact"] is True  # made by Bucketeer (tests/test_notices.py)
     (entry,) = audit(env)
     assert entry["action"] == "subuser.create" and entry["actor"] == "alice"
     assert entry["target_type"] == "subuser" and entry["target"] == "alice:ci"

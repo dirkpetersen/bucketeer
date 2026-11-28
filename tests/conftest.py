@@ -169,3 +169,11 @@ def no_backup_schedule(monkeypatch):
     from bucketeer import backup
 
     monkeypatch.setattr(backup, "SCHEDULE_ON_START", False)
+
+
+@pytest.fixture(autouse=True)
+def no_notices_on_start(monkeypatch):
+    """The daily user notices pass is called explicitly (`notices.notice_tick`)."""
+    from bucketeer import notices
+
+    monkeypatch.setattr(notices, "NOTICES_ON_START", False)

@@ -36,6 +36,7 @@ from . import (
     location,
     mailer,
     multipart,
+    notices,
     notifications,
     object_lock,
     offboarding,
@@ -141,6 +142,9 @@ def create_app(
         if bucket_quota.UNLIMIT_ON_START:  # one-time: unlimited user quotas; in background
             unlimit = asyncio.get_running_loop().create_task(
                 bucket_quota.unlimit_on_start(_app))
+        notice = None
+        if notices.NOTICES_ON_START:  # daily near-full and key age emails; in background
+            notice = asyncio.get_running_loop().create_task(notices.notice_loop(_app))
         schedule = None
         if offboarding.SCHEDULE_ON_START:  # background: never blocks startup or /health
             schedule = asyncio.get_running_loop().create_task(
@@ -148,7 +152,7 @@ def create_app(
         try:
             yield
         finally:
-            for task in (cloud_check, cloud_alerts, sampler, reporter, unlimit):
+            for task in (cloud_check, cloud_alerts, sampler, reporter, unlimit, notice):
                 if task is not None:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
@@ -268,6 +272,7 @@ def create_app(
     api.include_router(admin.router)
     api.include_router(admin_cloud.router)
     api.include_router(location.router)  # /admin/settings/location
+    api.include_router(notices.router)  # /admin/settings/notices
     api.include_router(admin_settings.router)
     api.include_router(offboarding.router)
     api.include_router(billing.router)

@@ -10,6 +10,7 @@ import { subusersSection } from "./subusers.js";
 import { cloudSection } from "./cloud-keys.js";
 import { setupPanel } from "../components/setup-panel.js";
 import { isAdvanced, subscribe } from "../advanced.js";
+import { keyAge, paintKeyAge } from "../keyage.js";
 import { getLocation, subscribe as onLocation } from "../location.js";
 
 // The Credentials card: account status first, then (account ready) the access key,
@@ -35,6 +36,7 @@ function copyButton(text, label) {
 // `reload(selectKey)` re-reads the key list and rebuilds this panel (selecting `selectKey`).
 function keysPanel(data, { select, reload }) {
   const keys = data.keys.map((k) => k.accessKey);
+  const byKey = new Map(data.keys.map((k) => [k.accessKey, k]));
   let busy = false;
   // Run one key action: confirm, call the API, toast, then rebuild with the new selection.
   const act = async (btn, fn) => {
@@ -99,15 +101,20 @@ function keysPanel(data, { select, reload }) {
   field.addEventListener("sf-reveal", () => { secret = field.value; paint(); });
   field.addEventListener("sf-mask", () => { secret = ""; paint(); });
 
+  // The selected key's age (and "Rotate soon" past the administrators' limit).
+  const age = keyAge(byKey.get(selected), data.maxKeyAgeDays);
   let keyEl;
   if (keys.length > 1) {
     const sel = h("select", { class: "input", id: "cred-key", "aria-label": "Access key" },
-      keys.map((k) => h("option", { value: k, text: k, selected: k === selected })));
-    sel.addEventListener("change", () => { field.clear(); selected = sel.value; secret = ""; paint(); });
-    keyEl = h("div", { class: "field" }, h("label", { for: "cred-key", text: "Access key" }), sel);
+      keys.map((k) => h("option", { value: k, text: byKey.get(k)?.rotateSoon ? `${k} (rotate soon)` : k, selected: k === selected })));
+    sel.addEventListener("change", () => {
+      field.clear(); selected = sel.value; secret = ""; paint();
+      paintKeyAge(age, byKey.get(selected), data.maxKeyAgeDays);
+    });
+    keyEl = h("div", { class: "field" }, h("label", { for: "cred-key", text: "Access key" }), sel, age);
   } else {
     keyEl = h("div", { class: "field" }, h("span", { class: "label", text: "Access key" }),
-      h("div", { class: "cred-key" }, h("code", { text: selected }), copyButton(selected, "Copy access key")));
+      h("div", { class: "cred-key" }, h("code", { text: selected }), copyButton(selected, "Copy access key")), age);
   }
 
   const rotateBtn = h("button", { class: "btn", type: "button" }, icon("refresh"), "Rotate");

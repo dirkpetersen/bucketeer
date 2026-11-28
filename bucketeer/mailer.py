@@ -1,5 +1,6 @@
-"""Share invitation email (CLAUDE.md "Sharing") and the monthly billing report with its
-.xlsx attachment (`send_with_attachment`, CLAUDE.md "Billing"). Optional: with `SMTP_FROM`
+"""Share invitation email (CLAUDE.md "Sharing"), the monthly billing report with its
+.xlsx attachment (`send_with_attachment`, CLAUDE.md "Billing"), the cloud over-quota alert and
+the user notices (`send_near_full`, `send_key_age`, `notices.py`). Optional: with `SMTP_FROM`
 empty nothing is sent.
 
 With `SMTP_HOST` empty and `SMTP_FROM` set, the mail server is the recipient domain's MX record
@@ -28,6 +29,14 @@ ACCESS = {"read": "read-only", "readwrite": "read and write"}
 def _clean(text: str, limit: int = 80) -> str:
     """One line, no control characters: names come from AD and users."""
     return "".join(c for c in text if c.isprintable()).strip()[:limit]
+
+
+def _size(n: int) -> str:
+    """Bytes in binary units, as the portal shows them."""
+    for unit, f in (("TiB", 2**40), ("GiB", 2**30), ("MiB", 2**20), ("KiB", 2**10)):
+        if n >= f:
+            return f"{n / f:,.1f} {unit}"
+    return f"{n:,} bytes"
 
 
 class Mailer:
@@ -182,6 +191,83 @@ class Mailer:
             return False
         log.info("over-quota alert sent to %s for %s", to, _clean(bucket, 63))
         return True
+
+    # -- user notices (`notices.py`): near-full buckets and old access keys --
+
+    async def _notice(self, to: str, msg_of, what: str):
+        """True (sent), False (failed or no usable address, logged) or None (email off)."""
+        if not self.enabled:
+            log.info("%s not sent: email is off (SMTP_FROM empty)", what)
+            return None
+        to = (to or "").strip()
+        if not to or any(c in to for c in "\r\n<>,;\" "):
+            log.info("%s not sent: no usable address", what)
+            return False
+        try:
+            await asyncio.to_thread(self._send, msg_of(to))
+        except Exception as e:  # noqa: BLE001  logged; the caller retries the next day
+            log.warning("%s email to %s failed: %s: %s", what, to, type(e).__name__,
+                        _clean(str(e), 200))
+            return False
+        log.info("%s email sent to %s", what, to)
+        return True
+
+    def _message(self, to: str, subject: str, body: str) -> EmailMessage:
+        msg = EmailMessage()
+        msg["From"] = self.s.smtp_from
+        msg["To"] = to
+        msg["Subject"] = _clean(subject, 150)
+        msg.set_content(body)
+        return msg
+
+    async def send_near_full(self, to: str, bucket: str, size: int, quota: int, percent: int):
+        """The on-premises bucket `bucket` (short name) holds `size` of its `quota` bytes."""
+        name = _clean(bucket, 63)
+        body = (
+            f"Your bucket \"{name}\" in {self.s.app_name} holds {_size(size)} of its "
+            f"{_size(quota)} quota ({percent}% full).\n\n"
+            "When it reaches 100%, the storage refuses new uploads to this bucket until you "
+            "make room or raise the quota.\n\n"
+            "To raise the quota, open Bucketeer, find the bucket under Your buckets and choose "
+            "More, Change quota. You can also delete data you no longer need.\n\n"
+            f"{self.s.app_url.rstrip('/')}/\n\n"
+            "You get this reminder at most once a week per bucket.\n")
+        return await self._notice(
+            to, lambda t: self._message(t, f"Bucket {name} is {percent}% full", body),
+            f"near-full notice for {name}")
+
+    async def send_key_age(self, to: str, keys: list[dict], limit_days: int, cloud: bool):
+        """`keys` = [{last4, ageDays, exact, subuser?}]: the person's keys older than
+        `limit_days`. Only the last 4 characters of a key are named."""
+        lines = []
+        for k in keys:
+            what = (f"subuser {_clean(k['subuser'], 20)}" if k.get("subuser")
+                    else "cloud (AWS) key" if cloud else "your key")
+            age = f"{'' if k.get('exact') else 'at least '}{k['ageDays']:,} days old"
+            lines.append(f"  - {what} ending in {_clean(k['last4'], 4)}, {age}")
+        many = len(keys) > 1
+        if cloud:
+            how = ("Make a new key: run \"Set up this computer\" again while you work in Cloud; it "
+                   "installs a fresh cloud key on that computer. Or, with Advanced on, choose "
+                   "Rotate next to the key on the Credentials card. Then delete the old key on "
+                   "the Credentials card once nothing uses it any more.")
+        else:
+            how = ("Turn on Advanced, choose the key on the Credentials card and click Rotate: "
+                   "Bucketeer makes a new key first, then removes the old one. Then update the "
+                   "computers and scripts that used it; on a computer you set up with \"Set up "
+                   "this computer\", simply run it again to install the new key.")
+        body = (
+            f"{'These access keys' if many else 'This access key'} of yours in "
+            f"{self.s.app_name} {'are' if many else 'is'} older than {limit_days:,} days:\n\n"
+            + "\n".join(lines) + "\n\n"
+            "Old keys are a risk if they were ever copied somewhere they should not be. "
+            f"Please replace {'them' if many else 'it'}.\n\n{how}\n\n"
+            f"{self.s.app_url.rstrip('/')}/\n\n"
+            "You get this reminder at most once a month per key.\n")
+        subject = (f"Time to rotate your {'cloud (AWS)' if cloud else 'S3'} access "
+                   f"key{'s' if many else ''}")
+        return await self._notice(to, lambda t: self._message(t, subject, body),
+                                  f"key age notice ({len(keys)} key(s))")
 
     async def send_share_invite(self, to: str, owner_name: str, bucket: str, access: str):
         if not self.enabled:

@@ -88,6 +88,19 @@ aws --profile s3-cloud s3 ls
 - If the card says to **ask an administrator**, an AWS user with your name already exists
   that Bucketeer did not make. An administrator has to remove it first.
 
+### Old keys { #old-keys }
+
+Keys are best replaced now and then. With **Advanced** on, the Credentials card shows how old
+each key is, and **Rotate soon** once it is older than your admins' limit (180 days unless
+they changed it). Bucketeer also emails you about such keys, at most once a month per key;
+the email names only the last four characters. For a key made before Bucketeer kept track,
+the age counts from the day Bucketeer first saw it, so it says "at least".
+
+To replace an on-premises key, turn on **Advanced**, choose the key and click **Rotate**:
+the new key is made first, then the old one is removed. Then run **Set up this computer**
+again on each computer that used it, and update any scripts. In Cloud, running **Set up
+this computer** again installs a fresh cloud key; delete the old one afterwards.
+
 ## 4. Create a bucket
 
 Click **Create bucket**. Bucket names use lowercase letters, digits and hyphens (no dots).
@@ -177,6 +190,11 @@ right now. You can add 60 TiB after Dec 1". Ask an admin if you need more at onc
 When a bucket keeps growing at the pace of the last 30 days and would reach its quota within
 about two months, its row says so, for example "Full in about 5 weeks" (hover it for the
 growth per day), so you can raise the quota or clean up in time.
+
+A bucket that is close to its quota shows **Nearly full** in the list (from 90 % unless your
+admins chose another level), and you get an email about it, at most once a week per bucket.
+At 100 % uploads to that bucket stop until you raise the quota (**More, Change quota**) or
+delete data you no longer need.
 
 ## Advanced
 
