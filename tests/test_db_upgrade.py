@@ -13,6 +13,14 @@ from bucketeer.db import DB_FILENAME, MIGRATIONS, Database, MigrationFailed
 LATEST = len(MIGRATIONS)
 T = "2026-01-01T00:00:00+00:00"
 
+
+def created_in(table: str) -> int:
+    """The migration that creates `table`, found by its text (migrations appended by parallel
+    work get their number only when merged, so newer samples don't hard-code it)."""
+    return next(n for n, m in enumerate(MIGRATIONS, 1)
+                if isinstance(m, str) and f"CREATE TABLE {table} (" in m)
+
+
 # (version that created the table, table, row using only that version's columns)
 SAMPLES: list[tuple[int, str, dict]] = [
     (1, "settings", {"key": "naming", "value": '{"prefix": ""}', "updated_at": T}),
@@ -50,6 +58,9 @@ SAMPLES: list[tuple[int, str, dict]] = [
     (17, "cloud_key_suspensions", {"access_key": "AKIAEXAMPLE0000000002",
                                    "iam_user": "s3-alice", "ad_username": "alice",
                                    "suspended_by": "offboarding", "suspended_at": T}),
+    (created_in("key_ages"), "key_ages", {"access_key": "AKIAEXAMPLE0000000003",
+                                          "uid": "alice", "kind": "user", "first_seen": T,
+                                          "created": 1, "reminded_at": T}),
 ]
 
 # Values a later migration fills in for rows that existed before it:

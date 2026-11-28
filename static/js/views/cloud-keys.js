@@ -5,6 +5,7 @@ import { createCloudKey, deleteCloudKey, getCloudCredentials, rotateCloudKey } f
 import { cloudAvailable, getLocation, subscribe as onLocation } from "../location.js";
 import { isAdvanced, subscribe as onAdvanced } from "../advanced.js";
 import { cloudConfigSnippet, credentialsSnippet, SECRET_PLACEHOLDER, testCommand } from "../awsconfig.js";
+import { ageText, rotateSoonChip } from "../keyage.js";
 import { toast } from "../components/toast.js";
 import { confirmDialog } from "../components/confirm-dialog.js";
 
@@ -131,7 +132,8 @@ export function cloudSection() {
       h("div", { class: "ck-key-id" },
         h("code", { text: k.accessKey }),
         h("span", { class: `chip ${active ? "chip-ok" : "chip-warn"}` }, h("span", { class: "dot" }), active ? "Active" : "Inactive"),
-        k.createdAt && h("span", { class: "acct-sub", text: `Created ${fmtDate(k.createdAt)}` })),
+        k.createdAt && h("span", { class: "acct-sub", text: `Created ${fmtDate(k.createdAt)}${ageText(k) ? `, ${ageText(k)}` : ""}` }),
+        rotateSoonChip(k, data.maxKeyAgeDays)),
       h("div", { class: "cred-actions" }, rotate, del));
   };
 

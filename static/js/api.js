@@ -175,6 +175,8 @@ export const unsuspendUser = (uid) => api(`/admin/users/${enc(uid)}/unsuspend`, 
 export const getSettings = () => api("/admin/settings");
 // Global "Default location" (onprem|cloud): the GET runs a fresh AWS connection check.
 export const getLocationSetting = () => api("/admin/settings/location");
+export const getNoticeSettings = () => api("/admin/settings/notices");
+export const saveNoticeSettings = (body) => api("/admin/settings/notices", { method: "PUT", json: body });
 export const saveLocationSetting = (value) =>
   api("/admin/settings/location", { method: "PUT", json: { default: value } });
 export const saveNaming = (rules) => api("/admin/settings/naming", { method: "PUT", json: rules });

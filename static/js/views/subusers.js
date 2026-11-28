@@ -7,6 +7,7 @@ import {
 } from "../api.js";
 import { isAdvanced, subscribe } from "../advanced.js";
 import { configSnippet, credentialsSnippet } from "../awsconfig.js";
+import { keyAge, paintKeyAge, rotateSoonChip } from "../keyage.js";
 import { toast } from "../components/toast.js";
 import { confirmDialog, nameSpan } from "../components/confirm-dialog.js";
 
@@ -94,6 +95,7 @@ export function subusersSection(creds) {
 
   function keyPanel(s) {
     const keys = s.keys.map((k) => k.accessKey);
+    const byKey = new Map(s.keys.map((k) => [k.accessKey, k]));
     const limits = data.limits;
     const profile = `bucketeer-sub-${s.name}`;
     let selected = keys.includes(picked[s.name]) ? picked[s.name] : keys[0];
@@ -120,15 +122,19 @@ export function subusersSection(creds) {
     paintSnippets();
     panel.hint = "Merge these into your existing files; do not overwrite them.";
 
+    const age = keyAge(byKey.get(selected), data.maxKeyAgeDays);
     let keyEl;
     if (keys.length > 1) {
       const sel = h("select", { class: "input", id: `${id}-k-${s.name}`, "aria-label": "Access key" },
-        keys.map((k) => h("option", { value: k, text: k, selected: k === selected })));
-      sel.addEventListener("change", () => { field.clear(); selected = sel.value; picked[s.name] = selected; secret = ""; paintSnippets(); });
-      keyEl = h("div", { class: "field" }, h("label", { for: sel.id, text: "Access key" }), sel);
+        keys.map((k) => h("option", { value: k, text: byKey.get(k)?.rotateSoon ? `${k} (rotate soon)` : k, selected: k === selected })));
+      sel.addEventListener("change", () => {
+        field.clear(); selected = sel.value; picked[s.name] = selected; secret = ""; paintSnippets();
+        paintKeyAge(age, byKey.get(selected), data.maxKeyAgeDays);
+      });
+      keyEl = h("div", { class: "field" }, h("label", { for: sel.id, text: "Access key" }), sel, age);
     } else {
       keyEl = h("div", { class: "field" }, h("span", { class: "label", text: "Access key" }),
-        h("div", { class: "cred-key" }, h("code", { text: selected }), copyBtn(selected, "Copy access key")));
+        h("div", { class: "cred-key" }, h("code", { text: selected }), copyBtn(selected, "Copy access key")), age);
     }
 
     const add = h("button", { class: "btn btn-sm", type: "button", disabled: busy || keys.length >= limits.maxKeys,
@@ -219,7 +225,8 @@ export function subusersSection(creds) {
           h("b", { class: "bkd-label", text: s.name }),
           h("span", { class: "bkd-sub" },
             h("span", { class: `chip ${full ? "chip-warn" : ""}` }, full && icon("alert"), label(s.permission)),
-            h("span", { class: "chip", text: `${s.keys.length} ${s.keys.length === 1 ? "key" : "keys"}` }))),
+            h("span", { class: "chip", text: `${s.keys.length} ${s.keys.length === 1 ? "key" : "keys"}` }),
+            rotateSoonChip({ rotateSoon: s.keys.some((k) => k.rotateSoon) }, data.maxKeyAgeDays))),
         h("div", { class: "bk-acts" }, toggle, remove)),
       shown && h("div", { class: "bkd-detail", id: `${id}-d-${s.name}` }, permissionSelect(s), keyPanel(s)));
   }

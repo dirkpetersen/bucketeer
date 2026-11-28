@@ -7,6 +7,7 @@ import {
 import { toast } from "../components/toast.js";
 import { confirmDialog } from "../components/confirm-dialog.js";
 import { locationCard } from "./admin-location.js";
+import { noticesCard } from "./admin-notices.js";
 
 // The "Settings" tab of the administration page: runtime policy edited here
 // instead of in .env. Every section is a card with its own form, inline
@@ -517,6 +518,7 @@ export function renderSettings() {
       host.replaceChildren(locationCard()); // loads on its own (AWS check), first card
       for (const k of Object.keys(slots)) delete slots[k];
       paint();
+      host.append(noticesCard()); // loads on its own, last card
     } catch (err) {
       if (err.status === 401) return;
       data = null;

@@ -88,11 +88,16 @@ def make_env(tmp_path):
 def test_list_has_no_secrets(env):
     r = env.alice.get("/api/credentials")
     assert r.status_code == 200
-    assert r.json() == {
+    body = r.json()
+    keys = body.pop("keys")
+    assert body == {
         "profile": "s3-onprem", "region": "us-east-1", "endpointUrl": "https://s3.example.org",
         "addressingStyle": "virtual", "docsUrl": "https://dirkpetersen.github.io/bucketeer/",
-        "keys": [{"accessKey": ALICE[2]}],
+        "maxKeyAgeDays": 180,
     }
+    # key ages: tests/test_notices.py
+    assert keys == [{"accessKey": ALICE[2], "ageDays": 0, "ageKnownSince": keys[0]["ageKnownSince"],
+                     "ageExact": False, "rotateSoon": False}]
     assert ALICE[3] not in r.text
     assert r.headers["cache-control"] == "no-store"
 
@@ -192,7 +197,7 @@ def _keys_with_subuser(req):
 def test_subuser_keys_are_not_listed_or_revealed(env):
     env.transport.fail = _keys_with_subuser
     r = env.alice.get("/api/credentials")
-    assert r.json()["keys"] == [{"accessKey": ALICE[2]}]
+    assert [k["accessKey"] for k in r.json()["keys"]] == [ALICE[2]]
     r = env.alice.post("/api/credentials/reveal", json={"accessKey": "SUBKEY1"}, headers=H)
     assert r.status_code == 404 and "subsecret" not in r.text
 

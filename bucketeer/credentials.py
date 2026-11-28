@@ -1,8 +1,9 @@
 """Credentials API: the signed-in user's access keys and the values for the
 generated `~/.aws/config` / `~/.aws/credentials` snippets.
 
-- `GET /api/credentials` -> `{profile, region, endpointUrl, addressingStyle,
-  keys: [{accessKey}]}`. It never carries a secret.
+- `GET /api/credentials` -> `{profile, region, endpointUrl, addressingStyle, maxKeyAgeDays,
+  keys: [{accessKey, ageDays, ageKnownSince, ageExact, rotateSoon}]}` (key ages:
+  `notices.py`). It never carries a secret.
 - `POST /api/credentials/reveal` `{accessKey}` -> `{accessKey, secretKey}`. The
   key must be one of the user's own (fetched from croit and matched exactly);
   anything else is a 404. Each reveal is audited (`credentials.reveal`: actor,
@@ -52,7 +53,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
-from . import cloud_users
+from . import cloud_users, notices
 from .admin import croit_http_error
 from .cloud import CloudError
 from .config import Settings
@@ -141,13 +142,16 @@ async def get_credentials(request: Request, response: Response, acct: Account):
     settings: Settings = request.app.state.settings
     keys = await _own_keys(request, acct.uid)
     endpoint = await request.app.state.endpoints.resolve(acct.uid)
+    ages, limit = await notices.key_ages(request.app, acct.uid,
+                                         [(k["access_key"], "user") for k in keys])
     return {
         "profile": settings.s3_profile_name,
         "region": settings.s3_region,
         "endpointUrl": endpoint,
         "addressingStyle": settings.s3_addressing_style,
         "docsUrl": settings.docs_url or None,
-        "keys": [{"accessKey": k["access_key"]} for k in keys],
+        "maxKeyAgeDays": limit,
+        "keys": [{"accessKey": k["access_key"], **ages[k["access_key"]]} for k in keys],
     }
 
 
@@ -243,6 +247,7 @@ async def create_key(request: Request, response: Response, acct: Account):
             raise HTTPException(409, f"You can have at most {MAX_KEYS} access keys. "
                                      "Delete one you no longer use first.")
         access = await _add_new_key(request, acct.uid, {k["access_key"] for k in keys})
+        await notices.key_created(request.app, access, acct.uid, "user")
         await _audit(request, acct, "credentials.key.create", access)
     return {"accessKey": access}
 
@@ -260,6 +265,7 @@ async def rotate_key(access_key: str, request: Request, response: Response, acct
             raise HTTPException(409, f"You have more than {MAX_KEYS} access keys. "
                                      "Delete the ones you no longer use first.")
         new = await _add_new_key(request, acct.uid, {k["access_key"] for k in keys})
+        await notices.key_created(request.app, new, acct.uid, "user")
         # Confirm the new key is really there before the old one goes away.
         try:
             after = _own(await _all_access_keys(request, acct.uid), acct.uid)
@@ -278,6 +284,8 @@ async def rotate_key(access_key: str, request: Request, response: Response, acct
         except CroitClientError as e:
             log.warning("rotate: old key not removed for %s: %s", acct.uid, type(e).__name__)
             removed = False
+        if removed:
+            await notices.key_removed(request.app, access_key)
         await _audit(request, acct, "credentials.key.rotate", access_key,
                      newKey=new, old_key_removed=removed)
     out: dict = {"accessKey": new, "oldKeyRemoved": removed}
@@ -301,6 +309,7 @@ async def delete_key(access_key: str, request: Request, response: Response, acct
             await request.app.state.croit.delete_key(acct.uid, access_key)
         except CroitClientError as e:
             raise croit_http_error(e) from None
+        await notices.key_removed(request.app, access_key)
         await _audit(request, acct, "credentials.key.delete", access_key)
     return {"accessKey": access_key}
 

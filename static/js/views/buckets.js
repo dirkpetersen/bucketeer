@@ -101,6 +101,7 @@ function row(b, onDelete, onToggle, onKeys, onLifecycle, onShare, onPeople, onPo
   }
   if (VERSIONING[b.versioning]) meta.append(h("span", { class: "chip chip-ok" }, h("span", { class: "dot" }), VERSIONING[b.versioning]));
   if (b.objectLock === true) meta.append(h("span", { class: "chip", title: "Object lock keeps versioning on for good." }, "Object lock"));
+  if (b.nearFull) meta.append(h("span", { class: "chip chip-warn", title: "Uploads stop when the bucket reaches its quota. Raise it with More, Change quota, or delete data you no longer need." }, icon("alert", "icon"), "Nearly full"));
   const budget = b.budgetMissing
     ? h("span", { class: "chip chip-warn", title: "This bucket has no budget number yet." }, icon("alert", "icon"), "Missing budget number")
     : h("span", { class: "bk-budget" }, h("span", { class: "bk-budget-l", text: "Budget" }), h("code", { text: b.budgetNumber }));

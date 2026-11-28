@@ -20,7 +20,8 @@ would overlap (`jdoe`'s `<prefix>jdoe-*` would match `jdoe-x`'s buckets). See `c
 
 **Keys** (`/api/cloud/credentials`, `require_active_rgw_user` + cloud available (503), CSRF,
 no-store, a per-person lock around changes):
-- `GET` -> `{profile, region, iamUser|null, keys: [{accessKey, status, createdAt}], maxKeys}`;
+- `GET` -> `{profile, region, iamUser|null, keys: [{accessKey, status, createdAt, ageDays,
+  ageKnownSince, ageExact, rotateSoon}], maxKeys, maxKeyAgeDays}` (key ages: `notices.py`);
   never a secret; never creates anything.
 - `POST /keys` -> 201 `{accessKey, secretKey, status, createdAt, oneTime: true}` (creates the
   IAM user first if needed; at most 2 keys, IAM's hard limit, else 409).
@@ -58,6 +59,7 @@ from .cloud import (
     reserved_usernames,
 )
 from .db import Database
+from .notices import cloud_key_ages
 from .profile import require_default_budget
 from .rgw_user import _UID, RESERVED_UIDS, RgwAccount, require_active_rgw_user
 
@@ -367,9 +369,10 @@ async def get_cloud_credentials(request: Request, response: Response, acct: Acco
             if e.code != "NoSuchEntity":
                 raise cloud_http_error(e) from None
             row = None  # removed by an admin; the next key request makes a new one
+    keys, limit = await cloud_key_ages(request.app, keys)
     return {"profile": s.cloud_profile_name, "region": s.cloud_region,
             "iamUser": row["iam_user"] if row else None, "keys": keys,
-            "maxKeys": MAX_ACCESS_KEYS}
+            "maxKeys": MAX_ACCESS_KEYS, "maxKeyAgeDays": limit}
 
 
 @router.post("/keys", status_code=201, dependencies=[Depends(require_default_budget)])

@@ -110,7 +110,7 @@ def test_get_creates_nothing(env):
     r = env.user.get(C)
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
     assert r.json() == {"profile": "s3-cloud", "region": "us-west-2", "iamUser": None,
-                        "keys": [], "maxKeys": 2}
+                        "keys": [], "maxKeys": 2, "maxKeyAgeDays": 180}
     assert env.iam.list_users()["Users"] == []
 
 

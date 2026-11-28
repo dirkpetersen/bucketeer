@@ -294,6 +294,28 @@ refuses to run while Bucketeer still answers on its port (`--force` overrides th
 A restore cannot bring back what happened after the backup was written: **audit entries,
 usage readings for billing and admin settings changes** made since then are lost.
 
+## User notices
+
+Once a day at 07:00 (server time; after a restart the missed check runs at once) Bucketeer
+emails people about two things. The **User notices** card on the **Settings** tab sets the
+levels; with email off (`SMTP_FROM` empty) the check still runs and writes the audit log,
+but nobody is emailed.
+
+- **Nearly full buckets** (on premises): when a bucket holds **Near-full warning at** (90 %
+  unless changed) of its quota, its owner gets an email saying how full it is, that uploads
+  stop at 100 %, and how to raise the quota. At most once a week per bucket; the bucket row
+  shows **Nearly full** from the same level. Buckets of bucket keys, the service and backup
+  users and suspended owners are skipped. Audited as `bucket.near_full_notice`.
+- **Old access keys**: people get one email naming each own key, subuser key and cloud key
+  older than **Key age reminder after** (180 days unless changed; 0 switches it off), at
+  most once a month per key, with only its last four characters and how to rotate it.
+  RGW keeps no creation date, so Bucketeer records one when it makes a key; a key made
+  before counts from the day Bucketeer first saw it ("at least"). Cloud keys use AWS's own
+  date. Suspended people are skipped. Audited as `credentials.key.age_notice`.
+
+The card shows the last check and when the next one runs. Changes are audited as
+`admin.settings.notices`.
+
 ## Other tabs
 
 | Tab | What it does |
@@ -303,7 +325,7 @@ usage readings for billing and admin settings changes** made since then are lost
 | Bucket keys | All keys scoped to one bucket; revoke them. Admins never see a secret. |
 | Audit | Who did what and when; filter and export CSV. |
 | Offboarding | Daily check against AD. Starts in report-only mode; switch to enforce when you trust it. |
-| Settings | Default location (On Premises or Cloud), bucket naming rules, budget number format, placements, bucket quotas (default bucket quota and weekly limit), uid mappings, notification endpoints. |
+| Settings | Default location (On Premises or Cloud), bucket naming rules, budget number format, placements, bucket quotas (default bucket quota and weekly limit), uid mappings, notification endpoints, user notices (near-full and key age emails). |
 
 ## Cloud (AWS) { #cloud }
 

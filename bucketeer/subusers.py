@@ -11,8 +11,9 @@ subuser is simply a 404), CSRF via the parent router, `Cache-Control: no-store`,
 `KeyLocks` lock around every mutation. Works on both admin backends through the
 `CroitClient` / `RgwAdminClient` subuser methods.
 
-- `GET /api/subusers` -> `{subusers: [{name, permission, keys: [{accessKey}]}], limits:
-  {maxSubusers, maxKeys}, permissions}`. Never a secret.
+- `GET /api/subusers` -> `{subusers: [{name, permission, keys: [{accessKey, ageDays,
+  ageKnownSince, ageExact, rotateSoon}]}], limits: {maxSubusers, maxKeys}, permissions,
+  maxKeyAgeDays}` (key ages: `notices.py`). Never a secret.
 - `POST /api/subusers {name, permission, confirm?}` -> 201 `{name, permission, keys}`. Name
   `[a-z0-9-]`, 1-20 characters, no leading or trailing `-`. At most 5 subusers (else 409).
   A name is never reused: every name is recorded in SQLite (`subuser_names`) and an earlier
@@ -43,6 +44,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
+from . import notices
 from .admin import croit_http_error
 from .credentials import _key_locks, generate_key_pair
 from .croit import SUBUSER_PERMISSIONS, CroitClient, CroitClientError, CroitError
@@ -152,9 +154,10 @@ async def _add_key(request: Request, uid: str, name: str) -> str:
     raise HTTPException(502, "Could not generate a unique access key. Try again.")
 
 
-def _view(row: dict, keys: list[dict]) -> dict:
+def _view(row: dict, keys: list[dict], ages: dict[str, dict] | None = None) -> dict:
     return {"name": row["name"], "permission": row["permission"],
-            "keys": [{"accessKey": k["access_key"]} for k in keys]}
+            "keys": [{"accessKey": k["access_key"], **(ages or {}).get(k["access_key"], {})}
+                     for k in keys]}
 
 
 @router.get("")
@@ -162,15 +165,19 @@ async def list_subusers(request: Request, response: Response, acct: Account):
     response.headers["Cache-Control"] = "no-store"
     rows = await _subusers(request, acct.uid)
     all_keys = await _read(request, _croit(request).list_keys, acct.uid)
-    out = []
+    found = []
     for row in sorted(rows, key=lambda r: r["name"]):
         identity = _identity(acct.uid, row["name"])
         keys = sorted((k for k in all_keys or [] if isinstance(k, dict)
                        and k.get("user") == identity and k.get("access_key")),
                       key=lambda k: k["access_key"])
-        out.append(_view(row, keys))
-    return {"subusers": out, "permissions": list(SUBUSER_PERMISSIONS),
-            "limits": {"maxSubusers": MAX_SUBUSERS, "maxKeys": MAX_KEYS}}
+        found.append((row, keys))
+    ages, limit = await notices.key_ages(
+        request.app, acct.uid, [(k["access_key"], "subuser") for _, keys in found for k in keys])
+    return {"subusers": [_view(row, keys, ages) for row, keys in found],
+            "permissions": list(SUBUSER_PERMISSIONS),
+            "limits": {"maxSubusers": MAX_SUBUSERS, "maxKeys": MAX_KEYS},
+            "maxKeyAgeDays": limit}
 
 
 @router.post("", status_code=201, dependencies=[Depends(require_default_budget)])
@@ -211,6 +218,7 @@ async def create_subuser(body: CreateBody, request: Request, response: Response,
         except Exception as e:
             await _fail_create(request, acct, body, e)
             raise
+        await notices.key_created(request.app, access, uid, "subuser")
         await _audit(request, acct, "subuser.create", "subuser", _identity(uid, body.name),
                      name=body.name, permission=body.permission, accessKey=access)
         return _view({"name": body.name, "permission": body.permission}, keys)
@@ -256,6 +264,7 @@ async def delete_subuser(name: str, request: Request, response: Response, acct: 
         row = await _own_subuser(request, acct.uid, name)
         keys = await _keys(request, acct.uid, name)
         await _read(request, _croit(request).delete_subuser, acct.uid, name)
+        await notices.key_removed(request.app, *(k["access_key"] for k in keys))
         db = request.app.state.db
         await db.run(db.subusers.mark_deleted, acct.uid, name)
         await _audit(request, acct, "subuser.delete", "subuser", _identity(acct.uid, name),
@@ -273,6 +282,7 @@ async def create_key(name: str, request: Request, response: Response, acct: Acco
             raise HTTPException(409, f"A subuser can have at most {MAX_KEYS} access keys. "
                                      "Delete one first, or rotate a key.")
         access = await _add_key(request, acct.uid, name)
+        await notices.key_created(request.app, access, acct.uid, "subuser")
         await _audit(request, acct, "subuser.key.create", "access_key", access,
                      subuser=name, permission=row["permission"])
     return {"accessKey": access}
@@ -292,6 +302,7 @@ async def rotate_key(name: str, access_key: str, request: Request, response: Res
             raise HTTPException(409, f"This subuser has more than {MAX_KEYS} access keys. "
                                      "Delete the ones you no longer use first.")
         new = await _add_key(request, acct.uid, name)
+        await notices.key_created(request.app, new, acct.uid, "subuser")
         details = {"subuser": name, "permission": row["permission"], "newKey": new}
         # Confirm the new key is really there before the old one goes away.
         try:
@@ -312,6 +323,8 @@ async def rotate_key(name: str, access_key: str, request: Request, response: Res
             log.warning("subuser rotate: old key not removed for %s: %s", acct.uid,
                         type(e).__name__)
             removed = False
+        if removed:
+            await notices.key_removed(request.app, access_key)
         await _audit(request, acct, "subuser.key.rotate", "access_key", access_key,
                      old_key_removed=removed, **details)
     out: dict = {"accessKey": new, "oldKeyRemoved": removed}
@@ -334,6 +347,7 @@ async def delete_key(name: str, access_key: str, request: Request, response: Res
             raise HTTPException(409, "This is the only access key of the subuser. Rotate it "
                                      "instead of deleting it.")
         await _read(request, _croit(request).delete_subuser_key, acct.uid, name, access_key)
+        await notices.key_removed(request.app, access_key)
         await _audit(request, acct, "subuser.key.delete", "access_key", access_key,
                      subuser=name, permission=row["permission"])
     return {"accessKey": access_key}

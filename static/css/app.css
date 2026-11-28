@@ -162,6 +162,11 @@
 .cred-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 .cred-actions .btn { margin-top: 0; }
 .cred-test { display: grid; gap: var(--sp-2); }
+/* Key age line and "Rotate soon" chip (js/keyage.js) */
+.key-age { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin: 0; }
+.key-age[hidden] { display: none; }
+.key-age .acct-sub { margin: 0; }
+.key-age-chip { text-transform: none; letter-spacing: 0; }
 .cred-warn { padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); border: 1px solid var(--border-strong);
   background: var(--surface-2); color: var(--text); font-size: var(--fs-sm); }
 select.input { appearance: auto; }
