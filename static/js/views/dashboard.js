@@ -8,6 +8,7 @@ import { locationSwitch } from "../components/location-switch.js";
 import { toast } from "../components/toast.js";
 import { renderAdmin } from "./admin.js";
 import { renderProfile } from "./profile.js";
+import { renderActivity } from "./activity.js";
 import { bucketsCard } from "./buckets.js";
 import { sharedWithMeCard } from "./shared-with-me.js";
 
@@ -78,6 +79,9 @@ export function renderDashboard({ me, appName, onLogout, page = "home" }) {
           page === "profile"
             ? h("a", { class: "btn btn-ghost", href: "#/" }, icon("home"), "My workspace")
             : h("a", { class: "btn btn-ghost", href: "#/profile" }, icon("user"), "Profile"),
+          page === "activity"
+            ? h("a", { class: "btn btn-ghost", href: "#/" }, icon("home"), "My workspace")
+            : h("a", { class: "btn btn-ghost", href: "#/activity" }, icon("activity"), "My activity"),
           me.isAdmin && (page === "admin"
             ? h("a", { class: "btn btn-ghost", href: "#/" }, icon("home"), "My workspace")
             : h("a", { class: "btn btn-ghost", href: "#/admin" }, icon("shield"), "Administration")),
@@ -99,7 +103,8 @@ export function renderDashboard({ me, appName, onLogout, page = "home" }) {
 
   shell.append(
     h("a", { class: "skip-link", href: "#main", text: "Skip to content" }),
-    header, page === "admin" && me.isAdmin ? renderAdmin() : page === "profile" ? renderProfile({ me }) : home(),
+    header, page === "admin" && me.isAdmin ? renderAdmin() : page === "profile" ? renderProfile({ me })
+      : page === "activity" ? renderActivity() : home(),
     h("footer", { class: "foot", text: `${appName} · signed in as ${me.username}` }));
   return shell;
 }

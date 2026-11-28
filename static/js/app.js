@@ -42,12 +42,14 @@ const showLogin = () => swap(renderLogin({ appName, onSuccess: async () => {
   } }), "login");
 let me = null;
 // Hash routes: "#/admin" is the administration page (admins only; the server
-// enforces the role as well), "#/profile" the user profile, anything else is the workspace.
+// enforces the role as well), "#/profile" the user profile, "#/activity" the person's own
+// activity, anything else is the workspace.
+const PAGES = { "#/profile": "profile", "#/activity": "activity" };
 function showDashboard(user = me) {
   me = user;
-  const page = location.hash === "#/admin" && me.isAdmin ? "admin" : location.hash === "#/profile" ? "profile" : "home";
+  const page = location.hash === "#/admin" && me.isAdmin ? "admin" : PAGES[location.hash] ?? "home";
   swap(renderDashboard({ me, appName, onLogout: doLogout, page }), page);
-  const titles = { admin: "Administration", profile: "Profile" };
+  const titles = { admin: "Administration", profile: "Profile", activity: "My activity" };
   document.title = titles[page] ? `${titles[page]} · ${appName}` : appName;
 }
 window.addEventListener("hashchange", () => {

@@ -1,0 +1,69 @@
+/* My activity (#/activity): a timeline of the person's own audit entries, grouped by day. */
+
+.shell[data-page="activity"] { --content-w: 60rem; }
+.act-card { display: grid; gap: var(--sp-4); padding: var(--sp-5); animation: rise var(--dur-slow) var(--ease-out) both; }
+@media (max-width: 39.99em) { .act-card { padding: var(--sp-4); } }
+.act-head { justify-content: flex-start; }
+.act-head h2 { margin-right: auto; }
+.act-head .chip { text-transform: none; letter-spacing: 0; }
+
+.act-note { display: flex; gap: var(--sp-3); align-items: flex-start; margin: 0; padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-md); background: var(--accent-soft); color: var(--accent-text);
+  font-size: var(--fs-sm); font-weight: 520; }
+.act-note[hidden] { display: none; }
+.act-note .icon { margin-top: 0.1rem; }
+
+.act-feed { display: grid; gap: var(--sp-5); }
+.act-group { display: grid; gap: var(--sp-1); }
+.act-day { display: flex; align-items: center; gap: var(--sp-3); margin: 0;
+  font-size: var(--fs-xs); font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+.act-day::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+.act-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.act-item { --_ic: 2.25rem; position: relative; display: grid; grid-template-columns: var(--_ic) minmax(0, 1fr);
+  gap: var(--sp-1) var(--sp-3); align-items: start; padding: var(--sp-3) 0;
+  animation: rise var(--dur-slow) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * var(--dur-fast) / 4); }
+/* The rail that joins one entry's icon to the next one's within a day. */
+.act-item::before { content: ""; position: absolute; left: calc(var(--_ic) / 2); width: 1px;
+  top: calc(var(--sp-3) + var(--_ic) + var(--sp-1)); bottom: calc(var(--sp-1) - var(--sp-3));
+  background: var(--border); }
+.act-item:last-child::before { display: none; }
+
+.act-icon { width: var(--_ic); height: var(--_ic); display: grid; place-items: center;
+  border-radius: var(--r-md); border: 1px solid var(--border); background: var(--surface-2); color: var(--text-muted); }
+.act-icon .icon { width: 1rem; height: 1rem; }
+.act-item[data-actor="you"] .act-icon { background: var(--surface); }
+/* Someone else acted on the person's things: draw the eye there. */
+.act-item[data-actor="admin"] .act-icon,
+.act-item[data-actor="owner"] .act-icon { background: var(--accent-soft); color: var(--accent-text); border-color: transparent; }
+.act-item[data-actor="bucketeer"] .act-icon { border-style: dashed; }
+
+.act-body { display: grid; gap: var(--sp-1); min-width: 0; padding-top: 0.2rem; padding-right: 6rem; }
+.act-summary { margin: 0; font-weight: 540; line-height: 1.4; overflow-wrap: anywhere; }
+.act-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); margin: 0;
+  font-size: var(--fs-xs); color: var(--text-muted); }
+.act-target { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 0.1rem 0.45rem; border-radius: var(--r-sm); background: var(--surface-2);
+  font-family: var(--font-mono); color: var(--text); }
+.act-item[data-actor="admin"] .act-who, .act-item[data-actor="owner"] .act-who { color: var(--accent-text); font-weight: 600; }
+/* The time sits in the meta line (one element for both layouts): pinned to the top right of
+   the entry on wide screens, at the end of the meta line on phones. */
+.act-time { position: absolute; top: calc(var(--sp-3) + 0.3rem); right: 0;
+  font-size: var(--fs-xs); color: var(--text-faint); font-weight: 450;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 39.99em) {
+  .act-body { padding-right: 0; }
+  .act-time { position: static; margin-left: auto; }
+}
+
+.act-skel { padding: var(--sp-2) 0; }
+.act-empty { border: 1px dashed var(--border-strong); border-radius: var(--r-md); }
+.act-err { padding: var(--sp-4); border: 1px dashed var(--border-strong); border-radius: var(--r-md); }
+.act-foot { display: flex; justify-content: center; padding-top: var(--sp-2); }
+.act-foot[hidden] { display: none; }
+.act-more[aria-busy="true"] { pointer-events: none; opacity: 0.75; }
+
+@media (forced-colors: active) {
+  .act-item::before, .act-day::after { background: CanvasText; }
+}

@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (
     acl,
+    activity,
     admin,
     admin_cloud,
     admin_settings,
@@ -248,6 +249,7 @@ def create_app(
     api.include_router(cloud_buckets.router)
     api.include_router(subusers.router)
     api.include_router(profile.router)
+    api.include_router(activity.router)
     api.include_router(bucket_delete.router)  # before /buckets/{name}
     api.include_router(buckets.router)
     api.include_router(bucket_keys.router)
