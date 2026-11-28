@@ -24,6 +24,7 @@ from bucketeer.cloud import CloudAdmin, CloudError
 
 from .conftest import REQUIRED
 from .test_acl import fake_objects
+from .test_alerts import AlertMailer
 from .test_auth import SECRET_PW, TEAM_GROUP, USERS_GROUP, make_settings
 from .test_billing import FakeMailer
 from .test_buckets import Env, H
@@ -100,6 +101,8 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "POST /api/admin/billing/report/send": ("billing.report_sent",),
     "PUT /api/admin/backup/settings": ("admin.settings.backup",),
     "POST /api/admin/backup/run": ("backup.run",),
+    "POST /api/admin/backup/restore-test": ("backup.restore_test",),
+    "PUT /api/admin/alerts": ("admin.settings.alerts",),
     f"PUT {S}/naming": ("admin.settings.naming",),
     f"POST {S}/naming/test": (),
     f"PUT {S}/budget-number": ("admin.settings.budget_number",),
@@ -138,6 +141,9 @@ EVENTS = {
     "offboarding.suspend": "enforce mode suspends a person who left AD",
     "offboarding.unsuspend": "login undoes the job's suspension (actor system)",
     "backup.failed": "a backup run that could not write its archive",
+    "backup.restore_test_failed": "a restore test whose newest archive could not be restored",
+    "admin.alert_sent": "an admin alert email (here: the failed backup run; actor system)",
+    "admin.alert_failed": "no alert contact's mail server took an alert (actor system)",
     "rgw.user.create": "first S3 use of a new AD user creates the RGW user",
     "rgw.user.quota_unlimited": "one-time step: old default user quota -> unlimited (system)",
     "billing.report_failed": "no billing contact's mail server took the monthly sheet",
@@ -155,7 +161,7 @@ ACTION_RE = re.compile(r"^(?:[a-z][a-z_]*)(?:\.[a-z][a-z_]*)+$")
 ACTION_EXCEPTIONS = {"logout"}  # pre-dates the scheme; kept so old log rows still match
 TARGET_TYPES = {"user", "rgw_user", "bucket", "bucket_key", "access_key", "profile", "setting",
                 "uid_mapping", "notification_endpoint", "report", "offboarding_run", "subuser",
-                "backup", "database", "cloud_user"}
+                "backup", "database", "cloud_user", "alert"}
 ACTORS = {"alice", "bob", "dave", "system", "mallory"}
 
 SECRET_PATTERNS = [
@@ -597,18 +603,28 @@ def run(tmp_path_factory, moto_server):
     env.app.state.cloud = None
     ok(b.get(S))
 
-    # backups: settings, a failed run, then a good one
+    # admin alert contacts; the failed backup run below mails them (a fake mailer)
+    r.step("PUT /api/admin/alerts", lambda: b.put(
+        "/api/admin/alerts", json={"contacts": ["ops@example.org"]}, headers=H))
+    # backups: settings, a failed run (alert sent) and restore test (alert failed), good ones
     r.step("PUT /api/admin/backup/settings", lambda: b.put(
-        "/api/admin/backup/settings", json={"time": "02:30"}, headers=H))
+        "/api/admin/backup/settings", json={"time": "02:30", "restoreTestDays": 14}, headers=H))
     real_factory = env.app.state.backup.factory
 
     def broken(*_a):
         raise RuntimeError("S3 down")
 
     env.app.state.backup.factory = broken
-    r.step("event", lambda: b.post("/api/admin/backup/run", headers=H))
+    real_mailer = env.app.state.mailer
+    env.app.state.mailer = AlertMailer()
+    r.step("event", lambda: b.post("/api/admin/backup/run", headers=H))  # + admin.alert_sent
+    env.app.state.mailer = AlertMailer(fail={"ops@example.org"})
+    r.step("event", lambda: b.post("/api/admin/backup/restore-test", headers=H))  # alert_failed
+    env.app.state.mailer = real_mailer
     env.app.state.backup.factory = real_factory
     r.step("POST /api/admin/backup/run", lambda: ok(b.post("/api/admin/backup/run", headers=H)))
+    r.step("POST /api/admin/backup/restore-test", lambda: ok(b.post(
+        "/api/admin/backup/restore-test", headers=H)))
     # rebuilding rows from Ceph (command line; fill-gaps adds nothing here)
     r.step("event", lambda: asyncio.run(rebuild.rebuild_from_ceph(env.app, True)))
     # the one-time step: a person still on the old 1 TiB user quota becomes unlimited

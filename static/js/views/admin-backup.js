@@ -6,11 +6,15 @@ import { toast } from "../components/toast.js";
 
 // Admin "Backup" tab: the nightly archive of the database and .env in an object-locked
 // bucket (BACKUP_BUCKET in .env), on premises and, once cloud is set up, in AWS under the same
-// name. Shows each destination's state, sets the time and retention, starts a backup by hand
-// and lists the last 30 runs. Names, keys and errors come from the
-// server and the cluster: shown through h()/text only.
+// name. Shows each destination's state, sets the time, retention and restore-test interval,
+// starts a backup or a restore test by hand, shows the last restore test per place and lists
+// the last 30 runs. Names, keys and errors come from the server and the cluster: shown
+// through h()/text only.
 
 const OUTCOMES = { ok: ["chip-ok", "Completed"], failed: ["chip-warn", "Failed"], running: ["", "Running"] };
+const TESTED = { ok: ["chip-ok", "Restorable"], failed: ["chip-warn", "Failed"], running: ["", "Running"] };
+const PLACE = (d) => (d.kind === "cloud" ? `In AWS (${d.region ?? "?"})` : "On premises");
+const num = (n) => Number(n ?? 0).toLocaleString();
 
 const when = (iso) => {
   const d = new Date(iso);
@@ -60,7 +64,7 @@ export function renderBackup() {
       ? (st.objectLock ? `${st.mode ?? "No default"} · ${st.retentionDays ?? "?"} days` : "Not enabled")
       : "Created on the first run";
     return h("section", { class: "bu-dest" },
-      h("h3", { class: "bu-dest-h", text: cloud ? `In AWS (${d.region ?? "?"})` : "On premises" }),
+      h("h3", { class: "bu-dest-h", text: PLACE(d) }),
       h("dl", { class: "bu-facts" },
         fact("Bucket", d.bucket ? h("code", { text: d.bucket }) : "Named and created on the first run"),
         fact(cloud ? "Writer" : "Owner", h("code", { text: d.user }),
@@ -85,18 +89,21 @@ export function renderBackup() {
     const s = data.settings;
     const time = h("input", { class: "input bu-time", id: "bu-time", type: "time", step: "60", required: true, value: s.time });
     const days = h("input", { class: "input bu-days", id: "bu-days", type: "number", min: String(s.retentionDays), max: "36500", step: "1", value: String(s.retentionDays) });
+    const every = h("input", { class: "input bu-days", id: "bu-every", type: "number", min: "0", max: "365", step: "1", value: String(s.restoreTestDays ?? 30), "aria-describedby": "bu-every-hint" });
     const save = h("button", { class: "btn", type: "submit", text: "Save" });
     const now = h("button", { class: "btn btn-primary", type: "button", disabled: data.running }, data.running ? h("span", { class: "spinner", "aria-hidden": "true" }) : icon("lock"), data.running ? "Backing up…" : "Back up now");
     const form = h("form", { class: "bl-form", novalidate: true },
       h("div", { class: "field" }, h("label", { for: "bu-time", text: "Backup time (server time)" }), time),
       h("div", { class: "field" }, h("label", { for: "bu-days", text: "Retention in days" }), days),
+      h("div", { class: "field" }, h("label", { for: "bu-every", text: "Restore test every (days)" }), every),
       h("p", { class: "set-hint bu-span", text: "Retention can only be lengthened. Each backup is locked (COMPLIANCE) for the period in force when it was written and is deleted the day after it ends; a longer period applies to backups written from now on, older ones keep their own lock." }),
+      h("p", { class: "set-hint bu-span", id: "bu-every-hint", text: "The restore test runs after a successful nightly backup once the last test is that many days old; 0 turns the automatic test off." }),
       h("div", { class: "set-actions" }, save, now));
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       save.disabled = true;
       try {
-        const r = await api("/admin/backup/settings", { method: "PUT", json: { time: time.value, retentionDays: Number(days.value) } });
+        const r = await api("/admin/backup/settings", { method: "PUT", json: { time: time.value, retentionDays: Number(days.value), restoreTestDays: Number(every.value) } });
         if (r.warning) toast.error(r.warning); else toast.show("Backup settings saved.");
         await load();
       } catch (err) {
@@ -121,6 +128,65 @@ export function renderBackup() {
       h("div", { class: "set-head" }, h("h2", { id: "bu-h", text: "Backup" }), chip("On", "chip-ok")),
       h("p", { class: "set-lead", text: "Every night Bucketeer writes its database and its .env file to the backup bucket on premises and, once cloud is set up, to the bucket with the same name in AWS. Object lock keeps each backup from being deleted or changed before its retention ends, by anyone using S3, Bucketeer included. The archive is not encrypted: keep the buckets private." }),
       bucketFacts(), form);
+  }
+
+  // The newest restore-test result for one place (tests are newest first).
+  function lastTest(kind) {
+    for (const t of data.restoreTests ?? []) {
+      const r = (t.destinations ?? []).find((x) => x.kind === kind);
+      if (r) return { test: t, r };
+    }
+    return null;
+  }
+
+  function testBlock(d) {
+    const head = h("h3", { class: "bu-dest-h", text: PLACE(d) });
+    const found = lastTest(d.kind);
+    if (!found) return h("section", { class: "bu-dest" }, head, h("p", { class: "set-empty", text: "Not tested yet." }));
+    const { test, r } = found;
+    const [kind, label] = TESTED[r.outcome] ?? ["", r.outcome];
+    const tables = Object.values(r.tables ?? {});
+    return h("section", { class: "bu-dest" }, head,
+      h("dl", { class: "bu-facts" },
+        fact("Result", chip(label, kind)),
+        fact("Tested", `${when(r.checkedAt ?? test.finishedAt ?? test.startedAt)} · ${test.trigger === "schedule" ? "after the nightly backup" : `by ${test.actor}`}`),
+        fact("Archive", r.key ? h("code", { text: r.key }) : "None found"),
+        r.outcome === "ok"
+          ? fact("Database", `Schema v${r.schemaVersion} · ${num(tables.length)} tables · ${num(tables.reduce((a, b) => a + b, 0))} rows${r.envIncluded === false ? " · no .env" : ""}`)
+          : null),
+      r.error ? h("div", { class: "off-alert", role: "alert" }, icon("alert"), h("span", { text: r.error })) : null);
+  }
+
+  function restoreCard() {
+    const s = data.settings;
+    const latest = data.restoreTests?.[0];
+    const [kind, label] = latest ? (TESTED[latest.outcome] ?? ["", latest.outcome]) : ["", "Not tested yet"];
+    const busy = data.testing;
+    const btn = h("button", { class: "btn", type: "button", disabled: busy || data.running },
+      busy ? h("span", { class: "spinner", "aria-hidden": "true" }) : icon("check"), busy ? "Testing…" : "Test restore now");
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), "Testing…");
+      try {
+        const t = await api("/admin/backup/restore-test", { method: "POST" });
+        if (t.outcome === "ok") toast.show("Restore test passed: the newest backups can be restored.");
+        else toast.error(`Restore test failed: ${t.error ?? "see the Backup tab"}`);
+      } catch (err) {
+        if (err.status !== 401) toast.error(err.message);
+      }
+      await load();
+    });
+    const next = !s.restoreTestDays
+      ? "Off (set “Restore test every” to 1 day or more)"
+      : data.nextRestoreTest ? `After the backup of ${when(data.nextRestoreTest)}, if it succeeds` : "Not scheduled";
+    return h("section", { class: "card set-card", "aria-labelledby": "bu-t" },
+      h("div", { class: "set-head" }, h("h2", { id: "bu-t", text: "Restore test" }), chip(label, kind)),
+      h("p", { class: "set-lead", text: "Proves that the newest backup in each place can be restored. Bucketeer downloads it into a temporary folder on this server, checks the SHA-256 of every file, opens the database copy and runs SQLite's integrity check, then deletes the folder. The live database and .env are never touched. A failed test emails the alert contacts (Settings tab)." }),
+      h("div", { class: "bu-dests" }, data.destinations.map(testBlock),
+        h("dl", { class: "bu-facts" },
+          fact("Next automatic test", next),
+          fact("Interval", s.restoreTestDays ? `Every ${s.restoreTestDays} day${s.restoreTestDays === 1 ? "" : "s"}, and the night after a failed test` : "Off"))),
+      h("div", { class: "set-actions" }, btn));
   }
 
   // Where a run's copies went: one name per destination, failed ones marked (older runs only
@@ -152,11 +218,12 @@ export function renderBackup() {
         h("code", { class: "bu-key", text: "python3 app.py --restore-backup latest" }),
         " (or an archive name instead of latest) in its folder; add ", h("code", { class: "bu-key", text: "--from cloud" }),
         " or ", h("code", { class: "bu-key", text: "--from onprem" }),
-        " to choose the place (default: on premises). See the admin guide."));
+        " to choose the place (default: on premises), and ", h("code", { class: "bu-key", text: "--backup-bucket NAME" }),
+        " to read an older on-premises bucket (before BACKUP_BUCKET was renamed). See the admin guide."));
   }
 
   function paint() {
-    host.replaceChildren(...(data.configured ? [settingsCard(), runsCard()] : [offCard()]));
+    host.replaceChildren(...(data.configured ? [settingsCard(), restoreCard(), runsCard()] : [offCard()]));
   }
 
   return { el: host, load };

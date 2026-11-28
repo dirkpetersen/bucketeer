@@ -53,7 +53,9 @@ API (`/api/admin/offboarding`, admin only, CSRF via the parent router):
 Audit (actor `system` for scheduled runs and login unsuspends, else the admin):
 `offboarding.run` (ok), `offboarding.aborted`, `offboarding.run_failed`,
 `offboarding.suspend`, `offboarding.unsuspend`, `offboarding.unsuspend_failed`.
-Targets: `offboarding_run` + run id, `rgw_user` + uid.
+Targets: `offboarding_run` + run id, `rgw_user` + uid. A run that ends `aborted` or `failed`
+(scheduled or by hand) also emails the admin alert contacts (`alerts.py`, kinds
+`offboarding_aborted` / `offboarding_failed`, with the reason).
 """
 
 import asyncio
@@ -67,7 +69,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from . import cloud_users
+from . import alerts, cloud_users
 from .admin import Admin, apply_key_suspension
 from .auth import require_admin
 from .croit import CroitClientError, CroitError
@@ -127,6 +129,20 @@ def load_settings(store) -> dict[str, Any]:
         if valid_limit(k, saved.get(k)):
             out[k] = saved[k]
     return out
+
+
+def run_alert(run_id: int, mode: str, trigger: str, actor: str, outcome: str,
+              reason: str | None, counts: dict[str, Any]) -> tuple[str, str]:
+    """Subject and body of the `offboarding_aborted|failed` admin alert (`alerts.py`)."""
+    by = "the daily schedule" if trigger == "schedule" else actor
+    done = ("Nobody was suspended." if outcome == "aborted" else
+            f"{counts.get('suspended', 0)} account(s) suspended, {counts.get('failed', 0)} "
+            "suspension(s) failed or have an unknown outcome.")
+    return (f"Offboarding run {outcome}",
+            f"Offboarding run #{run_id} ({mode} mode, started by {by}) ended {outcome}:\n\n"
+            f"{reason or 'no reason recorded'}\n\n{done} Known people: "
+            f"{counts.get('known', '?')}, candidates: {counts.get('candidates', '?')}.\n\n"
+            "The Offboarding tab of the administration page has the run's report.")
 
 
 def next_run(now: datetime, hhmm: str) -> datetime:
@@ -231,6 +247,10 @@ class OffboardingService:
             "mode": mode, "trigger": trigger, "outcome": outcome, "reason": reason,
             "counts": counts,
         })
+        if outcome != "ok":
+            await alerts.send_alert(self.app, f"offboarding_{outcome}",
+                                    *run_alert(run_id, mode, trigger, actor, outcome, reason,
+                                               counts))
 
     async def _scope(self) -> tuple[dict[str, dict], int, list[dict]]:
         """People in scope by EXACT croit uid: {uid: {"names": [...], "suspended": bool}}, the

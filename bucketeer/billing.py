@@ -291,8 +291,9 @@ def _price(value: float | int, what: str) -> float:
     return round(p, 4)
 
 
-def normalize_contacts(raw: list[str]) -> list[str]:
-    """Trimmed, de-duplicated (any case) addresses, at most MAX_CONTACTS; 422 otherwise."""
+def normalize_contacts(raw: list[str], what: str = "billing contacts") -> list[str]:
+    """Trimmed, de-duplicated (any case) addresses, at most MAX_CONTACTS; 422 otherwise.
+    Also used for the admin alert contacts (`alerts.py`)."""
     out: list[str] = []
     for a in raw:
         a = a.strip()
@@ -303,7 +304,7 @@ def normalize_contacts(raw: list[str]) -> list[str]:
         if a.lower() not in {x.lower() for x in out}:
             out.append(a)
     if len(out) > MAX_CONTACTS:
-        raise HTTPException(422, f"At most {MAX_CONTACTS} billing contacts.")
+        raise HTTPException(422, f"At most {MAX_CONTACTS} {what}.")
     return out
 
 

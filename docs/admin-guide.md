@@ -217,8 +217,10 @@ have a uid mapping; others are listed as problems
 Every night Bucketeer writes its database and its `.env` file to a backup bucket on the
 cluster and, once cloud is set up, to a bucket with the same name in AWS (see
 [Backups in AWS](#backups-in-aws)). The **Backup** tab shows that bucket, its object lock and the last backup, sets the
-**backup time** (default 03:00 server time) and the **retention** (default 30 days), starts
-a backup with **Back up now** and lists the last 30 runs.
+**backup time** (default 03:00 server time), the **retention** (default 30 days) and how often
+the backup is **restore-tested** (default every 30 days, see [Restore test](#restore-test)),
+starts a backup with **Back up now** and lists the last 30 runs. A failed backup emails the
+[alert contacts](#alert-emails).
 
 **Turning it on.** Set `BACKUP_BUCKET` in `.env` (with appmotel: `appmo env bucketeer`) and
 restart. While it is empty, backups are off, and the log and the Backup tab suggest a fresh
@@ -283,6 +285,44 @@ each backup (and each restore) deletes any key the backup user still has (left b
 creates a fresh key, uses it for that one upload or download and deletes it afterwards, also
 when the run fails. In IAM you will normally see the backup user with no access key.
 
+### Restore test { #restore-test }
+
+A backup is only worth something if it can be restored. The **Restore test** card on the
+Backup tab proves that the **newest** archive in each place (on premises and, with cloud, in
+AWS) can be restored, without touching anything live:
+
+1. it downloads the archive into a temporary folder inside `DATA_DIR` (for AWS with a
+   temporary key of the backup IAM user, exactly like a backup run);
+2. checks the SHA-256 of every file against `meta.json`;
+3. opens the database copy read-only and runs SQLite's integrity check, checks that its schema
+   is not newer than this version of Bucketeer and that the tables and row counts match
+   `meta.json`;
+4. deletes the folder. The live database and `.env` are never read or written.
+
+The card shows the last result for each place (archive, schema version, tables and rows, or
+the error) and when the next automatic test runs. **Test restore now** runs one at once.
+Automatically, a test runs right after a successful nightly backup when the last test is at
+least **Restore test every** days old (default 30; `0` turns the automatic test off), and
+again the night after a test failed. A failed test emails the alert contacts. Each place's
+result is recorded in the audit log (`backup.restore_test`, `backup.restore_test_failed`).
+
+### Alert emails { #alert-emails }
+
+The **Alert emails** card on the Settings tab holds up to 10 addresses (a team list works
+well) that Bucketeer emails when something needs an administrator:
+
+- a backup run failed in at least one place (each place and its error);
+- a restore test failed;
+- no backup succeeded for more than 48 hours while backups are on (at most one email a day
+  until a backup succeeds again);
+- an offboarding run was aborted (AD looked wrong, nobody was suspended) or failed.
+
+The emails use the same mail settings as the share invitations (`SMTP_*`). While email is off
+(`SMTP_FROM` empty) or no address is set, alerts are only written to the server log as
+warnings. Alerts never contain a key or password. Each email is recorded in the audit log as
+`admin.alert_sent` (or `admin.alert_failed` when no mail server took it); the card shows the
+last alert.
+
 ### Restore
 
 Stop Bucketeer, then run in its folder:
@@ -293,12 +333,19 @@ Stop Bucketeer, then run in its folder:
 .venv/bin/python3 app.py --restore-backup backup/bucketeer-2026-11-24T0300Z.tar.gz
 # choose the place (default: on premises):
 .venv/bin/python3 app.py --restore-backup latest --from cloud
+# an older on-premises bucket (archives written before BACKUP_BUCKET was renamed):
+.venv/bin/python3 app.py --restore-backup latest --backup-bucket bucketeer-backup-0123456789ab
 ```
 
 From AWS it needs the `CLOUD_*` settings and takes the bucket name from `BACKUP_BUCKET`. If
 that is not set (a new machine) it finds the single `<prefix>backup-*` bucket in the account,
 or you name it with `--aws-bucket NAME`. It uses a temporary key of the backup IAM user
 exactly like a backup run.
+
+On premises it reads `BACKUP_BUCKET`, or the bucket named with `--backup-bucket NAME`. Use
+that after renaming `BACKUP_BUCKET`: the older archives stay in the previous bucket, and while
+cloud is set up Bucketeer refuses an old-style name in `.env`, so the option is the only way to
+reach them. It cannot be combined with `--from cloud` (use `--aws-bucket` there).
 
 It downloads the archive with the backup user's key, checks the SHA-256 of every file and
 refuses to run while Bucketeer still answers on its port (`--force` overrides that). Then it:
@@ -346,8 +393,8 @@ The card shows the last check and when the next one runs. Changes are audited as
 | Buckets | On-premises and cloud buckets (filter All / On premises / Cloud; cloud rows have a "Cloud" badge and their storage class). Usage, bucket quotas, budget numbers (with a check against the format), chargeback CSV, Write Bucketeer tags. A cloud bucket's size comes from AWS CloudWatch (daily, a day or two late; empty while AWS can't be reached) and its quota is in whole TiB; an administrator's quota change is not limited by the weekly limit but is recorded, and the bucket's quota tag is updated. **Full in** shows "~N weeks" (or days, under two weeks) for buckets that reach their quota within 90 days at the pace of the last 30 days (a straight line through the daily size readings; at least 7 readings over 7 days); hover it for the growth per day. Sort by it to see what fills first. |
 | Bucket keys | All keys scoped to one bucket; revoke them. Admins never see a secret. |
 | Audit | Who did what and when; filter and export CSV. |
-| Offboarding | Daily check against AD. Starts in report-only mode; switch to enforce when you trust it. |
-| Settings | Default location (On Premises or Cloud), bucket naming rules, budget number format, placements, bucket quotas (default bucket quota and weekly limit), uid mappings, notification endpoints, user notices (near-full and key age emails). |
+| Offboarding | Daily check against AD. Starts in report-only mode; switch to enforce when you trust it. An aborted or failed run emails the alert contacts. |
+| Settings | Default location (On Premises or Cloud), [alert emails](#alert-emails), bucket naming rules, budget number format, placements, bucket quotas (default bucket quota and weekly limit), uid mappings, notification endpoints, user notices (near-full and key age emails). |
 
 ## Cloud (AWS) { #cloud }
 

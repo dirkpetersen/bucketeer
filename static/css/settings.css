@@ -106,3 +106,10 @@ textarea.input { resize: vertical; line-height: var(--lh-body); }
 .loc-check { display: flex; align-items: center; gap: var(--sp-2); }
 .loc-status .set-warn svg, .loc-status .set-ok svg { flex: none; }
 .set-check:has(input:disabled) { opacity: 0.6; cursor: not-allowed; }
+
+/* Alert emails card (admin-alerts.js) */
+.al-kinds { margin: 0; padding-left: var(--sp-5); display: grid; gap: var(--sp-1); color: var(--text-muted); font-size: var(--fs-sm); max-width: 62ch; }
+.al-contacts { resize: vertical; min-height: 5rem; max-width: 36rem; }
+.al-notes { display: grid; gap: var(--sp-2); }
+.al-notes:empty { display: none; }
+.al-notes .set-warn svg { flex: none; }

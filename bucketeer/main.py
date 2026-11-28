@@ -16,6 +16,7 @@ from . import (
     admin,
     admin_cloud,
     admin_settings,
+    alerts,
     audit_viewer,
     auth,
     backup,
@@ -280,6 +281,7 @@ def create_app(
     api.include_router(billing.router)
     api.include_router(billing_report.router)
     api.include_router(backup.router)
+    api.include_router(alerts.router)
     app.include_router(api)
     app.include_router(credentials.setup_router)  # POST /setup/{token}: the token is the credential
 

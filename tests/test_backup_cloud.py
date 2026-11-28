@@ -320,7 +320,7 @@ def test_state_shows_both_destinations(cenv):
     r = cenv.bob.put("/api/admin/backup/settings", json={"time": "02:30", "retentionDays": 40},
                      headers=H)
     assert r.status_code == 200 and "warning" in r.json()  # moto: lock change on a full bucket
-    assert backup.load(cenv.db) == {"time": "02:30", "retentionDays": 40}
+    assert backup.load(cenv.db) == {"time": "02:30", "retentionDays": 40, "restoreTestDays": 30}
 
 
 def test_us_east_1_has_no_location_constraint(tmp_path, aws):
@@ -334,6 +334,56 @@ def test_us_east_1_has_no_location_constraint(tmp_path, aws):
         assert loc["LocationConstraint"] is None
     finally:
         db.close()
+
+
+# -- restore test -------------------------------------------------------------------------------
+
+
+def restore_test(env):
+    r = env.bob.post("/api/admin/backup/restore-test", headers=H)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_restore_test_covers_both_destinations(cenv, caplog):
+    caplog.set_level(logging.DEBUG)
+    rec = run_now(cenv)
+    made = cenv.spy.ops.count("create_access_key")
+    got = restore_test(cenv)
+    assert got["outcome"] == "ok", got
+    assert [d["kind"] for d in got["destinations"]] == ["onprem", "cloud"]
+    aws = entry(got, "cloud")
+    assert aws["bucket"] == SHARED and aws["key"] == rec["key"] and aws["error"] is None
+    assert aws["schemaVersion"] == cenv.db.version and aws["tables"]["audit_log"] >= 1
+    # the download used a temporary key of the backup IAM user, gone afterwards
+    assert cenv.spy.ops.count("create_access_key") == made + 1 and keys_left() == []
+    rows = [a for a in cenv.db.audit.query(limit=200) if a["action"] == "backup.restore_test"]
+    assert sorted(r["details"]["destination"] for r in rows) == ["cloud", "onprem"]
+    assert all(r["target"] == SHARED for r in rows)
+    state = cenv.bob.get("/api/admin/backup").text
+    with cenv.db._lock:
+        dump = json.dumps([list(r) for t in ("settings", "audit_log")
+                           for r in cenv.db._conn.execute(f"SELECT * FROM {t}")])
+    for secret in [*cenv.spy.secrets, CLOUD["cloud_admin_secret_key"]]:
+        for where in (dump, caplog.text, state, json.dumps(got)):
+            assert secret not in where
+
+
+def test_restore_test_failure_in_aws_alone(cenv, monkeypatch):
+    run_now(cenv)
+
+    async def down(self):
+        raise CloudUnavailable("AWS could not be reached")
+
+    monkeypatch.setattr(backup.AwsDestination, "latest", down)
+    got = restore_test(cenv)
+    assert got["outcome"] == "failed" and got["error"] == "cloud: AWS could not be reached"
+    assert entry(got, "onprem")["outcome"] == "ok"
+    (row,) = [a for a in cenv.db.audit.query(limit=200)
+              if a["action"] == "backup.restore_test_failed"]
+    assert row["target"] == SHARED and row["details"]["destination"] == "cloud"
+    assert row["details"]["error"] == "AWS could not be reached"
+    assert keys_left() == []
 
 
 # -- restore from AWS ---------------------------------------------------------------------------
@@ -401,7 +451,7 @@ def test_restore_command_options(monkeypatch):
     assert backup.restore_main(["--restore-backup", "latest", "--from", "cloud",
                                 "--aws-bucket", "bucketeer-backup-x", "--force"]) == 0
     assert seen == {"which": "latest", "force": True, "source": "cloud",
-                    "aws_bucket": "bucketeer-backup-x"}
+                    "aws_bucket": "bucketeer-backup-x", "backup_bucket": None}
 
 
 # -- the backup user is never a person --------------------------------------------------------
