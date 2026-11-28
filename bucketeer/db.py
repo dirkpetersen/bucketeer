@@ -1281,6 +1281,24 @@ class UsageDaily(_Repo):
         return self.db.query("SELECT day, bucket, owner, bytes, quota_bytes FROM usage_daily "
                              "WHERE day BETWEEN ? AND ? ORDER BY day", (first, last))
 
+    def readings(self, first: str, last: str,
+                 buckets: list[str] | None = None) -> list[dict[str, Any]]:
+        """`(day, bucket, bytes)` rows of the days `first`..`last`, for the given buckets
+        (None: all), in one query; for the growth forecast (`forecast.py`)."""
+        if buckets is None or len(buckets) > 500:  # a long IN list: filter afterwards
+            rows = self.db.query("SELECT day, bucket, bytes FROM usage_daily "
+                                 "WHERE day BETWEEN ? AND ? ORDER BY day", (first, last))
+            if buckets is None:
+                return rows
+            wanted = set(buckets)
+            return [r for r in rows if r["bucket"] in wanted]
+        if not buckets:
+            return []
+        marks = ",".join("?" * len(buckets))
+        return self.db.query(f"SELECT day, bucket, bytes FROM usage_daily "  # noqa: S608
+                             f"WHERE day BETWEEN ? AND ? AND bucket IN ({marks}) ORDER BY day",
+                             (first, last, *buckets))
+
 
 class QuotaChanges(_Repo):
     """Bucket quota changes in whole TiB (the weekly increase limit's record)."""

@@ -17,7 +17,8 @@ import { renderBackup } from "./admin-backup.js";
 // The server enforces the role on every call; this view is only shown to admins.
 // The Buckets tab lists on-premises (Ceph) and cloud (AWS) buckets (Q19); cloud rows carry
 // `location: "cloud"`, a CloudWatch size (null when not measured or AWS is unavailable) and a
-// quota in whole TiB, edited through the admin cloud quota route.
+// quota in whole TiB, edited through the admin cloud quota route. "Full in" shows the growth
+// forecast of buckets that reach their quota within 90 days at the last 30 days' pace.
 
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 const quotaSize = (q) => (q.enabled && q.maxSize != null ? q.maxSize : Infinity);
@@ -27,6 +28,21 @@ const isCloud = (r) => r.location === "cloud";
 
 function badge(text, kind = "") {
   return h("span", { class: `chip ${kind}`.trim() }, kind === "chip-warn" || kind === "chip-ok" ? h("span", { class: "dot" }) : null, text);
+}
+
+// Growth forecast (server: forecast.py): only buckets the trend fills within 90 days get a chip.
+const FULL_SOON_DAYS = 90;
+const fullIn = (f) => (f && f.daysToFull != null && f.daysToFull <= FULL_SOON_DAYS ? f.daysToFull : null);
+
+function forecastChip(r) {
+  const days = fullIn(r.forecast);
+  if (days == null) return null;
+  const text = days === 0 ? "Full now" : days < 14 ? `~${days} day${days === 1 ? "" : "s"}` : `~${Math.round(days / 7)} weeks`;
+  const g = r.forecast.growthBytesPerDay;
+  const growth = `${g > 0 ? `Growing about ${formatBytes(g)} a day` : "Not growing"} (${r.forecast.basedOnDays} days measured)`;
+  const when = r.forecast.fullOn ? `; full around ${r.forecast.fullOn}` : "; the quota is reached";
+  return h("span", { class: `chip fc-chip ${days < 14 ? "chip-warn" : "chip-accent"}`, title: `${growth}${when}.` },
+    text, h("span", { class: "visually-hidden", text: `. ${growth}${when}.` }));
 }
 
 function meter(used, q) {
@@ -82,6 +98,7 @@ function bucketColumns(act) {
           : h("span", { class: r.quota.enabled ? "" : "muted", text: quotaText(r.quota) }),
         r.bytes != null ? meter(r.bytes, r.quota) : null,
         r.overQuota ? badge("Over quota", "chip-warn") : null) },
+    { key: "full", label: "Full in", num: true, className: "fc-cell", sort: (r) => fullIn(r.forecast) ?? Infinity, cell: forecastChip },
     { key: "actions", label: "Actions", noSort: true, cell: (r) => h("div", { class: "acts" },
         act.button("edit", "Quota", () => (isCloud(r) ? act.cloudQuota(r) : act.quota("bucket", r)), `Edit quota of ${r.name}`)) },
   ];
@@ -378,7 +395,7 @@ export function renderAdmin() {
       return th;
     }));
     const body = rows.map((r) => h("tr", { "data-suspended": String(!!r.suspended) },
-      columns[tab].map((c) => h("td", { class: `${c.num ? "num" : ""} ${c.key === "actions" ? "td-acts" : ""}`.trim(), "data-label": c.key === "actions" ? null : c.label }, c.cell(r)))));
+      columns[tab].map((c) => h("td", { class: `${c.num ? "num" : ""} ${c.key === "actions" ? "td-acts" : ""} ${c.className ?? ""}`.trim(), "data-label": c.key === "actions" ? null : c.label }, c.cell(r)))));
     return h("div", { class: "tbl-wrap" }, h("table", { class: "tbl" },
       h("caption", { class: "visually-hidden", text: tab === "users" ? "RGW users" : tab === "keys" ? "Bucket keys" : "Buckets" }),
       h("thead", {}, head), h("tbody", {}, body)));

@@ -4,6 +4,7 @@ moto does not enforce identities, so "the user's own key was used" is asserted w
 spy on the S3 client factory (`app.state.s3.factory`) and ownership at the API layer.
 """
 
+from datetime import date, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -158,6 +159,27 @@ def test_list_quota_is_reported(env):
     b = next(b for b in env.alice.get("/api/buckets").json()["buckets"]
              if b["name"] == "alice-data")
     assert b["quota"] == {"enabled": True, "maxSize": 2097152, "maxObjects": None}
+
+
+def test_list_has_a_growth_forecast(env):
+    """`forecast` from the daily size readings (forecast.py), by tenant-qualified name."""
+    gib = 2**30
+    env.croit_state.buckets["alice-data"].quota = {
+        "enabled": True, "maxSize": 100 * gib, "maxObjects": -1}
+    today = date.fromtimestamp(env.app.state.clock())
+    for i in range(10):
+        env.db.usage.record((today - timedelta(days=9 - i)).isoformat(), [
+            ("alice-data", "alice", (10 + i) * gib, 100 * gib),
+            ("bob-shared", "bob", (10 + i) * gib, None)])  # not alice's: never asked for
+    calls = []
+    real = env.db.usage.readings
+    env.db.usage.readings = lambda *a: calls.append(a) or real(*a)
+    by = {b["name"]: b for b in env.alice.get("/api/buckets").json()["buckets"]}
+    assert len(calls) == 1 and calls[0][2] == ["alice-data", "alice-empty"]  # one query
+    assert by["alice-data"]["forecast"] == {
+        "growthBytesPerDay": gib, "daysToFull": 81, "basedOnDays": 10,
+        "fullOn": (today + timedelta(days=81)).isoformat()}
+    assert by["alice-empty"]["forecast"] is None  # never measured
 
 
 def test_tenant_user_sees_short_names(tmp_path, s3_endpoint):

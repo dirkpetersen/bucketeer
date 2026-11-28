@@ -69,6 +69,19 @@ function costBlock(b, product) {
   return h("span", { class: "bk-cost", title: product ? `${product.name}: ${formatMoney(Number(product.pricePerTiBMonth) || 0, product.currency)} per TiB and month` : "" }, ...parts);
 }
 
+// "Full in about 5 weeks" when the last 30 days' growth reaches the quota within 60 days
+// (server: forecast.py); nothing otherwise.
+function forecastNote(b) {
+  const f = b.forecast;
+  const days = f?.daysToFull;
+  if (days == null || days > 60) return null;
+  const text = days === 0 ? "Quota reached" : days < 14 ? `Full in about ${days} day${days === 1 ? "" : "s"}` : `Full in about ${Math.round(days / 7)} weeks`;
+  const why = days === 0
+    ? "New uploads are refused until the quota is raised or data is deleted."
+    : `At the pace of the last ${f.basedOnDays} days measured (about ${formatBytes(f.growthBytesPerDay)} a day). Raise the quota or clean up before then.`;
+  return h("span", { class: "bk-forecast", "data-soon": String(days < 14), title: why }, icon("alert", "icon"), text);
+}
+
 function usageBlock(b, product) {
   const q = b.quota;
   const capBytes = q.enabled ? q.maxSize : null;
@@ -90,6 +103,8 @@ function usageBlock(b, product) {
     out.append(h("span", { class: "bk-noquota", text: "No bucket quota" }));
   }
   out.append(costBlock(b, product));
+  const soon = forecastNote(b);
+  if (soon) out.append(soon);
   return out;
 }
 

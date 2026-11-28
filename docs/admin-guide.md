@@ -108,6 +108,28 @@ buckets Bucketeer can't place (no `bucketeer-owner` tag, or an unknown
 costs without a bucket name (taxes, account-level charges), and a note while the month is
 not final yet or the billing export can't be read.
 
+### Spend per budget number
+
+Finance pays by budget number, so under the sheet card the **By budget number** table shows
+the month picked there summed per budget number (the sheet's Index column): how many
+buckets, what they cost on premises and in the cloud, and the total, with the owners of
+those buckets. The figures are exactly the sheet's: each on-premises row costs its
+Quantity x the `Tier-3-S3` price (rounded to the cent), each cloud row its AWS cost. Rows
+are sorted by total, largest first (click a column header to sort differently); buckets
+without a budget number, or with one that does not match the format, are collected in a
+flagged **No budget number** row at the end, as they leave the Index empty on the sheet.
+
+- The chip next to the title says whether the month is **Final**, still running (**To
+  date**) or **Not final yet** (the month is over but AWS has not finished its costs).
+- Cloud amounts come from the [AWS billing export](#cloud-billing). Without cloud billing
+  the Cloud column is hidden; while the export can't be read, cloud amounts count as 0 and
+  a note says why. Cloud costs are in USD: with another billing currency they are shown but
+  not added to the totals.
+- **Export CSV** downloads the table (`bucketeer-budgets-YYYY-MM.csv`: budget number,
+  buckets, owners, on premises, cloud and total, then a `(total)` row; `(none)` stands for
+  the no-budget-number row). Each download is in the audit log
+  (`admin.export.billing_budgets`).
+
 ### Monthly email
 
 Enter one or more **billing contacts** (up to 10 addresses), the **send day** (1-28) and
@@ -299,7 +321,7 @@ usage readings for billing and admin settings changes** made since then are lost
 | Tab | What it does |
 |---|---|
 | Users | Quotas, suspend and restore. Suspending a user also suspends their bucket keys. |
-| Buckets | On-premises and cloud buckets (filter All / On premises / Cloud; cloud rows have a "Cloud" badge and their storage class). Usage, bucket quotas, budget numbers (with a check against the format), chargeback CSV, Write Bucketeer tags. A cloud bucket's size comes from AWS CloudWatch (daily, a day or two late; empty while AWS can't be reached) and its quota is in whole TiB; an administrator's quota change is not limited by the weekly limit but is recorded, and the bucket's quota tag is updated. |
+| Buckets | On-premises and cloud buckets (filter All / On premises / Cloud; cloud rows have a "Cloud" badge and their storage class). Usage, bucket quotas, budget numbers (with a check against the format), chargeback CSV, Write Bucketeer tags. A cloud bucket's size comes from AWS CloudWatch (daily, a day or two late; empty while AWS can't be reached) and its quota is in whole TiB; an administrator's quota change is not limited by the weekly limit but is recorded, and the bucket's quota tag is updated. **Full in** shows "~N weeks" (or days, under two weeks) for buckets that reach their quota within 90 days at the pace of the last 30 days (a straight line through the daily size readings; at least 7 readings over 7 days); hover it for the growth per day. Sort by it to see what fills first. |
 | Bucket keys | All keys scoped to one bucket; revoke them. Admins never see a secret. |
 | Audit | Who did what and when; filter and export CSV. |
 | Offboarding | Daily check against AD. Starts in report-only mode; switch to enforce when you trust it. |

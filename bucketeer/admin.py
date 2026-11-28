@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt
 
-from . import bucket_quota, catalog
+from . import bucket_quota, catalog, forecast
 from .auth import SessionUser, require_admin
 from .budget import budget_matches, load_budget_rules
 from .croit import CroitClient, CroitClientError, CroitError, CroitUnavailable, get_croit
@@ -273,6 +273,12 @@ async def list_buckets(request: Request, _a: Admin, croit: Croit, db: Db):
     from . import admin_cloud
 
     out, _meta, _users, _pattern = await _judged_buckets(croit, db, app=request.app)
+    # growth forecast per bucket (`forecast.py`), from one query over usage_daily
+    fc = await forecast.for_buckets(request.app, {
+        v["name"]: v["quota"]["maxSize"] if v["quota"]["enabled"] else None for v in out},
+        all_buckets=True)
+    for v in out:
+        v["forecast"] = fc.get(v["name"])
     cloud = getattr(request.app.state, "cloud", None)
     return {"buckets": out, "cloud": {
         "configured": cloud is not None, "available": admin_cloud.cloud_ready(request.app),

@@ -174,6 +174,10 @@ a quota does not give that allowance back. When you reach the limit, the dialog 
 how much you can still add and when more frees up, for example "You can add 40 TiB more
 right now. You can add 60 TiB after Dec 1". Ask an admin if you need more at once.
 
+When a bucket keeps growing at the pace of the last 30 days and would reach its quota within
+about two months, its row says so, for example "Full in about 5 weeks" (hover it for the
+growth per day), so you can raise the quota or clean up in time.
+
 ## Advanced
 
 The **Advanced** switch at the top shows more: your access keys and config files, key

@@ -2,15 +2,18 @@ import { h } from "../dom.js";
 import { icon } from "../icons.js";
 import { api } from "../api.js";
 import { toast } from "../components/toast.js";
+import { formatCount } from "../format.js";
 
 // Admin "Billing" tab: product catalog (Tier-3-S3 price = the billing price), fiscal year
-// start, the monthly chargeback .xlsx (download, send now, contacts and monthly email), and
-// the monthly charges per user or per bucket for the last 12 months plus fiscal year to date.
+// start, the monthly chargeback .xlsx (download, send now, contacts and monthly email), the
+// picked month's spend per budget number (the sheet's rows summed per Index), and the monthly
+// charges per user or per bucket for the last 12 months plus fiscal year to date.
 // With cloud billing (CLOUD_BILLING_BUCKET), the sheet card also shows the AWS export's S3
 // total for the picked month next to the sum of the sheet's cloud rows.
 // The server computes every figure; this view only shows them.
 
 const FY = [[1, "January 1"], [4, "April 1"], [7, "July 1"], [10, "October 1"]];
+const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
 export function renderBilling() {
   let data = null;
@@ -145,6 +148,112 @@ export function renderBilling() {
     return { box, show };
   }
 
+  // Spend per budget number for the month picked on the sheet card: the sheet's rows summed per
+  // Index (the server builds both from the same function). Sortable like the admin tables; the
+  // "No budget number" row always stays last.
+  function budgetPanel() {
+    const sort = { key: "total", dir: -1 };
+    let view = null;
+    let seq = 0;
+    const csv = h("a", { class: "btn", download: "" }, icon("download"), "Export CSV");
+    const chip = h("span", { class: "chip", hidden: true });
+    const body = h("div", { class: "bl-bud", "aria-live": "polite" });
+    const el = h("section", { class: "card set-card", "aria-labelledby": "bl-b" },
+      h("div", { class: "set-head" }, h("h2", { id: "bl-b", text: "By budget number" }),
+        h("div", { class: "bl-tools" }, chip, csv)),
+      h("p", { class: "set-lead", text: "What the chargeback sheet bills for the month, per budget number: on-premises buckets at their quota times the Tier-3-S3 price, cloud buckets at their AWS cost. Buckets without a budget number, or with one that does not match the format, are collected in the last row, as on the sheet." }),
+      body);
+
+    const fmt = (v, currency) => {
+      const n = cents(v);
+      try {
+        return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(n);
+      } catch {
+        return `${n.toFixed(2)} ${currency}`;
+      }
+    };
+    const owners = (list) => (list.length > 3 ? `${list.slice(0, 3).join(", ")} +${list.length - 3} more` : list.join(", "));
+
+    function columns() {
+      const cols = [
+        { key: "budget", label: "Budget number", sort: (r) => r.budgetNumber ?? "", cell: (r) => h("div", { class: "who" },
+          r.budgetNumber == null
+            ? h("span", { class: "chip chip-warn" }, icon("alert", "icon"), "No budget number")
+            : h("code", { class: "bl-bud-num", text: r.budgetNumber }),
+          r.owners.length ? h("span", { class: "sub", title: r.owners.join(", "), text: owners(r.owners) }) : null,
+          r.mismatched ? h("span", { class: "sub", text: `${formatCount(r.mismatched)} with a number that does not match the format` }) : null) },
+        { key: "buckets", label: "Buckets", num: true, sort: (r) => r.buckets, cell: (r) => formatCount(r.buckets) },
+        { key: "onprem", label: "On premises", num: true, sort: (r) => r.onprem, cell: (r) => fmt(r.onprem, view.currency) },
+      ];
+      if (view.cloudEnabled) cols.push({ key: "cloud", label: "Cloud", num: true, sort: (r) => r.cloud, cell: (r) => fmt(r.cloud, view.cloudCurrency) });
+      cols.push({ key: "total", label: "Total", num: true, total: true, sort: (r) => r.total, cell: (r) => fmt(r.total, view.currency) });
+      return cols;
+    }
+
+    function paintTable() {
+      const cols = columns();
+      const col = cols.find((c) => c.key === sort.key) ?? cols[cols.length - 1];
+      const rows = [...view.rows].sort((a, b) => {
+        if ((a.budgetNumber == null) !== (b.budgetNumber == null)) return a.budgetNumber == null ? 1 : -1;
+        const x = col.sort(a), y = col.sort(b);
+        const c = typeof x === "number" ? x - y : collator.compare(String(x), String(y));
+        return c * sort.dir || collator.compare(a.budgetNumber ?? "", b.budgetNumber ?? "");
+      });
+      const head = h("tr", {}, cols.map((c) => {
+        const on = c.key === col.key;
+        return h("th", { scope: "col", class: [c.num ? "num" : "", c.total ? "bl-fytd" : ""].join(" ").trim(), "aria-sort": on ? (sort.dir > 0 ? "ascending" : "descending") : "none" },
+          h("button", { class: "th-btn", type: "button", on: { click: () => {
+            if (sort.key === c.key) sort.dir *= -1; else { sort.key = c.key; sort.dir = c.num ? -1 : 1; }
+            paintTable();
+          } } }, c.label, on ? icon(sort.dir > 0 ? "up" : "down", "icon th-ic") : null));
+      }));
+      const cellClass = (c) => [c.num ? "num" : "", c.total ? "bl-fytd" : ""].join(" ").trim();
+      const tr = (r) => h("tr", { "data-none": String(r.budgetNumber == null) },
+        cols.map((c) => h("td", { class: cellClass(c), "data-label": c.label }, c.cell(r))));
+      const t = view.totals;
+      const foot = h("tfoot", {}, h("tr", { class: "bl-total" },
+        h("th", { scope: "row", text: "Total" }),
+        h("td", { class: "num", "data-label": "Buckets", text: formatCount(t.buckets) }),
+        h("td", { class: "num", "data-label": "On premises", text: fmt(t.onprem, view.currency) }),
+        view.cloudEnabled ? h("td", { class: "num", "data-label": "Cloud", text: fmt(t.cloud, view.cloudCurrency) }) : null,
+        h("td", { class: "num bl-fytd", "data-label": "Total", text: fmt(t.total, view.currency) })));
+      const note = view.cloudEnabled && view.cloudNote
+        ? h("div", { class: view.cloudAvailable ? "set-hint bl-bud-note" : "set-warn", role: "note" }, view.cloudAvailable ? null : icon("alert"), h("span", { text: view.cloudNote }))
+        : null;
+      body.replaceChildren(...(note ? [note] : []), rows.length
+        ? h("div", { class: "tbl-wrap bl-bud-wrap" }, h("table", { class: "tbl bl-tbl bl-bud-tbl" },
+          h("caption", { class: "visually-hidden", text: `Charges per budget number, ${view.month}` }),
+          h("thead", {}, head), h("tbody", {}, rows.map(tr)), foot))
+        : h("p", { class: "muted", text: `Nothing billed for ${view.month}.` }));
+    }
+
+    async function show(m) {
+      const mine = ++seq;
+      csv.href = `/api/admin/billing/budgets.csv?month=${encodeURIComponent(m)}`;
+      if (!view) body.replaceChildren(h("div", { class: "set-loading", "aria-hidden": "true" }, h("div", { class: "skel-field set-skel" })));
+      let v;
+      try {
+        v = await api(`/admin/billing/budgets?month=${encodeURIComponent(m)}`);
+      } catch (err) {
+        if (err.status === 401 || mine !== seq) return;
+        view = null;
+        chip.hidden = true;
+        body.replaceChildren(h("p", { class: "set-err", text: err.message }));
+        return;
+      }
+      if (mine !== seq) return;
+      view = v;
+      const current = v.month === data.months[data.months.length - 1];
+      chip.hidden = false;
+      chip.className = v.final ? "chip chip-ok" : "chip";
+      chip.textContent = v.final ? `${v.month} · Final` : current ? `${v.month} · To date` : `${v.month} · Not final yet`;
+      paintTable();
+    }
+    return { el, show };
+  }
+
+  let budgets = null;
+
   function sheetCard() {
     const s = data.settings;
     const rep = data.report;
@@ -153,15 +262,19 @@ export function renderBilling() {
     const sync = () => { download.href = `/api/admin/billing/chargeback.xlsx?month=${encodeURIComponent(month.value)}`; };
     month.addEventListener("input", sync);
     sync();
+    // The picked month also drives the AWS panel and the budget-number card below.
     const cloud = rep.cloudBilling ? cloudPanel() : null;
-    if (cloud) {
-      let timer = 0;
-      month.addEventListener("input", () => {
-        clearTimeout(timer);
-        timer = setTimeout(() => { if (month.checkValidity()) cloud.show(month.value); }, 300);
-      });
-      cloud.show(month.value);
-    }
+    let timer = 0;
+    month.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (!month.checkValidity()) return;
+        cloud?.show(month.value);
+        budgets?.show(month.value);
+      }, 300);
+    });
+    cloud?.show(month.value);
+    budgets?.show(month.value);
     const sendNow = h("button", { class: "btn", type: "button", disabled: !data.email.enabled || !s.contacts.length }, icon("bell"), "Send now");
     sendNow.addEventListener("click", async () => {
       sendNow.disabled = true;
@@ -260,7 +373,8 @@ export function renderBilling() {
   }
 
   function paint() {
-    host.replaceChildren(settingsCard(), sheetCard(), tableCard());
+    budgets = budgetPanel(); // before sheetCard(), whose month picker drives it
+    host.replaceChildren(settingsCard(), sheetCard(), budgets.el, tableCard());
   }
 
   return { el: host, load };

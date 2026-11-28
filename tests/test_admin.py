@@ -1,6 +1,7 @@
 """/api/admin against the in-process mock croit, with fake-LDAP sessions."""
 
 import json
+from datetime import date, timedelta
 
 import httpx
 import pytest
@@ -146,11 +147,38 @@ def test_buckets_list_joins_budget_number(env):
         "name": "alice-data", "tenant": "", "owner": "alice", "objects": 42, "bytes": 1048576,
         "quota": {"enabled": False, "maxSize": None, "maxObjects": None},
         "budgetNumber": "IDX-1234", "budgetMatches": None, "location": "onprem",
+        "forecast": None,  # no size readings yet
     }
     assert r.json()["cloud"] == {"configured": False, "available": False, "maxTiB": 100_000}
     assert b["alice-empty"]["budgetNumber"] is None  # missing, not invalid
     assert b["acme:reports"]["tenant"] == "acme" and b["acme:reports"]["owner"] == "acme$carol"
     assert "secret" not in r.text.lower()
+
+
+def test_buckets_list_has_a_growth_forecast(env):
+    """`forecast` per bucket (forecast.py) from ONE query over usage_daily, against the
+    bucket's current quota."""
+    gib = 2**30
+    r = env.admin.put("/api/admin/buckets/alice-data/quota", headers=H,
+                      json={"enabled": True, "maxSize": 100 * gib, "maxObjects": None})
+    assert r.status_code == 200
+    today = date.fromtimestamp(env.app.state.clock())
+    for i in range(10):
+        env.db.usage.record((today - timedelta(days=9 - i)).isoformat(), [
+            ("alice-data", "alice", (10 + i) * gib, 50 * gib),  # the reading's quota is old
+            ("acme:reports", "acme$carol", 5 * gib, None),
+            ("gone-bucket", "alice", gib, None)])
+    calls = []
+    real = env.db.usage.readings
+    env.db.usage.readings = lambda *a: calls.append(a) or real(*a)
+    b = {x["name"]: x for x in env.admin.get("/api/admin/buckets").json()["buckets"]}
+    assert len(calls) == 1 and calls[0][2] is None
+    assert b["alice-data"]["forecast"] == {
+        "growthBytesPerDay": gib, "daysToFull": 81, "basedOnDays": 10,
+        "fullOn": (today + timedelta(days=81)).isoformat()}
+    flat = b["acme:reports"]["forecast"]  # tenant-qualified name; flat, no quota
+    assert flat["growthBytesPerDay"] == 0 and flat["daysToFull"] is None
+    assert b["alice-empty"]["forecast"] is None and "gone-bucket" not in b
 
 
 # -- quotas --------------------------------------------------------------------

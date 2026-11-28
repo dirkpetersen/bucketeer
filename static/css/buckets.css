@@ -475,6 +475,10 @@
 .bk-cost-m { color: var(--accent-text); font-weight: 600; }
 .bk-cost[data-kind="none"] { color: var(--accent-text); font-weight: 560; }
 .bk-cost svg { width: 0.9rem; height: 0.9rem; flex: none; }
+/* Growth forecast under the cost line (views/buckets.js forecastNote): "Full in about 5 weeks" */
+.bk-forecast { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-xs); font-weight: 600; color: var(--accent-text); }
+.bk-forecast[data-soon="true"] { color: var(--danger); }
+.bk-forecast svg { width: 0.9rem; height: 0.9rem; flex: none; }
 
 .qp { display: grid; gap: var(--sp-2); }
 .qp-row { display: flex; align-items: stretch; gap: var(--sp-2); }

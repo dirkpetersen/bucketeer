@@ -27,6 +27,22 @@ through `admin.csv_safe` (formula injection works in xlsx too).
   generatedAt, fetchedAt, stale, reason, exportTotal, rowsTotal, rows, unknownTotal,
   systemTotal, unattributed, currency}` (amounts in USD, the export's currency): the
   export's S3 total for our buckets next to the sum of the sheet's cloud rows.
+* `GET /api/admin/billing/budgets?month=YYYY-MM` (default the current month; not a future
+  one; `no-store`) -> `{month, currency, cloudCurrency, final, cloudEnabled,
+  cloudAvailable, cloudNote, rows: [{budgetNumber (null = none or not matching the
+  format, like the sheet's empty Index), onprem, cloud, total, buckets, owners: [AD name,
+  else uid], mismatched (buckets with a stored number that does not match)}], totals:
+  {onprem, cloud, total, buckets}}`: the sheet's rows (`chargeback()`, the same function
+  the .xlsx uses) summed per Index. On premises a row costs Quantity x the Tier-3-S3
+  price, rounded to the cent (`row_cents`); a cloud row its Quantity in cents. Rows by
+  total descending, the null row last. Cloud amounts are 0 while cloud billing is off or
+  the export unreadable (`cloudAvailable` false, `cloudNote` says why); they are USD and
+  only added to `total` when the billing currency is USD too. `final` = the month is over
+  and (no cloud billing, or the cloud costs are final).
+* `GET /api/admin/billing/budgets.csv?month=` -> the same as CSV (UTF-8 with BOM, CRLF,
+  `csv_safe` cells; `budget_number, buckets, owners, onprem_<cur>, cloud_USD, total_<cur>`,
+  `(none)` for the null row, a last `(total)` row); audit `admin.export.billing_budgets`
+  (target_type `report`, target `billing`; details month, rows, currency, final).
 * `POST /api/admin/billing/report/send {month}` mails that month's sheet to the billing
   contacts now (for testing; does not count as the scheduled send) -> `{month, sent,
   failed, rows, problems}`; 409 while email is off or no contact is set, 502 when no
@@ -44,6 +60,7 @@ through `admin.csv_safe` (formula injection works in xlsx too).
 
 import asyncio
 import calendar
+import csv
 import io
 import logging
 from datetime import date, datetime
@@ -99,8 +116,12 @@ def tier3_lines(usage: list[dict], days: int) -> list[dict[str, Any]]:
 
 
 def build_rows(lines: list[dict], month: str, budgets: dict[str, tuple[str | None, bool]],
-               emails: dict[str, str | None], settings: dict) -> tuple[list[dict], list[dict]]:
-    """Sheet rows and Problems rows. `budgets[bucket] = (number, usable)`."""
+               emails: dict[str, str | None] | None, settings: dict
+               ) -> tuple[list[dict], list[dict]]:
+    """Sheet rows and Problems rows. `budgets[bucket] = (number, usable)`; `emails` None =
+    not looked up (column A shows the uid, no email problem). Besides the sheet's columns
+    each row keeps `location`, `owner`, `productId` and the stored `budget` (`row_cents`,
+    `budget_view`)."""
     first, last, _ = month_bounds(month)
     rows, problems = [], []
     for line in lines:
@@ -113,8 +134,8 @@ def build_rows(lines: list[dict], month: str, budgets: dict[str, tuple[str | Non
             problems.append({"bucket": bucket, "owner": owner,
                              "problem": "Budget number does not match the format",
                              "details": f"Stored value {number}; Index left empty"})
-        email = emails.get(owner)
-        if not email:
+        email = emails.get(owner) if emails is not None else None
+        if not email and emails is not None:
             problems.append({"bucket": bucket, "owner": owner,
                              "problem": "No email address for the owner",
                              "details": "Column A shows the S3 user id"})
@@ -128,6 +149,8 @@ def build_rows(lines: list[dict], month: str, budgets: dict[str, tuple[str | Non
             "product": billing.product(settings, line["product"])["name"],
             "quantity": line["quantity"], "orderDate": first, "fulfillmentDate": last,
             "note": bucket, "referenceId": bucket,
+            "location": "onprem", "owner": owner, "productId": line["product"],
+            "budget": number or None,
         })
     rows.sort(key=lambda r: (r["email"].lower(), r["note"]))
     return rows, problems
@@ -222,6 +245,7 @@ def cloud_rows(costs: dict, facts: dict[str, dict], month: str, settings: dict,
             "email": email or owner, "index": number if ok else None,
             "product": billing.product(settings, pid)["name"], "quantity": quantity,
             "orderDate": first, "fulfillmentDate": last, "note": bucket, "referenceId": bucket,
+            "location": "cloud", "owner": owner, "productId": pid, "budget": number,
         })
     for name, cost in (costs.get("system") or {}).items():
         if cost:
@@ -312,21 +336,32 @@ def to_xlsx(rows: list[dict], problems: list[dict]) -> bytes:
     return buf.getvalue()
 
 
+async def owner_names(app, uids: set[str]) -> dict[str, list[str]]:
+    """uid -> the AD names linked to it (`known_accounts`, then `rgw_user.ad_names_for_uid`);
+    SQLite only, no directory lookup."""
+    db = app.state.db
+    tenant = getattr(app.state.rgw, "tenant", "")
+    out: dict[str, list[str]] = {}
+    for uid in sorted(uids):
+        names = [r["ad_username"] for r in await db.run(db.known_accounts.for_uid, uid)]
+        names += [n for n in await db.run(ad_names_for_uid, db, uid, tenant) if n not in names]
+        out[uid] = names
+    return out
+
+
 async def owner_emails(app, uids: set[str]) -> dict[str, str | None]:
     """uid -> the owner's email: AD `mail` of an AD name linked to the uid (no password
     bind), else the RGW user's email, else None. Lookup trouble only costs the address."""
-    db = app.state.db
     try:
         rgw = {str(u.get("uid")): (u.get("email") or "").strip()
                for u in await app.state.croit.list_users()}
     except Exception as e:  # noqa: BLE001  the AD address is the main source anyway
         log.warning("chargeback: RGW user list unreadable (%s)", type(e).__name__)
         rgw = {}
-    tenant = getattr(app.state.rgw, "tenant", "")
+    linked = await owner_names(app, uids)
     out: dict[str, str | None] = {}
     for uid in sorted(uids):
-        names = [r["ad_username"] for r in await db.run(db.known_accounts.for_uid, uid)]
-        names += [n for n in await db.run(ad_names_for_uid, db, uid, tenant) if n not in names]
+        names = linked[uid]
         email = None
         for name in names[:3]:
             try:
@@ -340,8 +375,12 @@ async def owner_emails(app, uids: set[str]) -> dict[str, str | None]:
     return out
 
 
-async def build(app, month: str) -> tuple[bytes, dict[str, int]]:
-    """The month's workbook plus `{rows, problems}`."""
+async def chargeback(app, month: str, *, emails: bool = True) -> dict[str, Any]:
+    """The month's chargeback: `{rows, problems, settings, cloud}` (sheet rows on premises
+    and cloud, Problems rows, the billing settings, the cloud summary). The ONE computation
+    behind the .xlsx, the monthly email and the spend per budget number (`budget_view`), so
+    their figures can never differ. `emails=False` skips the AD address lookups: only
+    column A (and its Problems entries) depend on them, never a quantity or an Index."""
     db: Database = app.state.db
     first, last, days = month_bounds(month)
     usage = await db.run(db.usage.between, first.isoformat(), last.isoformat())
@@ -363,13 +402,110 @@ async def build(app, month: str) -> tuple[bytes, dict[str, int]]:
         return out
 
     budgets = await asyncio.to_thread(judge)
-    emails = await owner_emails(app, {line["owner"] for line in lines})
-    rows, problems = build_rows(lines, month, budgets, emails, settings)
-    c_rows, c_problems, _ = await cloud_part(app, month, pattern)
+    addresses = (await owner_emails(app, {line["owner"] for line in lines})
+                 if emails else None)
+    rows, problems = build_rows(lines, month, budgets, addresses, settings)
+    c_rows, c_problems, summary = await cloud_part(app, month, pattern)
     rows = sorted(rows + c_rows, key=lambda r: (r["email"].lower(), r["note"]))
-    problems += c_problems
-    data = await asyncio.to_thread(to_xlsx, rows, problems)
-    return data, {"rows": len(rows), "problems": len(problems)}
+    return {"rows": rows, "problems": problems + c_problems, "settings": settings,
+            "cloud": summary}
+
+
+async def build(app, month: str) -> tuple[bytes, dict[str, int]]:
+    """The month's workbook plus `{rows, problems}`."""
+    c = await chargeback(app, month)
+    data = await asyncio.to_thread(to_xlsx, c["rows"], c["problems"])
+    return data, {"rows": len(c["rows"]), "problems": len(c["problems"])}
+
+
+# -- spend per budget number -------------------------------------------------------------
+
+
+def row_cents(row: dict, settings: dict) -> int:
+    """What one sheet row bills, in cents: a Tier-3-S3 row is its Quantity (whole TiB) x the
+    product's price per TiB-month (billing currency), rounded half up to the cent; a cloud
+    row's Quantity already is cents (USD, the export's currency)."""
+    if row["location"] == "cloud":
+        return int(row["quantity"])
+    price = Decimal(str(billing.product(settings, row["productId"])["pricePerTiBMonth"]))
+    return int((price * row["quantity"] * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
+def _owner_uid(row: dict) -> str:
+    """The RGW uid behind a row's owner (a cloud owner tag names a tenant as `tenant:uid`)."""
+    owner = row["owner"]
+    return owner.replace(":", "$", 1) if row["location"] == "cloud" else owner
+
+
+def budget_view(c: dict, month: str, today: date,
+                names: dict[str, list[str]]) -> dict[str, Any]:
+    """The chargeback (`chargeback()`) summed per budget number (the sheet's Index): see
+    `GET /api/admin/billing/budgets`. Pure; `names` = uid -> AD names (`owner_names`)."""
+    settings, cloud = c["settings"], c["cloud"]
+    currency = settings["currency"]
+    mixed = currency != EXPORT_CURRENCY
+    groups: dict[str | None, dict[str, Any]] = {}
+    for row in c["rows"]:
+        g = groups.setdefault(row["index"], {"onprem": 0, "cloud": 0, "buckets": 0,
+                                             "owners": set(), "mismatched": 0})
+        g[row["location"]] += row_cents(row, settings)
+        g["buckets"] += 1
+        uid = _owner_uid(row)
+        g["owners"].add((names.get(uid) or [row["owner"]])[0])
+        if row["index"] is None and row.get("budget"):
+            g["mismatched"] += 1  # a stored number that does not match the format
+
+    def total(g: dict) -> int:
+        return g["onprem"] + (0 if mixed else g["cloud"])
+
+    rows = [{"budgetNumber": number, "onprem": g["onprem"] / 100, "cloud": g["cloud"] / 100,
+             "total": total(g) / 100, "buckets": g["buckets"],
+             "owners": sorted(g["owners"], key=str.lower), "mismatched": g["mismatched"]}
+            for number, g in groups.items()]
+    rows.sort(key=lambda r: (r["budgetNumber"] is None, -r["total"],
+                             (r["budgetNumber"] or "").lower()))
+    sums = {k: sum(g[k] for g in groups.values()) for k in ("onprem", "cloud", "buckets")}
+    enabled = bool(cloud.get("enabled"))
+    available = enabled and bool(cloud.get("available"))
+    notes = []
+    if not enabled:
+        notes.append("Cloud billing is not set up (CLOUD_BILLING_BUCKET is empty), so cloud "
+                     "buckets are not included.")
+    elif not available:
+        reason = cloud.get("reason") or "the billing export could not be read"
+        notes.append(f"Cloud costs are unavailable ({reason}), so cloud amounts are 0.")
+    else:
+        if cloud.get("stale"):
+            notes.append("Cloud costs are from an earlier read of the AWS billing export; "
+                         "reading it again failed.")
+        if not cloud.get("final"):
+            notes.append(f"Cloud costs for {month} are not final yet: AWS finishes a month "
+                         f"by the {cloud_costs.FINAL_DAY}th of the next one.")
+        if cloud.get("unknownTotal"):
+            notes.append(f"{_usd(cloud['unknownTotal'])} of cloud costs could not be assigned "
+                         f"to a bucket owner or product and are not included (see the "
+                         f"Problems sheet).")
+    if mixed and available:
+        notes.append(f"Cloud costs are in {EXPORT_CURRENCY} and are not added to the totals "
+                     f"in {currency}.")
+    cloud_done = not enabled or (available and bool(cloud.get("final")))
+    return {
+        "month": month, "currency": currency, "cloudCurrency": EXPORT_CURRENCY,
+        "final": month < billing.month_key(today) and cloud_done,
+        "cloudEnabled": enabled, "cloudAvailable": available,
+        "cloudNote": " ".join(notes) or None,
+        "rows": rows,
+        "totals": {"onprem": sums["onprem"] / 100, "cloud": sums["cloud"] / 100,
+                   "total": (sums["onprem"] + (0 if mixed else sums["cloud"])) / 100,
+                   "buckets": sums["buckets"]},
+    }
+
+
+async def budget_report(app, month: str) -> dict[str, Any]:
+    """`GET /api/admin/billing/budgets`: the month's chargeback per budget number."""
+    c = await chargeback(app, month, emails=False)
+    names = await owner_names(app, {_owner_uid(r) for r in c["rows"]})
+    return budget_view(c, month, date.fromtimestamp(app.state.clock()), names)
 
 
 def filename(month: str) -> str:
@@ -498,6 +634,51 @@ async def chargeback_xlsx(request: Request, admin: Admin, db: Db,
                  "billing", {"month": month, **counts})
     return Response(data, media_type=XLSX_MIME, headers={
         "Content-Disposition": f'attachment; filename="{filename(month)}"',
+        "Cache-Control": "no-store"})
+
+
+def _month_or_current(request: Request, month: str | None) -> str:
+    return _check_month(request, month or billing.month_key(
+        date.fromtimestamp(request.app.state.clock())))
+
+
+@router.get("/budgets")
+async def budgets(request: Request, response: Response,
+                  month: Annotated[str | None, Query(pattern=MONTH_PATTERN)] = None):
+    month = _month_or_current(request, month)
+    response.headers["Cache-Control"] = "no-store"
+    return await budget_report(request.app, month)
+
+
+BUDGET_COLUMNS = ["budget_number", "buckets", "owners"]
+
+
+@router.get("/budgets.csv")
+async def budgets_csv(request: Request, admin: Admin, db: Db,
+                      month: Annotated[str | None, Query(pattern=MONTH_PATTERN)] = None):
+    """The budget view as CSV (UTF-8 with BOM, CRLF, `csv_safe` cells): one row per budget
+    number (`(none)` for buckets without a usable one), then a `(total)` row."""
+    from .admin import csv_safe
+
+    month = _month_or_current(request, month)
+    r = await budget_report(request.app, month)
+    cur, ccur = r["currency"], r["cloudCurrency"]
+    buf = io.StringIO(newline="")
+    w = csv.writer(buf, lineterminator="\r\n")
+    w.writerow([*BUDGET_COLUMNS, f"onprem_{cur}", f"cloud_{ccur}", f"total_{cur}"])
+    for row in r["rows"]:
+        w.writerow([csv_safe(c) for c in (
+            row["budgetNumber"] if row["budgetNumber"] is not None else "(none)",
+            row["buckets"], "; ".join(row["owners"]), f"{row['onprem']:.2f}",
+            f"{row['cloud']:.2f}", f"{row['total']:.2f}")])
+    t = r["totals"]
+    w.writerow(["(total)", t["buckets"], "", f"{t['onprem']:.2f}", f"{t['cloud']:.2f}",
+                f"{t['total']:.2f}"])
+    await db.run(db.audit.add, admin.username, "admin.export.billing_budgets", "report",
+                 "billing", {"month": month, "rows": len(r["rows"]), "currency": cur,
+                             "final": r["final"]})
+    return Response("﻿" + buf.getvalue(), media_type="text/csv; charset=utf-8", headers={
+        "Content-Disposition": f'attachment; filename="bucketeer-budgets-{month}.csv"',
         "Cache-Control": "no-store"})
 
 

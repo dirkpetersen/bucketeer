@@ -11,7 +11,8 @@ or capitals never matches anything, so a user cannot address another tenant's bu
   budgetNumber|null, budgetMissing, tagPending, keyCount, quotaTiB|null, monthlyCost|null}],
   product: {id, name, pricePerTiBMonth, currency, advertised, billedOn}}` (`keyCount`: live
   bucket keys; `quotaTiB` the bucket quota in whole TiB rounded up, null without a size
-  limit; `monthlyCost` = quotaTiB x the product's price, `catalog.py`).
+  limit; `monthlyCost` = quotaTiB x the product's price, `catalog.py`; `forecast` the
+  growth forecast from the daily size readings, `forecast.py`, null when unknown).
   Only buckets croit lists for the
   user's uid. Read-only; it never changes state (see `reconcile`).
 - `GET /api/buckets/options` -> `{naming: {prefix, hasPattern, hint}, placements: [...]
@@ -75,7 +76,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
-from . import bucket_delete, bucket_facts, bucket_quota, catalog, s3docs
+from . import bucket_delete, bucket_facts, bucket_quota, catalog, forecast, s3docs
 from .admin import croit_http_error
 from .auth import SessionUser, require_user
 from .bucket_ops import S3OpError, http_error, ops_for
@@ -339,6 +340,9 @@ async def list_buckets(request: Request, acct: Account):
     rows.sort(key=lambda b: str(b.get("bucket", "")).lower())
     states = await asyncio.gather(*(versioning(b) for b in rows[:VERSIONING_LOOKUPS]))
     locks = await asyncio.gather(*(locked(b, s) for b, s in zip(rows, states, strict=False)))
+    quotas = {b.get("bucket") or "": _quota(b.get("bucket_quota")) for b in rows}
+    forecasts = await forecast.for_buckets(request.app, {  # growth forecast, one query
+        name: q["maxSize"] if q["enabled"] else None for name, q in quotas.items()})
     out = []
     for i, b in enumerate(rows):
         full = b.get("bucket") or ""
@@ -362,6 +366,7 @@ async def list_buckets(request: Request, acct: Account):
             "tagPending": bool(m and not m.get("tag_synced", 1)),
             "quotaTiB": tib,
             "monthlyCost": catalog.monthly_cost(product, tib),
+            "forecast": forecasts.get(full),
         })
     return {"buckets": out, "product": catalog.public(product)}
 
