@@ -196,6 +196,28 @@ admins chose another level), and you get an email about it, at most once a week 
 At 100 % uploads to that bucket stop until you raise the quota (**More, Change quota**) or
 delete data you no longer need.
 
+### My activity
+
+Your name menu at the top right has **My activity**: a timeline of what happened to your
+account, keys and buckets, newest first and grouped by day ("Today", "Yesterday", then
+dates). Each line says what happened, to which bucket or key (keys are shown by their last
+four characters, for example "…AB12"), when, and who did it:
+
+- **You**: your own sign-ins and changes, such as a new bucket, a quota change or a key
+  rotation.
+- **Bucketeer**: things the portal did on its own, such as cleaning up after a deleted
+  bucket or the nightly check that suspends accounts of people who left.
+- **An administrator**: an admin changed your bucket's quota or suspended or reactivated
+  your account. The page never shows which admin.
+- **The bucket's owner**: a colleague shared a bucket with you, changed your access or
+  stopped sharing it. Their name is not shown here; the **Shared with you** list says whose
+  bucket it is.
+
+Failed sign-ins with your username are not listed: anyone can type a username, so they say
+nothing about you (your admins can see them). **Load more** shows older entries. If the
+storage service cannot be reached, a note says that some entries about your buckets may be
+missing for now.
+
 ## Advanced
 
 The **Advanced** switch at the top shows more: your access keys and config files, key

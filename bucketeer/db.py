@@ -331,6 +331,12 @@ MIGRATIONS: list[Migration] = [
     );
     CREATE INDEX key_ages_uid ON key_ages (uid);
     """,
+    # "My activity" (`activity.py`) pages a person's own rows newest first by actor, compared
+    # case-insensitively like the AD names are; the BINARY `audit_log_actor` cannot serve
+    # that. (target_type, target) lookups use `audit_log_target`, which already ends in id.
+    """
+    CREATE INDEX audit_log_actor_nocase ON audit_log (actor COLLATE NOCASE, id);
+    """,
 ]
 
 _MISSING: Any = object()
