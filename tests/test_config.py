@@ -251,6 +251,33 @@ def test_cloud_billing_bucket():
     assert s.cloud_billing_configured is True
 
 
+@pytest.mark.parametrize("name", [
+    "bucketeer-backup-0123456789ab",   # the shape with cloud
+])
+def test_backup_bucket_with_cloud_accepted(name):
+    s = Settings(_env_file=None, **REQUIRED, **CLOUD_VALUES, backup_bucket=name)
+    assert s.backup_bucket == name
+
+
+@pytest.mark.parametrize("name", [
+    "bucketeer-legacy-name",              # the old random-style name
+    "bucketeer-backup-0123456789AB",   # capitals
+    "bucketeer-backup-0123456789a",    # 11 hex digits
+    "bucketeer-backup-prod",           # not hex
+    "other-backup-0123456789ab",       # wrong prefix
+])
+def test_backup_bucket_with_cloud_must_be_the_shared_shape(name):
+    """With cloud the same name is the AWS bucket too, so it must be recognisable."""
+    with pytest.raises(ValidationError, match="BACKUP_BUCKET"):
+        Settings(_env_file=None, **REQUIRED, **CLOUD_VALUES, backup_bucket=name)
+
+
+def test_backup_bucket_any_name_without_cloud():
+    """Without cloud the backup bucket is only on premises: any DNS name works."""
+    s = Settings(_env_file=None, **REQUIRED, backup_bucket="bucketeer-legacy-name")
+    assert s.backup_bucket == "bucketeer-legacy-name"
+
+
 def test_cloud_profile_must_differ():
     with pytest.raises(ValueError, match="CLOUD_PROFILE_NAME"):
         Settings(_env_file=None, **REQUIRED, cloud_profile_name="s3-onprem")

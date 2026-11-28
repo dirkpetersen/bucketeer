@@ -19,7 +19,7 @@
 #                            - Cost Explorer (billing check) and cost allocation tags
 #                            - read-only access (ListBucket, GetObject) to the billing
 #                              bucket, when there is one; nothing else of it
-#   * with --billing-export: the billing bucket <prefix>billing-<random> (Block Public
+#   * with --billing-export: the billing bucket <prefix>cloud-billing-<random> (Block Public
 #     Access, a policy that lets AWS billing deliver into it) and the CUR 2.0 data
 #     export <prefix>s3-costs (daily, with resource ids, gzip CSV under cur/), which
 #     Bucketeer sums per bucket for the chargeback sheet (CLOUD_BILLING_BUCKET)
@@ -50,8 +50,8 @@
 #                    print CLOUD_BILLING_BUCKET for Bucketeer's .env; the export is
 #                    made in us-east-1 (where AWS billing lives), the bucket in --region
 #   --billing-bucket use this billing bucket name (default: the bucket the export
-#                    already delivers to, else an existing <prefix>billing-* bucket,
-#                    else a new <prefix>billing-<12 hex>)
+#                    already delivers to, else an existing <prefix>cloud-billing-* bucket,
+#                    else a new <prefix>cloud-billing-<12 hex>)
 #   --print          print the policies (and, with a billing bucket, its policy and the
 #                    export definition) as JSON and change nothing
 #
@@ -143,12 +143,12 @@ if [ -z "$BILLING_BUCKET" ] && [ "$PRINT_ONLY" = 0 ]; then
   fi
   if [ -z "$BILLING_BUCKET" ]; then
     BILLING_BUCKET=$(aws s3api list-buckets \
-      --query "Buckets[?starts_with(Name, '${PREFIX}billing-')].Name | [0]" --output text)
+      --query "Buckets[?starts_with(Name, '${PREFIX}cloud-billing-')].Name | [0]" --output text)
     [ "$BILLING_BUCKET" != "None" ] || BILLING_BUCKET=""
   fi
 fi
 if [ -z "$BILLING_BUCKET" ] && [ "$BILLING_EXPORT" = 1 ]; then
-  BILLING_BUCKET="${PREFIX}billing-$(random_hex)"
+  BILLING_BUCKET="${PREFIX}cloud-billing-$(random_hex)"
 fi
 
 # Policy fragments for the billing bucket (empty without one).

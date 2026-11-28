@@ -1,7 +1,10 @@
 """Nightly backup of the database and `.env` to an object-locked bucket (admin, PLAN 5).
 
-`BACKUP_BUCKET` (empty = off; the log and the Backup tab then suggest `bucketeer-<random>`,
-since the app never writes `.env`) names the bucket. On premises it belongs to the RGW user
+`BACKUP_BUCKET` (empty = off; the log and the Backup tab then suggest
+`<CLOUD_BUCKET_PREFIX>backup-<12 hex>`, since the app never writes `.env`) names the bucket.
+While cloud is configured the SAME name is the bucket in AWS, so the name must be
+`<CLOUD_BUCKET_PREFIX>backup-<12 lowercase hex>` (`config.Settings` refuses another name). On
+premises the bucket belongs to the RGW user
 `bucketeer-backup` (`croit.BACKUP_UID`), created through the admin client on the first run;
 its key is read from the admin client each time (never stored) and, if it has none, one is
 generated (`credentials.generate_key_pair`). That user is hidden from the admin lists and
@@ -22,16 +25,15 @@ left out with a note when absent) and `meta.json` (`format`, `createdAt`, `appVe
 `note`). Not encrypted (Q21): the bucket must stay private. A successful run also removes the
 database's pre-upgrade copies (`db.remove_upgrade_copies`). One run at a time.
 
-Destinations (same methods `ensure`, `inspect`, `upload`, `download`, `latest`, chosen per
-run by `BackupService.destination`): `OnPremDestination` (RGW, the backup user's key,
-`S3_ENDPOINT_URL` or croit's endpoint discovery) and, when the GLOBAL default location is
-`cloud` and cloud is available (`location.cloud_available`), `AwsDestination` (P6-12).
-`BACKUP_BUCKET` stays the on/off switch for both. Switching the location only changes where
-the next run writes; earlier backups stay where they are and roll off there.
+Destinations (same methods `ensure`, `inspect`, `upload`, `download`, `latest`): every run
+writes the SAME archive to `OnPremDestination` (RGW, the backup user's key, `S3_ENDPOINT_URL`
+or croit's endpoint discovery) and, while cloud is configured, to `AwsDestination` (P6-12).
+Each destination is tried on its own: the run is `ok` only when all of them got the archive;
+a failure at one is recorded (`destinations[]`, `error`, audit `backup.failed`) and the other
+still gets its copy. `BACKUP_BUCKET` stays the on/off switch for both.
 
-`AwsDestination`: the bucket `<CLOUD_BUCKET_PREFIX>backup-<12 hex>` is named on the first run
-and stored in the `backup` setting (`awsBucket`, `awsBucketCreated`). The CloudAdmin creates
-it in `CLOUD_REGION` with object lock, then (every run, idempotent) Block Public Access,
+`AwsDestination`: the bucket is `BACKUP_BUCKET` itself, in `CLOUD_REGION`. The CloudAdmin
+creates it with object lock when it is free, then (every run, idempotent) Block Public Access,
 SSE-S3, the tags `bucketeer-bucket`, `bucketeer-product=system`, `bucketeer-location=cloud`,
 the same COMPLIANCE retention and lifecycle rules. A name taken meanwhile (by another account,
 or one of ours not created by this code) is replaced by a fresh one. The admin user has an
@@ -45,26 +47,27 @@ crash), creates one key, uses it (retrying while IAM propagates it) and deletes 
 
 API (`/api/admin/backup`, admin, CSRF via the parent router):
 
-* `GET` -> `{configured, bucket, suggestedBucket (only while not configured), destination,
-  settings: {time, retentionDays}, nextRun, running, bucketState: {exists, objectLock, mode,
-  retentionDays, versioning, error, note} | null, lastRun, lastSuccess, runs: [...]}`; never
-  changes anything (no user or bucket is created by a GET).
+* `GET` -> `{configured, bucket, suggestedBucket (only while not configured), onpremBucket,
+  awsBucket (null unless cloud is configured), region, user, settings: {time, retentionDays},
+  destinations: [{kind onprem|cloud, bucket, user, state: {exists, objectLock, mode,
+  retentionDays, versioning, error, note} | null}], nextRun, running, lastRun, lastSuccess,
+  runs: [...]}`; never changes anything (no user or bucket is created by a GET).
 * `PUT /settings {time?, retentionDays?}` -> `{settings, warning?}`; time `HH:MM` (server local),
   retentionDays 1..36500 and never below the current value (422); audit
   `admin.settings.backup` (target_type `setting`) when changed; a longer retention is applied
   to the bucket at once (created if needed; best effort, `warning` on failure, the next run
   applies it).
 * `POST /run` -> the finished run `{id, startedAt, finishedAt, trigger manual|schedule, actor,
-  outcome ok|failed, key, bytes, sha256, schemaVersion, envIncluded, error}`; 409 while
-  backups are off or a run is going. Audit `backup.run` / `backup.failed` (target_type
-  `backup`, target the bucket; actor `system` for the schedule). Runs are kept in the
-  settings key `backup_runs` (newest first, the last 30).
+  outcome ok|failed, key, bytes, sha256, schemaVersion, envIncluded, destinations: [{kind,
+  bucket, outcome ok|failed, error, bucketCreated, retentionDays}], error}`; 409 while
+  backups are off or a run is going. Audit `backup.run` / `backup.failed` once per
+  destination (target_type `backup`, target that bucket; actor `system` for the schedule).
+  Runs are kept in the settings key `backup_runs` (newest first, the last 30).
 
 Restore: `python3 app.py --restore-backup <object key|latest> [--from onprem|cloud]
-[--aws-bucket NAME] [--force]` (`restore_main`). Without `--from`, the source is where the
-newest successful run in the live database went, else on premises. From the cloud the bucket
-is the stored `awsBucket`, else `--aws-bucket`, else the one `<prefix>backup-*` bucket in the
-account; the download uses a temporary key exactly like a run.
+[--aws-bucket NAME] [--force]` (`restore_main`). Without `--from` the source is on premises.
+From the cloud the bucket is `--aws-bucket`, else `BACKUP_BUCKET`, else the one
+`<prefix>backup-*` bucket in the account; the download uses a temporary key exactly like a run.
 """
 
 import asyncio
@@ -132,8 +135,9 @@ def env_path() -> Path:
     return ENV_FILE or Path.cwd() / ".env"
 
 
-def suggest_bucket() -> str:
-    return f"bucketeer-{secrets.token_hex(6)}"
+def suggest_bucket(prefix: str = "bucketeer-") -> str:
+    """A free-looking name in the form cloud backups need (see config.Settings)."""
+    return f"{prefix}backup-{secrets.token_hex(6)}"
 
 
 def archive_key(at: datetime) -> str:
@@ -385,23 +389,8 @@ _PROPAGATION_CODES = ("InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDeni
 _HELD_KEYS: set[str] = set()  # access key ids whose secret this process holds right now
 
 
-def load_aws(db: Database | None) -> dict[str, Any]:
-    """The stored AWS backup bucket: `{bucket: name|None, created: bool}`."""
-    saved = (db.settings.get(KEY) or {}) if db is not None else {}
-    name = saved.get("awsBucket")
-    ok = isinstance(name, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", name)
-    return {"bucket": name if ok else None, "created": bool(ok and saved.get("awsBucketCreated"))}
-
-
-def save_aws(db: Database, bucket: str, created: bool) -> None:
-    with db.tx():
-        saved = dict(db.settings.get(KEY) or {})
-        saved.update(awsBucket=bucket, awsBucketCreated=created)
-        db.settings.set(KEY, saved, "system")
-
-
 def _save_settings(db: Database, values: dict[str, Any], actor: str) -> None:
-    """Time and retention; keeps the stored AWS bucket name."""
+    """Time and retention."""
     with db.tx():
         saved = dict(db.settings.get(KEY) or {})
         saved.update(values)
@@ -451,60 +440,44 @@ def _retry_new_key(fn: Callable[..., Any], *args) -> Any:
     return None  # pragma: no cover
 
 
+_AWS_TAKEN = ("The name {name} (BACKUP_BUCKET) is already taken by another AWS account. "
+              "Choose another name of the form <CLOUD_BUCKET_PREFIX>backup-<12 hex> and set it "
+              "in BACKUP_BUCKET.")
+
+
 class AwsDestination:
-    """The backup bucket in AWS: set up by the CloudAdmin, written by the backup IAM user
-    through a key that exists only for one upload or download."""
+    """The backup bucket in AWS: the same name as on premises (BACKUP_BUCKET), set up by the
+    CloudAdmin and written by the backup IAM user through a key that exists only for one
+    upload or download."""
 
     kind = "cloud"
 
-    def __init__(self, cloud, db: Database | None, bucket: str | None = None):
-        self.cloud, self.db = cloud, db
-        self._bucket = bucket
+    def __init__(self, cloud, bucket: str):
+        self.cloud = cloud
+        self.bucket = bucket
         self.owner = cloud.backup_user_name()
 
-    @property
-    def bucket(self) -> str | None:
-        return self._bucket or load_aws(self.db)["bucket"]
-
-    async def _save(self, bucket: str, created: bool) -> None:
-        self._bucket = bucket
-        if self.db is not None:
-            await self.db.run(save_aws, self.db, bucket, created)
-
-    async def _ensure_bucket(self) -> tuple[str, bool]:
-        """The bucket's name, created if needed; True when this call created it."""
-
-        c = self.cloud
-        stored = load_aws(self.db) if self.db is not None else {"bucket": None, "created": False}
-        name = self._bucket or stored["bucket"]
-        created = stored["created"] if name == stored["bucket"] else bool(name)
-        for _ in range(3):
-            if not name:
-                name = c.new_backup_bucket_name()
-                created = False
-                await self._save(name, False)  # first, so a crash never loses track of it
-            if created:
-                status = await c.bucket_status(name)
-                if status == "exists":
-                    return name, False
-                if status == "taken":
-                    raise BackupError(f"The backup bucket {name} now belongs to another AWS "
-                                      "account.")
-            params: dict[str, Any] = {"Bucket": name, "ObjectLockEnabledForBucket": True}
-            if c.region != "us-east-1":
-                params["CreateBucketConfiguration"] = {"LocationConstraint": c.region}
-            try:
-                await c.call("s3", "create_bucket", **params)
-            except CloudError as e:
-                if e.code in ("BucketAlreadyExists", "BucketAlreadyOwnedByYou"):
-                    log.warning("backup bucket name %s is taken; choosing another", name)
-                    name = None
-                    continue
-                raise
-            await self._save(name, True)
-            log.info("created the AWS backup bucket %s in %s with object lock", name, c.region)
-            return name, True
-        raise BackupError("Could not find a free name for the AWS backup bucket.")
+    async def _ensure_bucket(self) -> bool:
+        """Create the bucket with object lock if the name is free; True when this call did."""
+        c, name = self.cloud, self.bucket
+        status = await c.bucket_status(name)
+        if status == "exists":
+            return False
+        if status in ("taken", "elsewhere"):
+            raise BackupError(_AWS_TAKEN.format(name=name))
+        params: dict[str, Any] = {"Bucket": name, "ObjectLockEnabledForBucket": True}
+        if c.region != "us-east-1":
+            params["CreateBucketConfiguration"] = {"LocationConstraint": c.region}
+        try:
+            await c.call("s3", "create_bucket", **params)
+        except CloudError as e:
+            if e.code == "BucketAlreadyOwnedByYou":
+                return False
+            if e.code == "BucketAlreadyExists":
+                raise BackupError(_AWS_TAKEN.format(name=name)) from None
+            raise
+        log.info("created the AWS backup bucket %s in %s with object lock", name, c.region)
+        return True
 
     async def _ensure_user(self, bucket: str) -> None:
         c = self.cloud
@@ -530,18 +503,14 @@ class AwsDestination:
                      PolicyDocument=json.dumps(aws_user_policy(bucket)))
 
     async def ensure(self, retention_days: int) -> dict[str, Any]:
-        name, made = await self._ensure_bucket()
-        days = await asyncio.to_thread(setup_aws_bucket, self.cloud.client("s3"), name,
+        made = await self._ensure_bucket()
+        days = await asyncio.to_thread(setup_aws_bucket, self.cloud.client("s3"), self.bucket,
                                        retention_days)
-        await self._ensure_user(name)
+        await self._ensure_user(self.bucket)
         return {"created": made, "retentionDays": days}
 
     async def inspect(self) -> dict[str, Any]:
-        name = self.bucket
-        if not name:
-            return {"exists": False, "note": "The first backup run creates the bucket in AWS "
-                                             "and the backup IAM user."}
-        return await asyncio.to_thread(inspect_bucket, self.cloud.client("s3"), name)
+        return await asyncio.to_thread(inspect_bucket, self.cloud.client("s3"), self.bucket)
 
     @contextlib.asynccontextmanager
     async def _session(self):
@@ -575,25 +544,16 @@ class AwsDestination:
                 log.warning("could not delete the backup user's temporary key (%s); the next "
                             "run removes it", type(e).__name__)
 
-    def _need_bucket(self) -> str:
-        if not self.bucket:
-            raise BackupError("No AWS backup bucket is known yet.")
-        return self.bucket
-
     async def upload(self, key: str, path: Path) -> None:
-        bucket = self._need_bucket()
         async with self._session() as s3:
-            await asyncio.to_thread(_retry_new_key, upload_file, s3, bucket, key, path)
+            await asyncio.to_thread(_retry_new_key, upload_file, s3, self.bucket, key, path)
 
     async def latest(self) -> str | None:
-        if not self.bucket:
-            return None
         return await asyncio.to_thread(latest_key, self.cloud.client("s3"), self.bucket)
 
     async def download(self, key: str, path: Path) -> None:
-        bucket = self._need_bucket()
         async with self._session() as s3:
-            await asyncio.to_thread(_retry_new_key, s3.download_file, bucket, key, str(path))
+            await asyncio.to_thread(_retry_new_key, s3.download_file, self.bucket, key, str(path))
 
 
 # -- the archive ----------------------------------------------------------------------------
@@ -690,12 +650,40 @@ def read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
 # -- the service ----------------------------------------------------------------------------
 
 
+def _close_open(rec: dict[str, Any], message: str) -> None:
+    """A run that ends early: the destinations not finished yet failed with `message`."""
+    for entry in rec["destinations"]:
+        if entry["outcome"] == "running":
+            entry.update(outcome="failed", error=message)
+
+
+def _settle(rec: dict[str, Any]) -> None:
+    """The run's outcome: ok only when every destination got the archive."""
+    failed = [e for e in rec["destinations"] if e["outcome"] != "ok"]
+    rec["outcome"] = "failed" if failed or not rec["destinations"] else "ok"
+    rec["error"] = "; ".join(f"{e['kind']}: {e['error']}" for e in failed) or None
+
+
+async def _send(dest, entry: dict[str, Any], days: int, key: str, path: Path) -> None:
+    """Ensure one destination's bucket and upload the archive there. A failure is recorded on
+    its entry only, so the other destinations still get their copy."""
+    try:
+        made = await dest.ensure(days)
+        entry.update(bucketCreated=made["created"], retentionDays=made["retentionDays"])
+        await dest.upload(key, path)
+        entry["outcome"] = "ok"
+    except Exception as e:  # noqa: BLE001  recorded per destination
+        entry.update(outcome="failed", error=describe(e))
+        log.warning("backup to %s (%s) failed: %s", dest.bucket, dest.kind, entry["error"])
+
+
 class BackupService:
     def __init__(self, app, now: Callable[[], datetime] = datetime.now,
                  sleep: Callable[[float], Awaitable[None]] = asyncio.sleep):
         self.app, self.now, self.sleep = app, now, sleep
         self.running = False
-        self.suggestion = suggest_bucket()
+        prefix = getattr(app.state.settings, "cloud_bucket_prefix", "bucketeer-")
+        self.suggestion = suggest_bucket(prefix)
         self._floor = datetime.min
         self._tasks: set[asyncio.Task] = set()
         self.factory: Callable[..., Any] = default_factory  # tests spy on the backup key
@@ -708,15 +696,14 @@ class BackupService:
     def bucket(self) -> str:
         return self.app.state.settings.backup_bucket
 
-    def destination(self) -> "OnPremDestination | AwsDestination":
-        """AWS when the GLOBAL default location is cloud and cloud is available, else on
-        premises. Decided per run: switching the location moves the next backup."""
-        from .location import cloud_available, load_default_location
-
+    def destinations(self) -> list["OnPremDestination | AwsDestination"]:
+        """Every run writes the archive on premises, and to AWS while cloud is configured."""
         s = self.app.state
-        if load_default_location(self.db.settings) == "cloud" and cloud_available(self.app):
-            return AwsDestination(s.cloud, self.db)
-        return OnPremDestination(s.croit, s.settings, s.endpoints, self.factory)
+        out: list = [OnPremDestination(s.croit, s.settings, s.endpoints, self.factory)]
+        cloud = getattr(s, "cloud", None)
+        if cloud is not None:
+            out.append(AwsDestination(cloud, self.bucket))
+        return out
 
     def settings(self) -> dict[str, Any]:
         return load(self.db)
@@ -749,84 +736,113 @@ class BackupService:
         db = self.db
         at = datetime.now(UTC)
         runs = await db.run(self.runs)
+        key = archive_key(at)
         rec: dict[str, Any] = {
             "id": max((r.get("id", 0) for r in runs), default=0) + 1,
             "startedAt": at.isoformat(timespec="seconds"), "finishedAt": None,
-            "trigger": trigger, "actor": actor, "destination": "onprem",
-            "bucket": self.bucket, "key": archive_key(at), "outcome": "running",
-            "bytes": None, "sha256": None, "schemaVersion": None, "envIncluded": None,
-            "error": None,
+            "trigger": trigger, "actor": actor, "bucket": self.bucket, "key": key,
+            "outcome": "running", "destinations": [], "bytes": None, "sha256": None,
+            "schemaVersion": None, "envIncluded": None, "note": None, "error": None,
         }
+        dests: list = []
         try:
-            dest = self.destination()
-            rec["destination"], rec["bucket"] = dest.kind, dest.bucket
+            dests = self.destinations()
+            rec["destinations"] = [{"kind": d.kind, "bucket": d.bucket, "outcome": "running",
+                                    "error": None, "bucketCreated": None,
+                                    "retentionDays": None} for d in dests]
             s = await db.run(self.settings)
-            made = await dest.ensure(s["retentionDays"])
-            rec["bucket"] = dest.bucket
             data_dir = Path(self.app.state.settings.data_dir)
             with tempfile.TemporaryDirectory(
                     prefix=".backup-", dir=data_dir if data_dir.is_dir() else None) as tmp:
                 path, meta = await asyncio.to_thread(build_archive, db, env_path(), Path(tmp), at)
                 body = path.read_bytes()
-                await dest.upload(rec["key"], path)
-            rec.update(outcome="ok", bytes=len(body), sha256=_sha256(body),
-                       schemaVersion=meta["schemaVersion"], envIncluded=meta["envIncluded"],
-                       note=meta["note"], retentionDays=made["retentionDays"])
-            await db.run(db.audit.add, actor, "backup.run", "backup", rec["bucket"], {
-                "trigger": trigger, "key": rec["key"], "bytes": rec["bytes"],
-                "sha256": rec["sha256"], "schemaVersion": rec["schemaVersion"],
-                "envIncluded": rec["envIncluded"], "bucketCreated": made["created"],
-                "retentionDays": made["retentionDays"], "destination": dest.kind})
-            for p in await db.run(db.remove_upgrade_copies):
-                log.info("backup done: removed pre-upgrade copy %s", p)
-            log.info("backup %s written to %s (%s, %d bytes)", rec["key"], rec["bucket"],
-                     rec["destination"], rec["bytes"])
+                rec.update(bytes=len(body), sha256=_sha256(body),
+                           schemaVersion=meta["schemaVersion"], envIncluded=meta["envIncluded"],
+                           note=meta["note"])
+                for dest, entry in zip(dests, rec["destinations"], strict=True):
+                    await _send(dest, entry, s["retentionDays"], key, path)
         except asyncio.CancelledError:
-            rec.update(outcome="failed", error="Stopped by a shutdown.")
+            _close_open(rec, "Stopped by a shutdown.")
             raise
         except Exception as e:  # noqa: BLE001  every failure is recorded and audited
-            rec.update(outcome="failed", error=describe(e))
-            log.warning("backup to %s (%s) failed: %s", rec["bucket"], rec["destination"],
-                        rec["error"])
-            await db.run(db.audit.add, actor, "backup.failed", "backup", rec["bucket"] or "-", {
-                "trigger": trigger, "key": rec["key"], "error": rec["error"],
-                "destination": rec["destination"]})
+            _close_open(rec, describe(e))
+            log.warning("backup %s failed: %s", key, describe(e))
         finally:
             self.running = False
             rec["finishedAt"] = datetime.now(UTC).isoformat(timespec="seconds")
+            _settle(rec)
             with contextlib.suppress(Exception):
                 await db.run(self._save_run, rec)
+        await self._audit(rec, trigger, actor)
         return rec
 
+    async def _audit(self, rec: dict[str, Any], trigger: str, actor: str) -> None:
+        db = self.db
+        try:
+            for e in rec["destinations"]:
+                if e["outcome"] == "ok":
+                    await db.run(db.audit.add, actor, "backup.run", "backup", e["bucket"], {
+                        "trigger": trigger, "key": rec["key"], "bytes": rec["bytes"],
+                        "sha256": rec["sha256"], "schemaVersion": rec["schemaVersion"],
+                        "envIncluded": rec["envIncluded"], "bucketCreated": e["bucketCreated"],
+                        "retentionDays": e["retentionDays"], "destination": e["kind"]})
+                else:
+                    await db.run(db.audit.add, actor, "backup.failed", "backup",
+                                 e["bucket"] or "-", {
+                                     "trigger": trigger, "key": rec["key"], "error": e["error"],
+                                     "destination": e["kind"]})
+            if rec["outcome"] == "ok":
+                for p in await db.run(db.remove_upgrade_copies):
+                    log.info("backup done: removed pre-upgrade copy %s", p)
+                log.info("backup %s written to %s", rec["key"],
+                         ", ".join(f"{e['kind']} {e['bucket']}" for e in rec["destinations"]))
+        except Exception:  # noqa: BLE001  the run itself is already recorded
+            log.exception("could not write the audit entries of backup %s", rec["key"])
+
     async def apply_retention(self) -> None:
-        dest = self.destination()
-        await dest.ensure((await self.db.run(self.settings))["retentionDays"])
+        """Lengthen the lock and lifecycle of every destination's bucket. Raises with every
+        failure named, after trying all of them."""
+        days = (await self.db.run(self.settings))["retentionDays"]
+        errors = []
+        for dest in self.destinations():
+            try:
+                await dest.ensure(days)
+            except Exception as e:  # noqa: BLE001  collected below
+                errors.append(f"{dest.kind}: {describe(e)}")
+        if errors:
+            raise BackupError("; ".join(errors))
 
     async def state(self) -> dict[str, Any]:
         s = await self.db.run(self.settings)
         runs = await self.db.run(self.runs)
-        dest = await self.db.run(self.destination)
-        aws = await self.db.run(load_aws, self.db)
-        bucket_state = None
-        if self.bucket:
-            try:
-                bucket_state = await dest.inspect()
-            except Exception as e:  # noqa: BLE001  shown on the page, not raised
-                bucket_state = {"exists": None, "error": describe(e)}
+        entries = []
+        for dest in self.destinations():
+            entry: dict[str, Any] = {
+                "kind": dest.kind, "bucket": dest.bucket or None, "user": dest.owner,
+                "region": dest.cloud.region if dest.kind == "cloud" else None, "state": None}
+            if self.bucket:
+                try:
+                    entry["state"] = await dest.inspect()
+                except Exception as e:  # noqa: BLE001  shown on the page, not raised
+                    entry["state"] = {"exists": None, "error": describe(e)}
+            entries.append(entry)
+        aws = next((e for e in entries if e["kind"] == "cloud"), None)
         return {
             "configured": bool(self.bucket),
-            "bucket": (dest.bucket or None) if self.bucket else None,
+            "bucket": self.bucket or None,
             "suggestedBucket": None if self.bucket else self.suggestion,
-            "destination": dest.kind, "onpremBucket": self.bucket or None,
-            "awsBucket": aws["bucket"],
-            "region": dest.cloud.region if dest.kind == "cloud" else None,
+            "onpremBucket": self.bucket or None,
+            "awsBucket": (aws["bucket"] if aws else None),
+            "region": aws["region"] if aws else None,
+            "user": entries[0]["user"],
+            "destinations": entries,
             "settings": s,
             "nextRun": (self.next_run().isoformat(timespec="minutes") if self.bucket
                         else None),
-            "running": self.running, "bucketState": bucket_state,
+            "running": self.running,
             "lastRun": runs[0] if runs else None,
             "lastSuccess": next((r for r in runs if r.get("outcome") == "ok"), None),
-            "runs": runs, "user": dest.owner,
+            "runs": runs,
         }
 
     def note_settings_changed(self) -> None:
@@ -1056,33 +1072,6 @@ async def _catch_up(settings: Settings, db: Database, client) -> tuple[str, Any]
 SOURCES = ("onprem", "cloud")
 
 
-def live_backup_state(db_file: Path) -> dict[str, Any]:
-    """From the live database (read only, never migrated): the stored AWS bucket and where
-    the newest successful backup went. Empty values when there is no database."""
-    out: dict[str, Any] = {"awsBucket": None, "lastDestination": None}
-    if not db_file.exists():
-        return out
-    try:
-        conn = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
-        try:
-            rows = dict(conn.execute("SELECT key, value FROM settings WHERE key IN (?, ?)",
-                                     (KEY, RUNS_KEY)).fetchall())
-        finally:
-            conn.close()
-        saved = json.loads(rows.get(KEY) or "{}")
-        runs = json.loads(rows.get(RUNS_KEY) or "[]")
-    except (sqlite3.Error, ValueError):
-        return out
-    if isinstance(saved, dict):
-        name = saved.get("awsBucket")
-        out["awsBucket"] = name if isinstance(name, str) and name else None
-    for r in runs if isinstance(runs, list) else []:
-        if isinstance(r, dict) and r.get("outcome") == "ok" and r.get("destination") in SOURCES:
-            out["lastDestination"] = r["destination"]
-            break
-    return out
-
-
 async def find_aws_bucket(cloud) -> str:
     """The one `<prefix>backup-<12 hex>` bucket in the account (restore on a new machine)."""
     pattern = re.compile(rf"{re.escape(cloud.bucket_prefix)}backup-[0-9a-f]{{12}}\Z")
@@ -1101,7 +1090,7 @@ async def restore(settings: Settings, which: str, *, force: bool = False,
                   factory: Callable[..., Any] = default_factory,
                   out: Callable[[str], None] = print) -> dict[str, Any]:
     """Download, verify and install a backup. Raises BackupError with a clear message.
-    `source` onprem|cloud; None = where the newest successful run went, else onprem."""
+    `source` onprem|cloud; None = on premises."""
     from .cloud import CloudAdmin
     from .credentials import EndpointResolver
     from .croit import CroitClient
@@ -1110,8 +1099,7 @@ async def restore(settings: Settings, which: str, *, force: bool = False,
     if source not in (None, *SOURCES):
         raise BackupError("--from must be onprem or cloud.")
     data_dir = Path(settings.data_dir)
-    live = live_backup_state(data_dir / DB_FILENAME)
-    source = source or live["lastDestination"] or "onprem"
+    source = source or "onprem"
     if source == "onprem" and not settings.backup_bucket:
         raise BackupError("BACKUP_BUCKET is not set in .env.")
     if source == "cloud" and cloud_admin is None:
@@ -1134,8 +1122,8 @@ async def restore(settings: Settings, which: str, *, force: bool = False,
         import time
 
         if source == "cloud":
-            bucket = aws_bucket or live["awsBucket"] or await find_aws_bucket(cloud_admin)
-            dest = AwsDestination(cloud_admin, None, bucket=bucket)
+            bucket = aws_bucket or settings.backup_bucket or await find_aws_bucket(cloud_admin)
+            dest = AwsDestination(cloud_admin, bucket)
         else:
             dest = OnPremDestination(client, settings,
                                      EndpointResolver(client, settings, time.time), factory)

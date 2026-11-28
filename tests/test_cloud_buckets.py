@@ -83,12 +83,13 @@ def test_names_and_system_words(env):
     c = env.cloud
     assert c.bucket_name("Alice", "scans") == "bucketeer-alice-scans"
     assert c.bucket_name("j.doe_x", "a") == "bucketeer-j-doe-x-a"
-    for bad in ("backup", "billing", "backup-x", "Billing.Team"):
+    for bad in ("backup", "billing", "cloud", "backup-x", "Billing.Team", "cloud-billing"):
         with pytest.raises(CloudError) as e:
             c.owner_part(bad)
         assert e.value.code == "reserved"
     assert c.owner_part("backupx") == "backupx"
-    assert {"backup", "billing"} <= cloud.reserved_usernames()
+    assert c.owner_part("cloudx") == "cloudx"  # only the word `cloud` and `cloud-...` are refused
+    assert {"backup", "billing", "cloud"} <= cloud.reserved_usernames()
     p = len("bucketeer-alice-")
     assert cloud_buckets.name_problem("scans", p) == ""
     for bad in ("", "Scans", "a.b", "-a", "a-", "a_b", "x" * (64 - p), "data-s3alias"):

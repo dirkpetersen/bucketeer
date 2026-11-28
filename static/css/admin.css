@@ -231,6 +231,8 @@
 
 /* Backup tab (views/admin-backup.js) */
 .bu-facts { display: grid; gap: var(--sp-3) var(--sp-5); grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); margin: 0; padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
+.bu-dests { display: grid; gap: var(--sp-4); }
+.bu-dest-h { margin: 0 0 var(--sp-2); font-size: var(--fs-sm); font-weight: 600; }
 .bu-fact { display: grid; gap: var(--sp-1); min-width: 0; align-content: start; }
 .set-hint .bu-key { white-space: nowrap; }
 .bu-fact dt { color: var(--text-muted); font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }

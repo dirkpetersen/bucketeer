@@ -142,7 +142,8 @@ def test_failed_run_is_recorded_and_audited(env):
 
     env.app.state.backup.factory = broken
     rec = run_now(env)
-    assert rec["outcome"] == "failed" and rec["error"] == "RuntimeError"
+    assert rec["outcome"] == "failed" and rec["error"] == "onprem: RuntimeError"
+    assert rec["destinations"][0]["outcome"] == "failed"
     (row,) = [a for a in env.db.audit.query(limit=100) if a["action"] == "backup.failed"]
     assert row["target_type"] == "backup" and row["details"]["error"] == "RuntimeError"
     assert env.bob.get("/api/admin/backup").json()["lastSuccess"] is None
@@ -206,10 +207,11 @@ def test_state_before_and_after_the_first_run(env):
     got = env.bob.get("/api/admin/backup").json()
     assert got["configured"] is True and got["bucket"] == BUCKET and got["suggestedBucket"] is None
     assert got["settings"] == {"time": "03:00", "retentionDays": 30}
-    assert got["bucketState"]["exists"] is False and got["runs"] == []
+    assert got["destinations"][0]["state"]["exists"] is False and got["runs"] == []
+    assert got["awsBucket"] is None  # no cloud: one destination only
     assert BACKUP_UID not in env.croit_state.users  # a GET creates nothing
     run_now(env)
-    st = env.bob.get("/api/admin/backup").json()["bucketState"]
+    st = env.bob.get("/api/admin/backup").json()["destinations"][0]["state"]
     assert st == {"exists": True, "objectLock": True, "mode": "COMPLIANCE",
                   "retentionDays": 30, "versioning": "enabled"}
 
@@ -240,7 +242,7 @@ def test_settings_validation_and_audit(env):
     assert put({"retentionDays": 50}).status_code == 200
     lock = s3.get_object_lock_configuration(Bucket=BUCKET)["ObjectLockConfiguration"]
     assert lock["Rule"]["DefaultRetention"]["Days"] == 50
-    assert run_now(env)["retentionDays"] == 50
+    assert run_now(env)["destinations"][0]["retentionDays"] == 50
     # moto refuses a lock change on a bucket with objects: the save still counts, with a warning
     r = put({"retentionDays": 60})
     assert r.status_code == 200 and "next backup run" in r.json()["warning"]
@@ -251,8 +253,8 @@ def test_backups_off(tmp_path, s3_endpoint, env_file):
     e = Env(tmp_path, s3_endpoint)
     try:
         got = e.bob.get("/api/admin/backup").json()
-        assert got["configured"] is False and got["bucketState"] is None
-        assert re.fullmatch(r"bucketeer-[0-9a-f]{12}", got["suggestedBucket"])
+        assert got["configured"] is False and got["destinations"][0]["state"] is None
+        assert re.fullmatch(r"bucketeer-backup-[0-9a-f]{12}", got["suggestedBucket"])
         assert e.app.state.backup.describe_off().endswith(got["suggestedBucket"])
         assert e.bob.post("/api/admin/backup/run", headers=H).status_code == 409
     finally:

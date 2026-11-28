@@ -11,10 +11,11 @@ tags and Cost Explorer's resource data are NOT used: a member account can't see 
   `line_item_product_code == AmazonS3` rows whose usage starts in the month count, summed
   from `line_item_unblended_cost` per `line_item_resource_id` (the bucket name for S3).
   Buckets with `CLOUD_BUCKET_PREFIX` go to `buckets`, except system buckets
-  (`is_system_bucket`: the billing bucket itself and the backup bucket
-  `<prefix>backup-<12 hex>`), which go to `system`. `exportTotal` = the sum of `buckets`
-  (what the sheet should add up to). S3 rows without a resource id (taxes, account-level
-  charges) are `unattributed`; other S3 buckets of the account are `otherS3`.
+  (`is_system_bucket`: the billing bucket `<prefix>cloud-billing-<12 hex>` and the backup
+  bucket `<prefix>backup-<12 hex>`, the same name as on premises), which go to `system`.
+  `exportTotal` = the sum of `buckets` (what the sheet should add up to). S3 rows without a
+  resource id (taxes, account-level charges) are `unattributed`; other S3 buckets of the
+  account are `otherS3`.
   `final` = the month ended and today is the 5th of the next month or later
   (`FINAL_DAY`): AWS has finished it.
 * Files: the newest `*Manifest.json` under `cur/.../metadata/BILLING_PERIOD=<month>/`
@@ -67,10 +68,14 @@ def billing_enabled(app) -> bool:
     return bool(getattr(app.state, "cloud", None) is not None and s.cloud_billing_bucket)
 
 
+_SYSTEM_SUFFIX = r"(backup-[0-9a-f]{12}|cloud-billing-[0-9a-f]{12}|billing-[0-9a-f]{8,12})"
+
+
 def is_system_bucket(name: str, prefix: str, billing_bucket: str) -> bool:
-    """The billing bucket and the backup bucket: Bucketeer's own costs, not a person's."""
+    """Bucketeer's own buckets, not a person's: the billing bucket, the backup bucket and the
+    older `billing-` name (its owner word `billing` is reserved, so a person never gets it)."""
     return bool(name and (name == billing_bucket
-                          or re.fullmatch(re.escape(prefix) + r"backup-[0-9a-f]{12}", name)))
+                          or re.fullmatch(re.escape(prefix) + _SYSTEM_SUFFIX, name)))
 
 
 def is_final(month: str, today: date) -> bool:

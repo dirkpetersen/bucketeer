@@ -213,6 +213,20 @@ class Settings(BaseSettings):
                 raise ValueError("BACKUP_BUCKET: " + " ".join(errors))
         return v
 
+    @model_validator(mode="after")
+    def _check_backup_name_for_cloud(self):
+        # With cloud, the backup bucket has the SAME name in AWS and on premises, and the cost
+        # export and the restore recognise it by this shape (cloud_costs.is_system_bucket).
+        if self.cloud_configured and self.backup_bucket:
+            shape = re.escape(self.cloud_bucket_prefix) + r"backup-[0-9a-f]{12}"
+            if not re.fullmatch(shape, self.backup_bucket):
+                raise ValueError(
+                    "BACKUP_BUCKET: with cloud configured the backup bucket has the same name "
+                    "in AWS and on premises, so it must be "
+                    f"{self.cloud_bucket_prefix}backup- followed by 12 lowercase hex digits "
+                    f"(for example {self.cloud_bucket_prefix}backup-0123456789ab)")
+        return self
+
     @field_validator("s3_profile_name", "cloud_profile_name")
     @classmethod
     def _check_profile(cls, v: str) -> str:

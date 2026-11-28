@@ -172,6 +172,10 @@ def test_system_buckets():
     assert cloud_costs.is_system_bucket(BACKUP, "bucketeer-", BILLING)
     assert not cloud_costs.is_system_bucket("bucketeer-backup-photos", "bucketeer-", BILLING)
     assert not cloud_costs.is_system_bucket("bucketeer-alice-x", "bucketeer-", "")
+    # the billing bucket's name with cloud-billing-, and the older billing-<hex> name
+    assert cloud_costs.is_system_bucket("bucketeer-cloud-billing-0123456789ab", "bucketeer-", "")
+    assert cloud_costs.is_system_bucket("bucketeer-billing-0123abcd", "bucketeer-", "")
+    assert not cloud_costs.is_system_bucket("bucketeer-cloud-billing-x", "bucketeer-", "")
 
 
 def test_final_after_the_fifth():

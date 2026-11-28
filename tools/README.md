@@ -216,8 +216,8 @@ access; CloudWatch S3 metrics; Cost Explorer and the cost allocation tags, `buck
 policies a new default version. `--create-key` prints the `.env` lines once.
 
 `--billing-export` sets up cloud billing (PLAN.md section 3, decision 18): the billing
-bucket `<prefix>billing-<12 hex>` in `--region` (or `--billing-bucket <bucket>`, else the
-bucket the export already delivers to, else an existing `<prefix>billing-*` bucket) with
+bucket `<prefix>cloud-billing-<12 hex>` in `--region` (or `--billing-bucket <bucket>`, else the
+bucket the export already delivers to, else an existing `<prefix>cloud-billing-*` bucket) with
 Block Public Access and a bucket policy that lets only `billingreports.amazonaws.com` and
 `bcm-data-exports.amazonaws.com` deliver (`s3:PutObject`, `s3:GetBucketPolicy`, limited to
 this account by `aws:SourceAccount` and `aws:SourceArn`), and the CUR 2.0 data export

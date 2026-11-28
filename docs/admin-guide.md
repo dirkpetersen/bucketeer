@@ -193,14 +193,16 @@ have a uid mapping; others are listed as problems
 ## Backup
 
 Every night Bucketeer writes its database and its `.env` file to a backup bucket on the
-cluster. The **Backup** tab shows that bucket, its object lock and the last backup, sets the
+cluster and, once cloud is set up, to a bucket with the same name in AWS (see
+[Backups in AWS](#backups-in-aws)). The **Backup** tab shows that bucket, its object lock and the last backup, sets the
 **backup time** (default 03:00 server time) and the **retention** (default 30 days), starts
 a backup with **Back up now** and lists the last 30 runs.
 
 **Turning it on.** Set `BACKUP_BUCKET` in `.env` (with appmotel: `appmo env bucketeer`) and
 restart. While it is empty, backups are off, and the log and the Backup tab suggest a fresh
-name such as `bucketeer-3f9a1c0b7e2d`. Bucketeer never writes `.env` itself. On the first
-run it creates:
+name of the form `<CLOUD_BUCKET_PREFIX>backup-<12 hex digits>`, for example
+`bucketeer-backup-3f9a1c0b7e2d`. Bucketeer never writes `.env` itself. On the first run it
+creates:
 
 - the RGW user `bucketeer-backup`, which owns the bucket. It is not a person: it is hidden
   from the admin lists, billing and offboarding, and nobody can log in as it, map to it or
@@ -228,16 +230,21 @@ Keep in mind:
 
 ### Backups in AWS
 
-When the **global default location** is Cloud (Location tab) and the AWS connection check
-passes, each run writes to AWS instead (`BACKUP_BUCKET` still turns backups on and off). If
-the check fails, the run goes on premises. Switching the location only moves the **next**
-backup: earlier backups stay where they were written and roll off there. The Backup tab
-shows where backups go now, the bucket in use and the bucket in the other place.
+Once cloud is set up (`CLOUD_ADMIN_*` in `.env`), every run writes the archive to **two
+places at once**: the backup bucket on premises and a bucket in AWS with **the same name**,
+`BACKUP_BUCKET`. The name must be `<CLOUD_BUCKET_PREFIX>backup-` followed by 12 lowercase
+hex digits (Bucketeer refuses to start otherwise), so the same name can be used on both
+sides and recognised as Bucketeer's own. Each copy is tried on its own: the run is shown as
+**failed** when either copy fails (the Backup tab says which place failed), and the copy that
+succeeded is kept. The location switch no longer changes where backups go.
 
-On the first cloud run Bucketeer's AWS admin user creates:
+If the AWS copy fails because the name is already taken by another AWS account, pick another
+name of that form and set it as `BACKUP_BUCKET` in `.env` (then restart). Bucketeer's
+database keeps the backups written under the old name, so they stay where they were.
 
-- the bucket `<CLOUD_BUCKET_PREFIX>backup-<random>` in `CLOUD_REGION`. Its name is stored in
-  Bucketeer's database and shown on the Backup tab. Like on premises it has **object lock in
+On the first run Bucketeer's AWS admin user creates:
+
+- the bucket named `BACKUP_BUCKET` in `CLOUD_REGION`. Like on premises it has **object lock in
   COMPLIANCE mode** with the same retention, versioning and lifecycle rules, plus Block
   Public Access, SSE-S3 encryption at rest and the tags `bucketeer-bucket`,
   `bucketeer-product=system` and `bucketeer-location=cloud`. In AWS not even the root user
@@ -262,14 +269,14 @@ Stop Bucketeer, then run in its folder:
 .venv/bin/python3 app.py --restore-backup latest
 # or a given archive:
 .venv/bin/python3 app.py --restore-backup backup/bucketeer-2026-11-24T0300Z.tar.gz
-# choose the place (default: where the newest backup went, else on premises):
+# choose the place (default: on premises):
 .venv/bin/python3 app.py --restore-backup latest --from cloud
 ```
 
-From AWS it needs the `CLOUD_*` settings and takes the bucket name from the database; on a
-new machine without a database it finds the single `<prefix>backup-*` bucket in the
-account, or you name it with `--aws-bucket NAME`. It uses a temporary key of the backup
-IAM user exactly like a backup run.
+From AWS it needs the `CLOUD_*` settings and takes the bucket name from `BACKUP_BUCKET`. If
+that is not set (a new machine) it finds the single `<prefix>backup-*` bucket in the account,
+or you name it with `--aws-bucket NAME`. It uses a temporary key of the backup IAM user
+exactly like a backup run.
 
 It downloads the archive with the backup user's key, checks the SHA-256 of every file and
 refuses to run while Bucketeer still answers on its port (`--force` overrides that). Then it:
@@ -353,7 +360,8 @@ permissions boundary `BucketeerUserBoundary` and the tag `bucketeer-owner=<usern
   already exists but Bucketeer did not make it (another path, no boundary, or no owner tag
   for that person), the person is told to ask an administrator and the audit log has
   `cloud.user.refused`. Remove or rename the old user, then the person can try again.
-  Usernames `bucketeer-admin`, `bucketeer-backup`, `backup` and `billing` never get cloud.
+  Usernames `bucketeer-admin`, `bucketeer-backup`, `backup`, `billing` and `cloud` never get
+  cloud.
 - **Access comes from each bucket's own policy.** The user's inline policy
   `bucketeer-buckets` only lets them list buckets. Each cloud bucket's bucket policy has a
   `bucketeer-owner` statement naming its owner's IAM user. Bucketeer does not use a name
@@ -369,9 +377,9 @@ permissions boundary `BucketeerUserBoundary` and the tag `bucketeer-owner=<usern
 
 **5. Cloud buckets.** People create them on the bucket card while they work in Cloud. Each
 is `<CLOUD_BUCKET_PREFIX><username>-<name>` in `CLOUD_REGION` (dots, `_`, `@` and `+` in the
-username become hyphens; usernames `backup` and `billing`, or starting with `backup-` or
-`billing-`, get no cloud buckets, since those names belong to the backup and billing
-buckets). Bucketeer's admin user creates each bucket and sets Block Public Access, SSE-S3
+username become hyphens; usernames `backup`, `billing` and `cloud`, or starting with
+`backup-`, `billing-` or `cloud-`, get no cloud buckets, since those names belong to the
+backup and billing buckets). Bucketeer's admin user creates each bucket and sets Block Public Access, SSE-S3
 default encryption, *Bucket owner enforced*, versioning (on by default, old versions expire
 after 30 days), a lifecycle rule `bucketeer-class` that moves every object to
 Intelligent-Tiering or Glacier Deep Archive on day 0, a rule that aborts unfinished uploads
@@ -401,8 +409,9 @@ name. No cost allocation tags or Cost Explorer access are needed (a member accou
 AWS Organization doesn't get them).
 
 1. An AWS administrator runs the setup again with `--billing-export`. It creates the
-   billing bucket `<prefix>billing-<random>` (public access blocked, a policy that lets
-   only AWS billing for this account deliver into it), the export `<prefix>s3-costs`, and
+   billing bucket `<prefix>cloud-billing-<random>` (used for cost data only; public access
+   blocked, a policy that lets only AWS billing for this account deliver into it), the
+   export `<prefix>s3-costs`, and
    lets Bucketeer's admin user read that one bucket (and still no other objects):
 
     ```bash

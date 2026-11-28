@@ -23,7 +23,8 @@ It never touches user data: objects are reached only with a person's own key (P6
   named `bucketeer-backup` never reaches the backup IAM user.
 - Backups (P6-12, `backup.AwsDestination`): `backup_user_name()` =
   `<CLOUD_USER_PREFIX>bucketeer-backup` (path `/bucketeer/`, with the boundary
-  `boundary_arn(account)`), `new_backup_bucket_name()` = `<CLOUD_BUCKET_PREFIX>backup-<12 hex>`,
+  `boundary_arn(account)`); the backup bucket is `BACKUP_BUCKET` itself,
+  `<CLOUD_BUCKET_PREFIX>backup-<12 hex>` (see `backup.AwsDestination`),
   `s3_with_key(access, secret)` a plain S3 client for the backup user's temporary key.
 - Person IAM users (P6-9; orchestration, SQLite and audit live in `cloud_users.py`):
   `account_id()` (STS, cached), `person_boundary_arn()`, `create_person_user` (path
@@ -49,7 +50,6 @@ import asyncio
 import json
 import logging
 import re
-import secrets
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -89,10 +89,11 @@ OBJECT_ACTIONS = [
     "s3:DeleteObjectVersion", "s3:DeleteObjectTagging", "s3:AbortMultipartUpload",
     "s3:ListMultipartUploadParts", "s3:RestoreObject",
 ]
-# `backup` / `billing` would put a person's cloud buckets next to the system buckets
-# `<prefix>backup-*` and `<prefix>billing-*` (P6-10), so they are refused for cloud too.
-RESERVED_USERNAMES = frozenset({"bucketeer-admin", "bucketeer-backup", "backup", "billing"})
-SYSTEM_BUCKET_WORDS = ("backup", "billing")
+# `backup`, `billing` and `cloud` would put a person's cloud buckets next to the system buckets
+# `<prefix>backup-*` and `<prefix>cloud-billing-*` (P6-10), so they are refused for cloud too.
+RESERVED_USERNAMES = frozenset({"bucketeer-admin", "bucketeer-backup", "backup", "billing",
+                                "cloud"})
+SYSTEM_BUCKET_WORDS = ("backup", "billing", "cloud")
 # A new IAM user's ARN is accepted in a bucket policy only after IAM propagates it (about 5 s
 # on AWS): until then PutBucketPolicy answers MalformedPolicy "Invalid principal in policy".
 # grant_bucket_owner retries with these waits (seconds, about a minute in all).
@@ -229,9 +230,6 @@ class CloudAdmin:
 
     def backup_user_name(self) -> str:
         return f"{self.user_prefix}{BACKUP_USER}"
-
-    def new_backup_bucket_name(self) -> str:
-        return f"{self.bucket_prefix}backup-{secrets.token_hex(6)}"
 
     @staticmethod
     def boundary_arn(account: str) -> str:

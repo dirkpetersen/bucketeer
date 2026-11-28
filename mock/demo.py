@@ -188,7 +188,7 @@ DEMO_PLACEMENT = {"default": "default-placement",
 
 
 TIB = 2**40
-DEMO_BACKUP_BUCKET = "bucketeer-demo-backup"
+DEMO_BACKUP_BUCKET = "bucketeer-backup-00000000dd0a"
 # Bucket quotas (TiB) the demo gives the seeded buckets, and the sizes its billing readings
 # pretend they had (moto holds only a few bytes): the Billing tab and the bucket list get data.
 DEMO_QUOTAS = {"alice-data": 2, "alice-empty": 1, "bob-shared": 5}

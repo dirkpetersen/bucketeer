@@ -344,6 +344,12 @@ the item lands.
 - [x] P6-12 Backups to AWS (PLAN 5): when the global location is Cloud, back up to an AWS
   bucket with the same object-lock rules through a dedicated backup IAM user (keys made and deleted per
   run, `--restore-backup --from cloud`).
+- [x] P6-15 Shared backup name and two destinations (2026-11-27): while cloud is configured
+  every run writes the archive to the on-premises bucket AND to AWS; both have the name
+  `BACKUP_BUCKET` = `<CLOUD_BUCKET_PREFIX>backup-<12 hex>` (refused at startup otherwise),
+  each destination is tried on its own (`destinations[]` in the run); the cost export has its
+  own bucket `<prefix>cloud-billing-<12 hex>`; `cloud` is a reserved owner word; the old
+  `<prefix>backup-<random>` AWS name and the location switch for backups are gone.
 - [x] P6-13 Typed-name confirmation for every bucket delete; cloud buckets with content (owner request 2026-11-25)
 - [x] P6-14 Cloud buckets in admin views, chargeback CSV and rebuild (Q19)
 
