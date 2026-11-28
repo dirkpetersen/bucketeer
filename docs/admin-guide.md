@@ -201,6 +201,7 @@ What comes back:
 | Bucket keys | the key users (`owner+label`) and their `bucketeer-key-<id>` policy statements: same id, owner (from the key user's display name), bucket, access, the public half of the key, suspended or not. |
 | Shares | the `bucketeer-share-*` policy statements whose person still has an S3 account. |
 | Cloud buckets | only when cloud is configured: every `<CLOUD_BUCKET_PREFIX>*` bucket in the AWS account except the backup and billing buckets, from its `bucketeer-*` tags read by Bucketeer's AWS admin user: owner, creator, creation date, budget number, quota, and the storage class from the bucket's `bucketeer-class` lifecycle rule (else its product tag). Only the admin user can write tags on cloud buckets, so here the tags are trusted. A bucket without an owner tag gets no row; a missing quota tag becomes the default quota and is listed as a problem. |
+| Cloud shares | only when cloud is configured: the `bucketeer-share-*` statements of those buckets whose IAM user Bucketeer still has on record (its person and S3 account). Others are listed as problems; sharing again repairs them. |
 
 A tag owner that differs from Ceph's is reported, and that bucket's tags are rewritten
 at the owner's next visit.
@@ -485,6 +486,18 @@ needs its typed name; one with data is emptied by a background job that uses a t
 key of the owner's IAM user (deleted again afterwards; a person with two keys is asked to
 delete one first). Audit: `cloud.bucket.create`, `quota`, `budget`, `delete`,
 `delete_started`, `delete_failed`, `delete_retry`.
+
+**6. Sharing cloud buckets.** Owners share a cloud bucket with colleagues like an on-premises
+one (the same rules for who can receive a share). The recipient gets an IAM user on the spot
+if they have none (never a key; the usual refusal applies to an IAM user Bucketeer did not
+make), and the bucket policy gets one statement per recipient, `bucketeer-share-i-<IAM user>`,
+written by Bucketeer's admin user: read-only = list the bucket and its versions, download;
+read and write adds upload, delete (versions too), unfinished-upload clean-up and Deep Archive
+restores. Recipients never get policy, ACL, lifecycle or bucket-delete rights, and every
+action is inside `BucketeerUserBoundary`, so `tools/aws-setup` needs no change. Bucketeer
+edits only `bucketeer-*` statements and keeps any others. Deleting the bucket ends its shares.
+Audit: `cloud.bucket.share`, `share_update`, `unshare` (the recipient's IAM user made for a
+share is `cloud.user.create` by the owner, `via: share`).
 
 !!! note "Profile names changed"
     The on-premises profile on users' computers is now `s3-onprem` (`S3_PROFILE_NAME`; it

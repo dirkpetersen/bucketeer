@@ -18,7 +18,8 @@ cloud jobs to `run` here. One run, per round (at most `bucket_delete.MAX_ROUNDS`
    was written meanwhile) puts the statement back and runs another round.
 
 Versions S3 refuses to remove end the job `failed` with a count (cloud buckets have no
-object lock). Done: SQLite row removed, audit `cloud.bucket.delete` (objects/bytes deleted,
+object lock). Done: SQLite row removed, its shares marked revoked
+(`cloud_sharing.revoke_for_deleted_bucket`), audit `cloud.bucket.delete` (objects/bytes deleted,
 `job`). Other audit: `cloud.bucket.delete_failed` (from `bucket_delete._end`). The secret
 lives only in this function's locals and the boto3 client; it is never stored, logged or
 audited.
@@ -222,5 +223,8 @@ async def _finish(app, job_id: int) -> None:
     await _audit(app, job["owner_ad"], "cloud.bucket.delete", full, uid=job["owner_uid"],
                  objects=job["deleted_objects"], bytes=job["deleted_bytes"],
                  dataDeleted=job["deleted_objects"] > 0, job=job_id, **details)
+    from .cloud_sharing import revoke_for_deleted_bucket
+
+    await revoke_for_deleted_bucket(app, job["owner_ad"], full, job["owner_uid"])
     log.info("cloud bucket %s emptied and deleted (job %s)", full, job_id)
 

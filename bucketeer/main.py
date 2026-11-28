@@ -29,6 +29,7 @@ from . import (
     buckets,
     cloud,
     cloud_buckets,
+    cloud_sharing,
     cloud_users,
     cors,
     credentials,
@@ -252,6 +253,7 @@ def create_app(
     api.include_router(credentials.router)
     api.include_router(cloud_users.router)
     api.include_router(cloud_buckets.router)
+    api.include_router(cloud_sharing.router)
     api.include_router(subusers.router)
     api.include_router(profile.router)
     api.include_router(activity.router)

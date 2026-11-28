@@ -244,7 +244,8 @@ async def _sweep(request: Request, acct: RgwAccount, actor: str, full: str) -> N
 
 
 def _mine(acct: RgwAccount, row: dict | None, full: str) -> bool:
-    return bool(row) and row["bucket_name"] == full and same_uid(row["owner_uid"], acct.uid)
+    return (bool(row) and row.get("location", "onprem") == "onprem"
+            and row["bucket_name"] == full and same_uid(row["owner_uid"], acct.uid))
 
 
 async def _owned(request: Request, acct: RgwAccount, name: str,

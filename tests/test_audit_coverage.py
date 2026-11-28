@@ -54,6 +54,9 @@ ROUTES: dict[str, tuple[str, ...]] = {
     "PUT /api/cloud/buckets/{name}/budget": ("cloud.bucket.budget",),
     "DELETE /api/cloud/buckets/{name}": ("cloud.bucket.delete",),
     "POST /api/cloud/buckets/delete-jobs/{job_id}/retry": ("cloud.bucket.delete_retry",),
+    "POST /api/cloud/buckets/{name}/shares": ("cloud.bucket.share", "cloud.user.create"),
+    "PUT /api/cloud/buckets/{name}/shares/{share_id}": ("cloud.bucket.share_update",),
+    "DELETE /api/cloud/buckets/{name}/shares/{share_id}": ("cloud.bucket.unshare",),
     "POST /api/subusers": ("subuser.create",),
     "PATCH /api/subusers/{name}": ("subuser.update",),
     "DELETE /api/subusers/{name}": ("subuser.delete",),
@@ -162,7 +165,8 @@ ACTION_EXCEPTIONS = {"logout"}  # pre-dates the scheme; kept so old log rows sti
 TARGET_TYPES = {"user", "rgw_user", "bucket", "bucket_key", "access_key", "profile", "setting",
                 "uid_mapping", "notification_endpoint", "report", "offboarding_run", "subuser",
                 "backup", "database", "cloud_user", "alert"}
-ACTORS = {"alice", "bob", "dave", "system", "mallory"}
+# carol: the cloud share's recipient, whose S3 account is made on the spot (rgw.user.create)
+ACTORS = {"alice", "bob", "carol", "dave", "system", "mallory"}
 
 SECRET_PATTERNS = [
     re.compile(r"Signature=", re.I),
@@ -314,8 +318,21 @@ def run(tmp_path_factory, moto_server):
         "Dimensions": [{"Name": "BucketName", "Value": "bucketeer-alice-cov"},
                        {"Name": "StorageType", "Value": "IntelligentTieringFAStorage"}]}])
     r.step("event", lambda: asyncio.run(cloud_buckets.alert_tick(env.app)))  # over quota
+    # sharing it (tests/test_cloud_sharing.py): carol's IAM user is made on the spot
+    csh = r.step("POST /api/cloud/buckets/{name}/shares", lambda: a.post(
+        "/api/cloud/buckets/cov/shares", json={"login": "carol", "access": "read"},
+        headers=H)).json()["id"]
+    r.step("PUT /api/cloud/buckets/{name}/shares/{share_id}", lambda: a.put(
+        f"/api/cloud/buckets/cov/shares/{csh}", json={"access": "readwrite"}, headers=H))
+    r.step("DELETE /api/cloud/buckets/{name}/shares/{share_id}", lambda: a.delete(
+        f"/api/cloud/buckets/cov/shares/{csh}", headers=H))
+    ok(a.post("/api/cloud/buckets/cov/shares", json={"login": "carol", "access": "read"},
+              headers=H))  # live again: deleting the bucket revokes it (reason bucket_deleted)
     r.step("DELETE /api/cloud/buckets/{name}", lambda: a.request(
         "DELETE", "/api/cloud/buckets/cov", headers=H, json={"confirmName": "cov"}))
+    assert any(x["action"] == "cloud.bucket.unshare"
+               and x["details"].get("reason") == "bucket_deleted"
+               for x in env.db.audit.query(limit=20))
     # a cloud bucket with content: a job with a temporary key of the owner's IAM user; it
     # fails while the person has two keys, then is retried (tests/test_cloud_delete.py)
     ok(a.post("/api/cloud/buckets", json={**cb, "name": "full"}, headers=H))

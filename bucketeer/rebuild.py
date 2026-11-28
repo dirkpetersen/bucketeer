@@ -35,6 +35,11 @@ admin client's bucket list, never from a tag):
   trustworthy: only the admin user can write tags on cloud buckets. A bucket without an owner
   tag gets no row (`no_owner_tag`). The report then has `added.cloud_buckets` and entries with
   table `cloud_buckets`. AWS trouble listing the buckets is a problem, never fails the run.
+  Cloud shares: every `bucketeer-share-*` statement of such a bucket (read by the admin user)
+  whose principal is an IAM user recorded in `cloud_accounts` (AD name) with a
+  `known_accounts` row (RGW uid) gives a live `location = 'cloud'` share row (access from the
+  actions, `created_by` `system`); others are reported (`recipient_unknown`,
+  `recipient_uid_unknown`). Counted in `added.cloud_shares`, items table `cloud_shares`.
 
 Modes: `fill_gaps=True` only inserts what is missing and never updates or deletes a row.
 `fill_gaps=False` ("full") refuses (`RebuildRefused`) unless the three tables are empty or
@@ -144,6 +149,7 @@ class _Run:
         self.added = dict.fromkeys(TABLES, 0)
         if self.cloud is not None:
             self.added["cloud_buckets"] = 0
+            self.added["cloud_shares"] = 0
         self.skipped: list[dict] = []
         self.problems: list[dict] = []
 
@@ -309,6 +315,12 @@ class _Run:
         except CloudError as e:
             if e.code != "NoSuchLifecycleConfiguration":
                 self.problem("cloud_buckets", name, "lifecycle_unreadable", e.code or "error")
+        try:
+            out["shares"] = [st for st in await self.cloud.bucket_statements(name)
+                             if str(st.get("Sid") or "").startswith(SHARE_PREFIX)]
+        except CloudError as e:
+            out["shares"] = []
+            self.problem("cloud_shares", name, "policy_unreadable", e.code or "error")
         return out
 
     def _storage_class(self, name: str, rules: list, product: str | None,
@@ -370,7 +382,42 @@ class _Run:
             return self.problem("cloud_buckets", name, "insert_failed", type(e).__name__)
         self.added["cloud_buckets"] += 1
 
-    async def run_cloud(self) -> None:
+    async def cloud_share_row(self, full: str, st: dict, users: dict[str, dict],
+                              accounts: dict[str, str]) -> None:
+        """A `bucketeer-share-*` statement of a cloud bucket -> a live cloud share row. The
+        recipient is found by its IAM user in `cloud_accounts` (AD name) and `known_accounts`
+        (RGW uid); without both it is only reported."""
+        from .cloud import share_sid, statement_access, statement_user
+
+        db, item = self.db, f"{full} {st.get('Sid')}"
+        row = await db.run(db.buckets.get, full, "cloud")
+        if row is None:
+            return self.skip("cloud_shares", item, "no_bucket_row")
+        iam = statement_user(st)
+        if not iam or share_sid(iam) != st.get("Sid"):
+            return self.problem("cloud_shares", item, "bad_principal")
+        if await db.run(db.shares.live_cloud_for, full, iam) is not None:
+            return self.skip("cloud_shares", item, "exists")
+        ad = accounts.get(iam)
+        if ad is None:
+            return self.problem("cloud_shares", item, "recipient_unknown", iam)
+        known = await db.run(db.known_accounts.get, ad)
+        if known is None:
+            return self.problem("cloud_shares", item, "recipient_uid_unknown", ad)
+        uid = known["rgw_uid"]
+        if same_uid(uid, row["owner_uid"]):
+            return self.skip("cloud_shares", item, "recipient_is_owner")
+        owner_name = str((users.get(row["owner_uid"]) or {}).get("name") or "")
+        try:
+            await db.run(lambda: db.shares.create(
+                full, row["owner_uid"], owner_name, ad, uid,
+                str((users.get(uid) or {}).get("name") or ""), statement_access(st), "system",
+                location="cloud", recipient_iam=iam))
+        except sqlite3.Error as e:
+            return self.problem("cloud_shares", item, "insert_failed", type(e).__name__)
+        self.added["cloud_shares"] += 1
+
+    async def run_cloud(self, users: dict[str, dict] | None = None) -> None:
         from .bucket_quota import load_settings
         from .cloud import CloudError
         from .cloud_costs import is_system_bucket
@@ -382,6 +429,7 @@ class _Run:
             return self.problem("cloud_buckets", "*", "aws_unavailable", e.code or "error")
         cat = await self.db.run(catalog.load_catalog, self.db)
         default_tib = (await self.db.run(load_settings, self.db.settings))["defaultQuotaTiB"]
+        shares: list[tuple[str, dict]] = []
         for b in sorted(str(x.get("Name") or "") for x in listed):
             if not b:
                 continue
@@ -390,10 +438,16 @@ class _Run:
                 self.skip("cloud_buckets", b, "system_bucket")
                 continue
             got = await self._cloud_read(b)
+            shares += [(b, st) for st in got.get("shares", [])]
             if "tags_error" in got:
                 self.problem("cloud_buckets", b, "tags_unreadable", got["tags_error"])
                 continue
             await self.cloud_row(b, got, cat, default_tib)
+        if shares:
+            accounts = {a["iam_user"]: a["ad_username"]
+                        for a in await self.db.run(self.db.cloud_accounts.list)}
+            for b, st in shares:
+                await self.cloud_share_row(b, st, users or {}, accounts)
 
     # -- the run -------------------------------------------------------------------------
 
@@ -449,7 +503,7 @@ class _Run:
         for full, owner, st in shares:
             await self.share_row(full, owner, st, users)
         if self.cloud is not None:
-            await self.run_cloud()
+            await self.run_cloud(users)
         return self.report()
 
 

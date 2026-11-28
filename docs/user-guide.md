@@ -151,7 +151,15 @@ When you work in **Cloud**, the bucket card lists your **cloud buckets** at AWS 
   deletion stops and asks you to delete one of them first, then **Retry**. **Deep Archive:**
   objects stored for less than 180 days are still charged for the full 180 days when you
   delete them (AWS's early deletion fee).
-- Sharing, bucket keys and share links are on premises only for now.
+- **Sharing.** **Share** on a cloud bucket row works as on premises: pick a colleague,
+  read-only (list and download) or read and write (also upload, overwrite and delete; and
+  start Deep Archive restores, which cost money). Bucketeer gives them a cloud account if
+  they have none yet (without a key) and adds them to the bucket's policy; they get an
+  email when the portal sends mail. They see the bucket under **Shared with you** while they
+  work in Cloud, with its full AWS name, and use their own cloud key (profile `s3-cloud`,
+  made with **Set up this computer** in Cloud). **Revoke** takes the access away at once;
+  deleting the bucket ends every share.
+- Bucket keys and share links are on premises only.
 
 ## 5. Everyday tasks
 
@@ -159,7 +167,7 @@ Each bucket row has the tasks you need most. Rare ones are in the **More** menu.
 
 | Task | Where |
 |---|---|
-| Share a bucket with a colleague (read-only or read-write) | **Share** on the bucket row. They see it under **Shared with you** (on premises only; cloud has no sharing yet), and get an email when the portal sends mail. |
+| Share a bucket with a colleague (read-only or read-write) | **Share** on the bucket row. They see it under **Shared with you** (cloud buckets while they work in Cloud), and get an email when the portal sends mail. |
 | Send one file to anyone, for up to 7 days | **More, Share link** |
 | A key for one bucket only (for a script or instrument) | **More, Keys** |
 | Delete old files or old versions automatically | **More, Lifecycle** |
