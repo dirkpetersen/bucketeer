@@ -15,7 +15,8 @@ partial}`. A row shows when it is
   cannot answer, the SQLite rows; cloud from the SQLite rows), never rows from before a
   bucket's recorded creation (an earlier owner's bucket of the same name);
 - a share of somebody else's bucket that names them as the recipient (`bucket.share|
-  share_update|unshare` whose `details.uid` is their uid).
+  share_update|unshare` whose `details.uid` is their uid, or `cloud.bucket.share|share_update|
+  unshare` whose `details.recipient` is their AD name).
 Other people's rows about the same names (an earlier owner of a bucket, someone who typed the
 person's username at login) never show. `partial` is true when the account or the bucket list
 could not be read, so admin/system rows about them may be missing.
@@ -53,6 +54,9 @@ router = APIRouter(tags=["activity"])  # mounted under /api in main.create_app
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
 SHARE_ACTIONS = ("bucket.share", "bucket.share_update", "bucket.unshare")
+# cloud shares (cloud_sharing.py) name the recipient by AD name in `details.recipient`
+CLOUD_SHARE_ACTIONS = ("cloud.bucket.share", "cloud.bucket.share_update",
+                       "cloud.bucket.unshare")
 # The actor of these is the name typed into the login form, not an authenticated person.
 TYPED_LOGIN_ACTIONS = ("login.failure", "login.throttled")
 _TOP = 2**63 - 1
@@ -128,6 +132,13 @@ def _sql(scope: Scope, before_id: int | None, limit: int) -> tuple[str, dict[str
             f"AND action IN ({shares}) AND id < :before "
             "AND lower(CASE WHEN json_valid(details) THEN json_extract(details, '$.uid') END) "
             "= lower(:uid) ORDER BY id DESC LIMIT :n")
+    # (d) somebody else's cloud bucket shared with the person (details.recipient = AD name)
+    cloud_shares = ", ".join(f"'{a}'" for a in CLOUD_SHARE_ACTIONS)
+    branches.append(
+        f"SELECT {_COLS} FROM audit_log WHERE +target_type = 'bucket' "
+        f"AND action IN ({cloud_shares}) AND id < :before "
+        "AND lower(CASE WHEN json_valid(details) THEN json_extract(details, '$.recipient') END) "
+        "= :me_lower ORDER BY id DESC LIMIT :n")
     sql = " UNION ".join(f"SELECT * FROM ({b})" for b in branches)
     return f"{sql} ORDER BY id DESC LIMIT :n", p
 
@@ -167,9 +178,12 @@ def entry(r: dict[str, Any], scope: Scope) -> dict[str, Any]:
     d = _details(r["details"])
     mine = same_name(str(r["actor"]), scope.username)
     uid = d.get("uid")
-    received = bool(
-        not mine and scope.uid and r["target_type"] == "bucket" and r["action"] in SHARE_ACTIONS
-        and isinstance(uid, str) and uid.lower() == scope.uid.lower())
+    recipient = d.get("recipient")
+    received = bool(not mine and r["target_type"] == "bucket" and (
+        (scope.uid and r["action"] in SHARE_ACTIONS
+         and isinstance(uid, str) and uid.lower() == scope.uid.lower())
+        or (r["action"] in CLOUD_SHARE_ACTIONS and isinstance(recipient, str)
+            and same_name(recipient, scope.username))))
     actor = ("you" if mine else "bucketeer" if r["actor"] == "system"
              else "owner" if received else "admin")
     ctx = _Ctx(str(r["action"]), d, mine, received, scope)
@@ -183,7 +197,8 @@ def area(action: str) -> str:
     """bucket | key | share | account | profile | cloud | login | other (the UI's icon)."""
     if action in ("login.success", "logout"):
         return "login"
-    if action.startswith("bucket.share") or action == "bucket.unshare":
+    if action.startswith(("bucket.share", "cloud.bucket.share")) or action in (
+            "bucket.unshare", "cloud.bucket.unshare"):
         return "share"
     if action.startswith("cloud."):
         return "cloud"
@@ -670,6 +685,9 @@ SUMMARIES: dict[str, Callable[[_Ctx], str]] = {
     "bucket.share": _share,
     "bucket.share_update": _share_update,
     "bucket.unshare": _unshare,
+    "cloud.bucket.share": _share,
+    "cloud.bucket.share_update": _share_update,
+    "cloud.bucket.unshare": _unshare,
     "admin.bucket.quota": _admin_bucket_quota,
     "cloud.bucket.create": _cloud_create,
     "cloud.bucket.create_failed": _fixed("Cloud bucket could not be created"),

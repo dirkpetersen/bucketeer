@@ -350,6 +350,18 @@ the item lands.
   each destination is tried on its own (`destinations[]` in the run); the cost export has its
   own bucket `<prefix>cloud-billing-<12 hex>`; `cloud` is a reserved owner word; the old
   `<prefix>backup-<random>` AWS name and the location switch for backups are gone.
+- [x] P6-16 Backup safety (2026-11-28): restore test after the nightly backup every
+  `restoreTestDays` and by hand (archive hashes, integrity check, nothing live touched);
+  `--backup-bucket` for restore; admin alert emails (`alerts.py`) for failed backups, restore
+  tests and offboarding runs, and for no backup in 48 h (Q20).
+- [x] P6-17 User notices (2026-11-28): near-full on-premises buckets and old access keys,
+  daily emails (`notices.py`), `key_ages` table, "Nearly full" / "Rotate soon" chips (Q21).
+- [x] P6-18 My activity (2026-11-28): `GET /api/activity`, `#/activity` (Q22).
+- [x] P6-19 Cloud sharing (2026-11-28): share cloud buckets with people, read-only or
+  read-write, bucket policy statements per recipient; share links and bucket keys stay
+  on premises only (Q23).
+- [x] P6-20 Finance (2026-11-28): spend per budget number on the Billing tab with CSV, and a
+  storage growth forecast on the admin Buckets tab and the user's bucket list (Q24).
 - [x] P6-13 Typed-name confirmation for every bucket delete; cloud buckets with content (owner request 2026-11-25)
 - [x] P6-14 Cloud buckets in admin views, chargeback CSV and rebuild (Q19)
 

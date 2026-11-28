@@ -61,6 +61,74 @@ Each question has a recommendation. Answering "ok" accepts it.
 
 **Answer:** yes (2026-11-25).
 
+### Q20: Backup safety defaults (restore test, alert emails)
+
+- **Blocks:** nothing.
+- **Context:** the restore test, `--backup-bucket` and the admin alert emails (2026-11-28).
+- **Default being built:**
+  - A restore test runs after a successful scheduled backup every 30 days (`restoreTestDays`, 0 = off); a failed test is tried again after the next good backup.
+  - A backup is never blocked by a running restore test, but a restore test waits for a running backup.
+  - Alerts go out for manual runs as well as scheduled ones.
+  - Alerts are sent before the request answers, so a failing "Back up now" waits for the email.
+  - With email off or no contacts, alerts are only logged.
+  - "No backup for 48 hours" is checked by the backup loop and mailed at most once a day.
+- **Recommendation:** keep these.
+
+**Answer:**
+
+### Q21: User notice defaults (near-full buckets, key age)
+
+- **Blocks:** nothing.
+- **Context:** the daily notices (`notices.py`).
+- **Default being built:**
+  - The pass runs at 07:00 server time; a failed pass is retried after an hour.
+  - Near-full means 90 % of the quota, mailed at most weekly per bucket; suspended owners get no email.
+  - Keys older than 180 days get a reminder at most monthly per key: one email per person, separately for on-premises and cloud keys.
+  - On-premises keys made before this change count from the first time Bucketeer sees them ("at least N days").
+  - The key list GETs record that first sighting: the one exception to "GETs never change state".
+- **Recommendation:** keep these.
+
+**Answer:**
+
+### Q22: My activity defaults
+
+- **Blocks:** nothing.
+- **Context:** `GET /api/activity` and the `#/activity` page.
+- **Default being built:**
+  - The page shows your own actions, plus actions by Bucketeer or an admin on your account, keys and buckets, plus shares you received.
+  - Admins appear as "An administrator", share owners as "The bucket's owner"; no other person's name is shown.
+  - Your own sign-ins are listed. Failed sign-ins with your username are not, because anyone can type a username.
+  - Rows written about your bucket names by other people (for example a previous owner of a reused name) are never shown.
+- **Recommendation:** keep these.
+
+**Answer:**
+
+### Q23: Cloud sharing defaults
+
+- **Blocks:** nothing.
+- **Context:** sharing cloud (AWS) buckets read-only or read-write (`cloud_sharing.py`). This reverses the earlier "cloud v1 has no sharing" decision for sharing only; share links and bucket keys stay on premises only.
+- **Default being built:**
+  - Only read-write recipients may start Deep Archive restores, since a restore costs the owner money.
+  - The recipient gets their cloud IAM user (and an on-premises account) on the spot, but no key.
+  - New shares are refused while the bucket is being deleted.
+  - Cloud "Shared with you" shows only while the person works in Cloud.
+- **Recommendation:** keep these.
+
+**Answer:**
+
+### Q24: Finance defaults (spend per budget number, growth forecast)
+
+- **Blocks:** nothing.
+- **Context:** the Billing tab's "By budget number" view and the "Full in" forecast.
+- **Default being built:**
+  - Grouping follows the chargeback sheet's Index column, so a number that doesn't match the pattern counts as "no budget number".
+  - Cloud amounts are USD. They are left out of the total when the billing currency is not USD.
+  - The forecast uses the last 30 days and needs at least 7 readings.
+  - Admins see buckets that will fill within 90 days; users see their own within 60 days.
+- **Recommendation:** keep these.
+
+**Answer:**
+
 ## Resolved
 
 ### Q14: Offboarding abort threshold on small installations

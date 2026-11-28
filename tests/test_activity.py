@@ -187,6 +187,31 @@ def test_share_received_shows_without_the_owners_name(env):
     assert all(e["actor"] == "you" for e in mine)
 
 
+def test_cloud_share_received_shows_by_ad_name(env):
+    """Cloud shares (cloud_sharing.py) name the recipient by AD name, not by uid."""
+    full = "bucketeer-bob-data"
+    raw(env, "bob", "cloud.bucket.share", "bucket", full,
+        {"share": 1, "recipient": "Alice", "iamUser": "s3-alice", "access": "read"})
+    raw(env, "bob", "cloud.bucket.share", "bucket", full,
+        {"share": 2, "recipient": "carol", "iamUser": "s3-carol", "access": "readwrite"})
+    raw(env, "bob", "cloud.bucket.share_update", "bucket", full,
+        {"share": 1, "recipient": "alice", "iamUser": "s3-alice", "before": "read",
+         "after": "readwrite"})
+    raw(env, "system", "cloud.bucket.unshare", "bucket", full,
+        {"share": 1, "recipient": "alice", "iamUser": "s3-alice", "reason": "bucket_deleted"})
+    body = feed(env.alice)
+    got = [(e["action"], e["actor"], e["area"], e["summary"]) for e in body["entries"]
+           if e["action"].startswith("cloud.bucket.")]
+    assert got == [
+        ("cloud.bucket.unshare", "bucketeer", "share", got[0][3]),
+        ("cloud.bucket.share_update", "owner", "share", "Your access changed to read and write"),
+        ("cloud.bucket.share", "owner", "share", "Shared with you, read-only"),
+    ]
+    assert got[0][3].startswith("Your access was removed")
+    text = json.dumps(body)
+    assert "carol" not in text and "s3-alice" not in text and "s3-carol" not in text
+
+
 def test_hostile_share_details_leak_nothing(env):
     raw(env, "bob", "bucket.share", "bucket", "bob-shared",
         {"uid": "alice", "recipient": "alice", "access": "read", "ownerEmail": "bob@example.org",
