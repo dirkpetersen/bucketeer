@@ -315,6 +315,20 @@ MIGRATIONS: list[Migration] = [
         CHECK (location IN ('onprem', 'cloud'));
     ALTER TABLE bucket_delete_jobs ADD COLUMN temp_key TEXT;
     """,
+    # Shares of cloud (AWS) buckets share `shares` (cloud sharing). `location` 'cloud' rows
+    # name the full AWS bucket; `recipient_iam` is the recipient's IAM user (the statement's
+    # principal). On premises one live row per bucket and recipient uid, in the cloud one per
+    # bucket and IAM user (two AD names that share an RGW uid still have two IAM users).
+    """
+    ALTER TABLE shares ADD COLUMN location TEXT NOT NULL DEFAULT 'onprem'
+        CHECK (location IN ('onprem', 'cloud'));
+    ALTER TABLE shares ADD COLUMN recipient_iam TEXT;
+    DROP INDEX shares_live;
+    CREATE UNIQUE INDEX shares_live ON shares (bucket_name, recipient_uid COLLATE NOCASE)
+        WHERE revoked_at IS NULL AND location = 'onprem';
+    CREATE UNIQUE INDEX shares_live_cloud ON shares (bucket_name, recipient_iam)
+        WHERE revoked_at IS NULL AND location = 'cloud';
+    """,
 ]
 
 _MISSING: Any = object()
@@ -750,18 +764,22 @@ class Buckets(_Repo):
 
 class Shares(_Repo):
     """Bucket shares with AD users. Live rows have `revoked_at IS NULL`; at most one
-    live row per (bucket, recipient uid)."""
+    live row per (bucket, recipient uid) on premises, per (bucket, recipient IAM user) for
+    cloud buckets. On-premises and cloud rows share the table (`location`): `create`,
+    `live_for`, `list_live` and `revoke_bucket` default to on-premises rows, so an on-prem
+    path never sees a cloud share; `get` and `count` see both (callers check `location`)."""
 
     def create(self, bucket_name: str, owner_uid: str, owner_name: str, recipient_ad: str,
                recipient_uid: str, recipient_name: str, access: str,
-               created_by: str) -> dict[str, Any]:
+               created_by: str, location: str = "onprem",
+               recipient_iam: str | None = None) -> dict[str, Any]:
         with self.db.tx() as c:
             cur = c.execute(
                 "INSERT INTO shares (bucket_name, owner_uid, owner_name, recipient_ad, "
-                "recipient_uid, recipient_name, access, created_at, created_by) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "recipient_uid, recipient_name, access, created_at, created_by, location, "
+                "recipient_iam) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (bucket_name, owner_uid, owner_name, recipient_ad, recipient_uid,
-                 recipient_name, access, now(), created_by),
+                 recipient_name, access, now(), created_by, location, recipient_iam),
             )
             return self.get(cur.lastrowid)  # type: ignore[return-value]
 
@@ -774,11 +792,12 @@ class Shares(_Repo):
     def live_for(self, bucket_name: str, recipient_uid: str) -> dict[str, Any] | None:
         return self.db.query_one(
             "SELECT * FROM shares WHERE bucket_name = ? AND recipient_uid = ? COLLATE NOCASE "
-            "AND revoked_at IS NULL", (bucket_name, recipient_uid))
+            "AND revoked_at IS NULL AND location = 'onprem'", (bucket_name, recipient_uid))
 
     def list_live(self, bucket_name: str | None = None,
-                  recipient_uid: str | None = None) -> list[dict[str, Any]]:
-        where, params = ["revoked_at IS NULL"], []
+                  recipient_uid: str | None = None,
+                  location: str = "onprem") -> list[dict[str, Any]]:
+        where, params = ["revoked_at IS NULL", "location = ?"], [location]
         if bucket_name is not None:
             where.append("bucket_name = ?")
             params.append(bucket_name)
@@ -787,6 +806,19 @@ class Shares(_Repo):
             params.append(recipient_uid)
         return self.db.query(
             f"SELECT * FROM shares WHERE {' AND '.join(where)} ORDER BY id", tuple(params))
+
+    # -- cloud shares --
+
+    def live_cloud_for(self, bucket_name: str, recipient_iam: str) -> dict[str, Any] | None:
+        return self.db.query_one(
+            "SELECT * FROM shares WHERE bucket_name = ? AND recipient_iam = ? "
+            "AND revoked_at IS NULL AND location = 'cloud'", (bucket_name, recipient_iam))
+
+    def list_cloud_for_recipient(self, recipient_ad: str) -> list[dict[str, Any]]:
+        """Live cloud shares whose recipient is this AD name (any case)."""
+        return self.db.query(
+            "SELECT * FROM shares WHERE revoked_at IS NULL AND location = 'cloud' "
+            "AND lower(recipient_ad) = lower(?) ORDER BY id", (recipient_ad,))
 
     def set_access(self, share_id: int, access: str) -> bool:
         with self.db.tx() as c:
@@ -798,17 +830,17 @@ class Shares(_Repo):
             return c.execute("UPDATE shares SET revoked_at = ? WHERE id = ? "
                              "AND revoked_at IS NULL", (now(), share_id)).rowcount > 0
 
-    def revoke_bucket(self, bucket_name: str,
-                      owner_uid: str | None = None) -> list[dict[str, Any]]:
-        """Revoke every live share of a (deleted) bucket (only those of `owner_uid` when
-        given); returns the rows revoked."""
+    def revoke_bucket(self, bucket_name: str, owner_uid: str | None = None,
+                      location: str = "onprem") -> list[dict[str, Any]]:
+        """Revoke every live share of a (deleted) bucket at `location` (only those of
+        `owner_uid` when given); returns the rows revoked."""
         extra, args = ("", ()) if owner_uid is None else (" AND owner_uid = ?", (owner_uid,))
         with self.db.tx() as c:
             rows = [dict(r) for r in c.execute(
-                "SELECT * FROM shares WHERE bucket_name = ? AND revoked_at IS NULL" + extra,
-                (bucket_name, *args))]
-            c.execute("UPDATE shares SET revoked_at = ? WHERE bucket_name = ? "
-                      "AND revoked_at IS NULL" + extra, (now(), bucket_name, *args))
+                "SELECT * FROM shares WHERE bucket_name = ? AND location = ? "
+                "AND revoked_at IS NULL" + extra, (bucket_name, location, *args))]
+            c.execute("UPDATE shares SET revoked_at = ? WHERE bucket_name = ? AND location = ? "
+                      "AND revoked_at IS NULL" + extra, (now(), bucket_name, location, *args))
             return rows
 
 

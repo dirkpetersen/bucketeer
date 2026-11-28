@@ -6,8 +6,9 @@ With `SMTP_HOST` empty and `SMTP_FROM` set, the mail server is the recipient dom
 (lowest preference first, then the next ones; no MX = the domain's own address), port 25,
 STARTTLS when offered. The message holds no secret, so that TLS is not verified.
 
-Plain text only. The message holds the owner's name, the bucket's short name, the access level
-and the portal's login link. Never a key, secret or presigned URL. Sending never fails a share:
+Plain text only. The message holds the owner's name, the bucket's short name (for a cloud
+bucket, `location="cloud"`, its full AWS name and how to set up Cloud), the access level and
+the portal's login link. Never a key, secret or presigned URL. Sending never fails a share:
 `send_share_invite` returns True (sent), False (failed, logged) or None (email is switched off).
 """
 
@@ -48,16 +49,30 @@ class Mailer:
         return (f"share invitation and billing report email is ON, from {s.smtp_from} "
                 f"via {via}")
 
-    def _build(self, to: str, owner_name: str, bucket: str, access: str) -> EmailMessage:
+    def _build(self, to: str, owner_name: str, bucket: str, access: str,
+               location: str = "onprem") -> EmailMessage:
         s = self.s
         owner = _clean(owner_name) or "A colleague"
+        name = _clean(bucket, 63)
         msg = EmailMessage()
         msg["From"] = s.smtp_from
         msg["To"] = to
-        msg["Subject"] = f"{owner} shared the bucket {_clean(bucket, 63)} with you"
+        if location == "cloud":
+            msg["Subject"] = f"{owner} shared the cloud bucket {name} with you"
+            msg.set_content(
+                f"{owner} gave you {ACCESS.get(access, access)} access to the Cloud (AWS) "
+                f"bucket \"{name}\" in {s.app_name}.\n\n"
+                f"To use it, log in with your normal account and work in Cloud (the Cloud / "
+                f"On Premises switch at the top; turn on Advanced if you do not see it). Then "
+                f"choose \"Set up this computer\" to set up your cloud profile. The bucket "
+                f"shows under \"Shared with you\":\n\n"
+                f"{s.app_url.rstrip('/')}/\n\n"
+                f"If you did not expect this message, you can ignore it.\n")
+            return msg
+        msg["Subject"] = f"{owner} shared the bucket {name} with you"
         msg.set_content(
             f"{owner} gave you {ACCESS.get(access, access)} access to the S3 bucket "
-            f"\"{_clean(bucket, 63)}\" in {s.app_name}.\n\n"
+            f"\"{name}\" in {s.app_name}.\n\n"
             f"To use it, log in with your normal account. This creates your S3 account if you "
             f"do not have one yet, and the bucket then shows under \"Shared with you\":\n\n"
             f"{s.app_url.rstrip('/')}/\n\n"
@@ -183,7 +198,9 @@ class Mailer:
         log.info("over-quota alert sent to %s for %s", to, _clean(bucket, 63))
         return True
 
-    async def send_share_invite(self, to: str, owner_name: str, bucket: str, access: str):
+    async def send_share_invite(self, to: str, owner_name: str, bucket: str, access: str,
+                                location: str = "onprem"):
+        """`location` 'cloud': a Cloud (AWS) bucket (full AWS name), set up in Cloud."""
         if not self.enabled:
             log.info("share invitation for bucket %s not sent: email is off (SMTP_FROM empty)",
                      _clean(bucket, 63))
@@ -194,7 +211,8 @@ class Mailer:
                      "email address in AD", _clean(bucket, 63))
             return False
         try:
-            await asyncio.to_thread(self._send, self._build(to, owner_name, bucket, access))
+            await asyncio.to_thread(self._send,
+                                    self._build(to, owner_name, bucket, access, location))
         except Exception as e:  # never fail the share
             # SMTP errors carry the server's reply (e.g. "554 relay denied"), never our password
             log.warning("share invitation email to %s for bucket %s failed: %s: %s", to,

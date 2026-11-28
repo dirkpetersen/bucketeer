@@ -211,6 +211,23 @@ export const createBucketShare = (bucket, login, access) => api(shareBase(bucket
 export const updateBucketShare = (bucket, id, access) => api(`${shareBase(bucket)}/${encodeURIComponent(id)}`, { method: "PUT", json: { access } });
 export const revokeBucketShare = (bucket, id) => api(`${shareBase(bucket)}/${encodeURIComponent(id)}`, { method: "DELETE" });
 export const sharedWithMe = () => api("/shared-with-me");
+// The share dialog's calls, by location (`shareDialog({ api })`). Cloud (AWS) buckets: the same
+// shapes under /cloud/buckets/{short name}, plus `iamUser` per share; `accountCreated` is the
+// recipient's cloud account. cloudSharedWithMe -> {shares: [{bucket (full AWS name), owner,
+// access, sharedAt}], profile, region, location} (empty unless the effective location is cloud).
+export const bucketShares = {
+  lookup: lookupShareRecipient, list: listBucketShares, create: createBucketShare,
+  update: updateBucketShare, revoke: revokeBucketShare,
+};
+const cloudShareBase = (bucket) => `/cloud/buckets/${encodeURIComponent(bucket)}/shares`;
+export const cloudShares = {
+  lookup: (bucket, q) => api(`/cloud/buckets/${encodeURIComponent(bucket)}/share-lookup?q=${encodeURIComponent(q)}`),
+  list: (bucket) => api(cloudShareBase(bucket)),
+  create: (bucket, login, access) => api(cloudShareBase(bucket), { method: "POST", json: { login, access } }),
+  update: (bucket, id, access) => api(`${cloudShareBase(bucket)}/${encodeURIComponent(id)}`, { method: "PUT", json: { access } }),
+  revoke: (bucket, id) => api(`${cloudShareBase(bucket)}/${encodeURIComponent(id)}`, { method: "DELETE" }),
+};
+export const cloudSharedWithMe = () => api("/cloud/shared-with-me");
 // Raw bucket policy editor (Advanced). get -> {policy|null, managedSids, etag}. put sends the
 // parsed policy object + the etag it was loaded with (+ confirmManaged:true after a 409
 // requiresConfirmation {managedChanges}; a 409 etagMismatch carries {current}). del removes the policy.

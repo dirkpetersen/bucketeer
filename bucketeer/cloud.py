@@ -44,9 +44,16 @@ It never touches user data: objects are reached only with a person's own key (P6
   them on create/delete) read-modify-write the policy and touch only `bucketeer-*` Sids.
   If an IAM user is deleted and made again, its bucket statements must be granted again
   (AWS then shows the old principal as a unique id).
+- Sharing (cloud_sharing.py): one more statement per recipient, Sid `share_sid(iam_user)`
+  (`bucketeer-share-i-<IAM user>`), Principal the recipient's IAM user ARN, actions
+  `share_actions(access)` (`SHARE_READ_ACTIONS`, plus `SHARE_WRITE_ACTIONS` for read-write: a
+  subset of the owner's, inside the boundary) on the bucket and `bucket/*`. Every policy change
+  (owner and shares) goes through `change_statements(bucket, upsert, remove)`: one locked
+  read-modify-write per bucket, only `bucketeer-*` Sids, the "Invalid principal" retry.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -89,6 +96,21 @@ OBJECT_ACTIONS = [
     "s3:DeleteObjectVersion", "s3:DeleteObjectTagging", "s3:AbortMultipartUpload",
     "s3:ListMultipartUploadParts", "s3:RestoreObject",
 ]
+# Sharing a cloud bucket with a person (cloud_sharing.py): one statement per recipient, a
+# subset of what the owner gets (all within BucketeerUserBoundary in tools/aws-setup). Read =
+# list and download; read-write adds uploads, deletes, unfinished-upload clean-up and Deep
+# Archive restores (a restore costs the owner money, so read-only recipients can't start one).
+# Never bucket set-up, policy, ACL, lifecycle or bucket delete.
+SHARE_SID_PREFIX = "bucketeer-share-"
+SHARE_READ_ACTIONS = [
+    "s3:GetBucketLocation", "s3:ListBucket", "s3:ListBucketVersions",
+    "s3:GetObject", "s3:GetObjectVersion",
+]
+SHARE_WRITE_ACTIONS = [
+    "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload",
+    "s3:ListMultipartUploadParts", "s3:ListBucketMultipartUploads", "s3:RestoreObject",
+]
+_SID_SAFE = re.compile(r"\A[a-z0-9][a-z0-9._-]*\Z")
 # `backup`, `billing` and `cloud` would put a person's cloud buckets next to the system buckets
 # `<prefix>backup-*` and `<prefix>cloud-billing-*` (P6-10), so they are refused for cloud too.
 RESERVED_USERNAMES = frozenset({"bucketeer-admin", "bucketeer-backup", "backup", "billing",
@@ -106,6 +128,66 @@ NO_CLOUD = object()  # create_app(cloud_admin=NO_CLOUD): no cloud even when conf
 RECHECK_OK = 3600.0
 RECHECK_FAILED = 300.0
 SERVICES = ("sts", "iam", "s3", "cloudwatch")
+
+
+def share_sid(iam_user: str) -> str:
+    """Sid of the share statement for `iam_user`: `bucketeer-share-i-<IAM user name>` (the
+    style of `bucketeer-owner`), or `bucketeer-share-h-<32 hex of its SHA-256>` for a name with
+    characters outside `[a-z0-9._-]` (`@`). Injective: IAM user names are unique, the `i-`/`h-`
+    markers keep the two forms apart, and on-premises shares use `u-`/`t-`."""
+    if _SID_SAFE.match(iam_user):
+        return f"{SHARE_SID_PREFIX}i-{iam_user}"
+    return f"{SHARE_SID_PREFIX}h-{hashlib.sha256(iam_user.encode()).hexdigest()[:32]}"
+
+
+def share_actions(access: str) -> list[str]:
+    if access not in ("read", "readwrite"):
+        raise ValueError(f"access must be 'read' or 'readwrite', not {access!r}")
+    return SHARE_READ_ACTIONS + (SHARE_WRITE_ACTIONS if access == "readwrite" else [])
+
+
+def share_statement(bucket: str, user_arn: str, iam_user: str, access: str) -> dict:
+    """The bucket-policy statement that gives `user_arn` (a person's IAM user) `access`."""
+    arn = f"arn:aws:s3:::{bucket}"
+    return {"Sid": share_sid(iam_user), "Effect": "Allow", "Principal": {"AWS": user_arn},
+            "Action": share_actions(access), "Resource": [arn, f"{arn}/*"]}
+
+
+def _as_set(value: Any) -> set:
+    if isinstance(value, str):
+        return {value}
+    return set(value) if isinstance(value, list) else {repr(value)}
+
+
+def same_statement(stored: dict | None, wanted: dict) -> bool:
+    """`stored` grants exactly what `wanted` does (AWS may return a one-item list as a plain
+    string, or the lists in another order). Anything extra (a Condition, NotAction, a wider
+    principal) makes it differ."""
+    if not isinstance(stored, dict) or set(stored) != set(wanted):
+        return False
+    principal = stored.get("Principal")
+    principal = principal.get("AWS") if isinstance(principal, dict) and len(principal) == 1 \
+        else None
+    return (stored.get("Sid") == wanted["Sid"] and stored.get("Effect") == wanted["Effect"]
+            and principal is not None and _as_set(principal) == {wanted["Principal"]["AWS"]}
+            and _as_set(stored.get("Action")) == set(wanted["Action"])
+            and _as_set(stored.get("Resource")) == set(wanted["Resource"]))
+
+
+def statement_user(st: dict) -> str | None:
+    """The IAM user name a statement's single AWS principal names (`.../user/<path>/<name>`),
+    else None (a deleted user shows as its unique id, not an ARN)."""
+    p = st.get("Principal")
+    p = p.get("AWS") if isinstance(p, dict) else None
+    if isinstance(p, list):
+        p = p[0] if len(p) == 1 else None
+    if not isinstance(p, str) or ":user/" not in p:
+        return None
+    return p.rsplit("/", 1)[-1] or None
+
+
+def statement_access(st: dict) -> str:
+    return "readwrite" if _as_set(st.get("Action")) & {"s3:PutObject", "s3:*"} else "read"
 
 
 class CloudError(Exception):
@@ -164,6 +246,7 @@ class CloudAdmin:
         self._secret = settings.cloud_admin_secret_key
         self._clients: dict[str, Any] = {}
         self._lock = threading.Lock()
+        self._policy_locks: dict[str, asyncio.Lock] = {}  # one per bucket: policy RMW
         self.last_check: dict[str, Any] | None = None
         self._account: str | None = None
         self._caller_arn: str | None = None
@@ -368,40 +451,76 @@ class CloudAdmin:
         else:  # S3 refuses an empty policy
             await self.call("s3", "delete_bucket_policy", Bucket=bucket)
 
-    async def grant_bucket_owner(self, bucket: str, user_arn: str) -> dict:
-        """Give `user_arn` (the owner's IAM user) access to `bucket` through the bucket
-        policy statement `bucketeer-owner`. Other statements are kept as they are; only
-        `bucketeer-*` Sids are Bucketeer's. Read-modify-write (no conditional write in S3)."""
-        if not bucket.startswith(self.bucket_prefix):
-            raise ValueError(f"{bucket} is not a Bucketeer bucket")
-        doc = await self._bucket_policy(bucket)
-        doc["Statement"] = [s for s in doc["Statement"] if s.get("Sid") != OWNER_SID]
-        doc["Statement"].append(self.owner_statement(bucket, user_arn))
-        doc.setdefault("Version", "2012-10-17")
+    def _policy_lock(self, bucket: str) -> asyncio.Lock:
+        return self._policy_locks.setdefault(bucket, asyncio.Lock())
+
+    async def _write_retrying(self, bucket: str, doc: dict) -> None:
+        """Write `doc`; while IAM has not propagated a new user yet, PutBucketPolicy answers
+        MalformedPolicy "Invalid principal": retried with GRANT_WAITS (about a minute)."""
         waits = list(GRANT_WAITS)
         while True:
             try:
                 await self._write_bucket_policy(bucket, doc)
-                return doc
+                return
             except CloudError as e:
                 fresh = (e.code == "MalformedPolicy"
                          and "invalid principal" in e.aws_message.lower())
                 if not fresh or not waits:
                     raise
-                log.info("bucket policy of %s: the owner's IAM user is not visible yet; "
+                log.info("bucket policy of %s: an IAM user it names is not visible yet; "
                          "retrying", bucket)
                 await _sleep(waits.pop(0))
 
-    async def revoke_bucket_owner(self, bucket: str) -> dict:
-        """Remove the `bucketeer-owner` statement (the policy goes when it was the last)."""
+    async def bucket_statements(self, bucket: str) -> list[dict]:
+        """The `bucketeer-*` statements of `bucket`'s policy (read by the admin user)."""
         if not bucket.startswith(self.bucket_prefix):
             raise ValueError(f"{bucket} is not a Bucketeer bucket")
         doc = await self._bucket_policy(bucket)
-        kept = [s for s in doc["Statement"] if s.get("Sid") != OWNER_SID]
-        if len(kept) != len(doc["Statement"]):
-            doc["Statement"] = kept
-            await self._write_bucket_policy(bucket, doc)
-        return doc
+        return [s for s in doc["Statement"]
+                if isinstance(s, dict) and str(s.get("Sid") or "").startswith("bucketeer-")]
+
+    async def change_statements(self, bucket: str, upsert: list[dict] | tuple = (),
+                                remove: set[str] | tuple = ()) -> dict:
+        """Read-modify-write `bucket`'s policy: add or replace (in place, by Sid) the
+        statements in `upsert`, drop those whose Sid is in `remove`. Only `bucketeer-*` Sids
+        may be named; every other statement is kept as it is, in order. One change per bucket
+        at a time in this process (no conditional write in S3). No write when nothing changes;
+        the policy is deleted when no statement is left. Returns the resulting document."""
+        if not bucket.startswith(self.bucket_prefix):
+            raise ValueError(f"{bucket} is not a Bucketeer bucket")
+        new = {s["Sid"]: s for s in upsert}
+        doomed = set(remove)
+        if any(not str(sid).startswith("bucketeer-") for sid in [*new, *doomed]):
+            raise ValueError("only bucketeer-* statements may be changed")
+        async with self._policy_lock(bucket):
+            doc = await self._bucket_policy(bucket)
+            before, out, placed = doc["Statement"], [], set()
+            for s in before:
+                sid = s.get("Sid") if isinstance(s, dict) else None
+                if sid in doomed or sid in placed:
+                    continue
+                if sid in new:
+                    out.append(new[sid])
+                    placed.add(sid)
+                else:
+                    out.append(s)
+            out += [s for sid, s in new.items() if sid not in placed]
+            if out == before:
+                return doc
+            doc["Statement"] = out
+            doc.setdefault("Version", "2012-10-17")
+            await self._write_retrying(bucket, doc)
+            return doc
+
+    async def grant_bucket_owner(self, bucket: str, user_arn: str) -> dict:
+        """Give `user_arn` (the owner's IAM user) access to `bucket` through the bucket
+        policy statement `bucketeer-owner`. Other statements (shares included) are kept as
+        they are; only `bucketeer-*` Sids are Bucketeer's."""
+        return await self.change_statements(bucket, [self.owner_statement(bucket, user_arn)])
+
+    async def revoke_bucket_owner(self, bucket: str) -> dict:
+        """Remove the `bucketeer-owner` statement (the policy goes when it was the last)."""
+        return await self.change_statements(bucket, remove={OWNER_SID})
 
     async def get_user(self, name: str) -> dict | None:
         """The IAM user under `/bucketeer/`, or None when there is none we can see.

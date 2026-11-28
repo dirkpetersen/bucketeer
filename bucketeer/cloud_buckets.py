@@ -44,7 +44,8 @@ mutations, `no-store`):
   the short name, 409 `{detail, requiresConfirmation, objects, bytes|null, more, sizeAsOf,
   countsMayLag: true, storageClass}` (`contents`: one live ListObjectsV2 page by the admin,
   plus CloudWatch `NumberOfObjects`/`BucketSizeBytes`, a day or two late; an empty first page
-  means 0). Confirmed and empty: `revoke_bucket_owner`, DeleteBucket -> 200 `{name}`
+  means 0). Confirmed and empty: `revoke_bucket_owner`, DeleteBucket -> 200 `{name}`, its
+  shares (`cloud_sharing.py`) marked revoked
   (BucketNotEmpty = old versions remain: statement back, then a job). Holding data: 202
   `{job}`, a background job (`cloud_delete.py`) in `bucket_delete_jobs` with `location
   'cloud'` that empties the bucket with a temporary key of the owner's IAM user; an active job
@@ -710,6 +711,9 @@ async def _delete_empty(app, cloud: CloudAdmin, acct: RgwAccount, user: SessionU
     await _audit(app, user.username, "cloud.bucket.delete", full, uid=acct.uid,
                  storageClass=row.get("storage_class"), quotaTiB=row.get("quota_tib"),
                  objects=0, dataDeleted=False)
+    from .cloud_sharing import revoke_for_deleted_bucket  # cloud_sharing imports this module
+
+    await revoke_for_deleted_bucket(app, user.username, full, acct.uid)
     log.info("cloud bucket %s deleted by %s", full, acct.username)
     return {"name": name}
 

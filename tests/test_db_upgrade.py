@@ -64,6 +64,30 @@ BACKFILLS: list[tuple[int, str, dict, dict]] = [
     (18, "buckets", {"name": "alice-data"}, {"location": "onprem", "storage_class": None,
                                              "quota_tib": None, "over_quota_alert_at": None}),
 ]
+# (shares.location / recipient_iam, cloud sharing: the shares sample row exists only from v7
+# on, so that backfill is checked in test_shares_location_backfill)
+SHARES_LOCATION = next(i + 1 for i, m in enumerate(MIGRATIONS)
+                       if isinstance(m, str) and "recipient_iam" in m)  # found, not hard-coded
+
+
+def test_shares_location_backfill(tmp_path, monkeypatch):
+    """Shares made before cloud sharing come through as on-premises rows, and the live index
+    stays one row per bucket and uid on premises, per bucket and IAM user in the cloud."""
+    p = tmp_path / DB_FILENAME
+    build(p, SHARES_LOCATION - 1, monkeypatch)
+    d = Database(p)
+    assert match(d._conn, "shares", {"id": 2, "location": "onprem", "recipient_iam": None})
+    assert d.shares.live_for("alice-data", "bob")["id"] == 2
+    with pytest.raises(sqlite3.IntegrityError):
+        d.shares.create("alice-data", "alice", "", "bob", "bob", "", "read", "alice")
+    # a cloud row of the same name and uid is a different share; two per IAM user are not
+    d.shares.create("alice-data", "alice", "", "bob", "bob", "", "read", "alice",
+                    location="cloud", recipient_iam="s3-bob")
+    with pytest.raises(sqlite3.IntegrityError):
+        d.shares.create("alice-data", "alice", "", "bob", "bob", "", "read", "alice",
+                        location="cloud", recipient_iam="s3-bob")
+    assert [r["id"] for r in d.shares.list_live("alice-data")] == [2]
+    d.close()
 # (setup_tokens.cloud, v17, defaults to 0; its sample row exists only from v11 on, so the
 # backfill is checked in test_setup_token_cloud_backfill)
 

@@ -1,16 +1,25 @@
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
-import { createBucketShare, listBucketShares, lookupShareRecipient, revokeBucketShare, updateBucketShare } from "../api.js";
+import { bucketShares } from "../api.js";
 import { toast } from "./toast.js";
 import { confirmDialog, nameSpan } from "./confirm-dialog.js";
 import { personPicker } from "./person-picker.js";
 
-// shareDialog({ bucket }) -> Promise<{ error? } | { changed: boolean }>
+// shareDialog({ bucket, api?, wording? }) -> Promise<{ error? } | { changed: boolean }>
 // Share one bucket with an AD colleague: type a name, username or email and pick from the
 // matching people (`person-picker.js`), or press Find for an exact username/email lookup;
 // confirm the person, choose read-only or read and write.
 // Lists current shares with change-access and revoke. The server decides who is eligible.
+// `api` = { lookup, list, create, update, revoke } (default on premises, `bucketShares`;
+// cloud buckets pass `cloudShares`), `wording` overrides the texts in WORDING.
 let seq = 0;
+const WORDING = {
+  intro: "Give colleagues access to this bucket with their own S3 keys. Revoke it at any time.",
+  hint: "Only people who can sign in to Bucketeer are listed. Their access uses their own S3 keys.",
+  created: "If this person has no S3 account yet, one is created for them. They find the bucket under Shared with you.",
+  accountCreated: "S3 account created",
+  readwriteHint: "Also upload, overwrite and delete files.",
+};
 const ACCESS = { read: "Read-only", readwrite: "Read and write" };
 const STATUS = {
   active: ["chip-ok", "Active"],
@@ -19,12 +28,13 @@ const STATUS = {
   unchecked: ["chip", "Not verified"],
 };
 
-export async function shareDialog({ bucket }) {
+export async function shareDialog({ bucket, api = bucketShares, wording = {} }) {
   const id = `sh${++seq}`;
+  const say = { ...WORDING, ...wording };
   let shares;
   let checked = true;
   try {
-    ({ shares, checked } = await listBucketShares(bucket));
+    ({ shares, checked } = await api.list(bucket));
   } catch (err) {
     return { error: err };
   }
@@ -68,7 +78,7 @@ export async function shareDialog({ bucket }) {
     list.replaceChildren(...shares.map(row));
   }
   async function reload() {
-    ({ shares, checked } = await listBucketShares(bucket));
+    ({ shares, checked } = await api.list(bucket));
     note.hidden = checked;
     paint();
   }
@@ -77,7 +87,7 @@ export async function shareDialog({ bucket }) {
     if (busy) return;
     busy = true;
     try {
-      await updateBucketShare(bucket, s.id, access);
+      await api.update(bucket, s.id, access);
       changed = true;
       toast.show(repair ? "Share repaired." : `${s.displayName || s.recipient} now has ${ACCESS[access].toLowerCase()} access.`);
     } catch (err) {
@@ -98,7 +108,7 @@ export async function shareDialog({ bucket }) {
     if (!ok) return;
     busy = true;
     try {
-      await revokeBucketShare(bucket, s.id);
+      await api.revoke(bucket, s.id);
       changed = true;
       toast.show(`Stopped sharing with ${who}.`);
     } catch (err) {
@@ -142,8 +152,8 @@ export async function shareDialog({ bucket }) {
       h("fieldset", { class: "bkd-access" },
         h("legend", { class: "label", text: "Access" }),
         radio("read", "Read-only", "List and download files.", true),
-        radio("readwrite", "Read and write", "Also upload, overwrite and delete files.", false)),
-      h("p", { class: "set-hint", text: "If this person has no S3 account yet, one is created for them. They find the bucket under Shared with you." }),
+        radio("readwrite", "Read and write", say.readwriteHint, false)),
+      h("p", { class: "set-hint", text: say.created }),
       h("div", { class: "cd-actions" }, cancel, go));
     confirmBox.hidden = false;
     go.focus();
@@ -158,9 +168,9 @@ export async function shareDialog({ bucket }) {
     const person = found;
     try {
       const access = confirmBox.querySelector("input[type=radio]:checked").value;
-      const res = await createBucketShare(bucket, person.username, access);
+      const res = await api.create(bucket, person.username, access);
       changed = true;
-      toast.show(res.warning ?? `Shared with ${person.displayName || person.username}${res.accountCreated ? " (S3 account created)" : ""}.${res.emailed === "queued" ? " An email invitation is on its way." : ""}`, res.warning ? { timeout: 9000 } : undefined);
+      toast.show(res.warning ?? `Shared with ${person.displayName || person.username}${res.accountCreated ? ` (${say.accountCreated})` : ""}.${res.emailed === "queued" ? " An email invitation is on its way." : ""}`, res.warning ? { timeout: 9000 } : undefined);
       clearFound();
       login.value = "";
       await reload();
@@ -186,7 +196,7 @@ export async function shareDialog({ bucket }) {
     h("div", { class: "field" }, h("label", { for: login.id, text: "Person" }),
       h("div", { class: "shd-find" }, login, find),
       ...picker.nodes,
-      h("p", { class: "set-hint", id: `${id}-lh`, text: "Only people who can sign in to Bucketeer are listed. Their access uses their own S3 keys." })),
+      h("p", { class: "set-hint", id: `${id}-lh`, text: say.hint })),
     error, confirmBox);
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -200,7 +210,7 @@ export async function shareDialog({ bucket }) {
     find.disabled = true;
     find.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), "Looking…");
     try {
-      const p = await lookupShareRecipient(bucket, q);
+      const p = await api.lookup(bucket, q);
       if (p.isYou) showError("That is you. The bucket is already yours.");
       else showFound(p);
     } catch (err) {
@@ -220,7 +230,7 @@ export async function shareDialog({ bucket }) {
     h("div", { class: "bkd-body" },
       h("div", { class: "qd-head" },
         h("h2", { id: `${id}-t` }, "Share ", nameSpan(bucket)),
-        h("p", { class: "cd-msg", id: `${id}-m`, text: "Give colleagues access to this bucket with their own S3 keys. Revoke it at any time." })),
+        h("p", { class: "cd-msg", id: `${id}-m`, text: say.intro })),
       note, live, form,
       h("div", { class: "cd-actions" }, close)));
   paint();

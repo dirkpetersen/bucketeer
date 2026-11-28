@@ -1,6 +1,6 @@
 import { h } from "../dom.js";
 import { icon } from "../icons.js";
-import { cloudBucketOptions, deleteCloudBucket, listCloudBuckets, listCloudDeleteJobs, retryCloudDeleteJob, setCloudBucketBudget, setCloudBucketQuota } from "../api.js";
+import { cloudBucketOptions, cloudShares, deleteCloudBucket, listCloudBuckets, listCloudDeleteJobs, retryCloudDeleteJob, setCloudBucketBudget, setCloudBucketQuota } from "../api.js";
 import { formatBytes } from "../format.js";
 import { toast } from "../components/toast.js";
 import { deleteBucketDialog, deleteJobBlock } from "../components/bucket-delete.js";
@@ -9,14 +9,23 @@ import { budgetDialog } from "../components/budget-dialog.js";
 import { bucketQuotaDialog } from "../components/bucket-quota-dialog.js";
 import { formatMoney, formatTiB } from "../components/quota-picker.js";
 import { menuButton } from "../components/menu-button.js";
+import { shareDialog } from "../components/share-dialog.js";
 
 // The Buckets card while the effective location is Cloud (P6-10): the person's AWS buckets with
 // their storage class, size from CloudWatch (daily, a day or two late), quota and the estimated
-// monthly cost from the catalog price (the real AWS cost is billed). Create, change quota or
-// budget number, delete (the typed name always; a bucket with content is emptied by a
-// background job with a temporary key of the owner, P6-13).
+// monthly cost from the catalog price (the real AWS cost is billed). Create, share with people
+// (read-only or read and write, through the bucket policy; the shared dialog with the cloud
+// API), change quota or budget number, delete (the typed name always; a bucket with content is
+// emptied by a background job with a temporary key of the owner, P6-13).
 
 const CLASS = { intelligent: "Intelligent-Tiering", deep_archive: "Deep Archive" };
+const SHARE_WORDING = {
+  intro: "Give colleagues access to this cloud bucket with their own cloud (AWS) keys. Revoke it at any time.",
+  hint: "Only people who can sign in to Bucketeer are listed. Their access uses their own cloud keys.",
+  created: "If this person has no cloud account yet, one is created for them (without a key). They find the bucket under Shared with you while they work in Cloud.",
+  accountCreated: "cloud account created",
+  readwriteHint: "Also upload, overwrite and delete files, and restore archived ones (AWS charges for restores).",
+};
 
 function skeleton(n = 2) {
   return h("div", { class: "skel", "aria-hidden": "true" },
@@ -86,12 +95,17 @@ function row(b, acts, busy, job) {
     ],
   });
   const deleting = !!job && (job.state === "queued" || job.state === "running");
+  const peopleBtn = h("button", {
+    class: "btn btn-sm", type: "button", disabled: busy || deleting, "aria-label": `Share cloud bucket ${b.name} with people`,
+    title: "Give colleagues read-only or read and write access",
+    on: { click: () => acts.share(b) },
+  }, icon("users"), h("span", { class: "bk-del-l", text: "Share" }));
   return h("li", { class: "bk-row", "data-busy": String(!!busy), "data-deleting": String(deleting) },
     h("span", { class: "bk-ic", "aria-hidden": "true" }, icon("cloud")),
     h("div", { class: "bk-main" }, h("b", { class: "bk-name", text: b.name, title: b.fullName }),
       h("code", { class: "cbk-full", text: b.fullName }), meta, job ? deleteJobBlock(job, acts.retry) : null),
     usageBlock(b),
-    h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, more)));
+    h("div", { class: "bk-tail" }, budget, h("div", { class: "bk-acts" }, peopleBtn, more)));
 }
 
 export function cloudBucketsCard() {
@@ -120,7 +134,7 @@ export function cloudBucketsCard() {
         h("div", { class: "empty-acts" }, h("button", { class: "btn btn-primary", type: "button", on: { click: create } }, icon("plus"), "Create your first cloud bucket"))));
       return;
     }
-    const acts = { quota: changeQuota, budget: changeBudget, remove, retry: retryJob };
+    const acts = { quota: changeQuota, budget: changeBudget, share: manageShares, remove, retry: retryJob };
     body.replaceChildren(h("ul", { class: "bk-list" }, buckets.map((b) => row(b, acts, busy.has(b.name), jobs.get(b.name)))));
   }
 
@@ -196,6 +210,11 @@ export function cloudBucketsCard() {
     load({ quiet: true });
   }
   createBtn.addEventListener("click", create);
+
+  async function manageShares(b) {
+    const res = await shareDialog({ bucket: b.name, api: cloudShares, wording: SHARE_WORDING });
+    if (res.error && res.error.status !== 401) toast.error(res.error.message);
+  }
 
   async function changeQuota(b) {
     const res = await bucketQuotaDialog({ bucket: b.name, current: b.quotaTiB, options: cloudBucketOptions, save: setCloudBucketQuota, product: b.product });

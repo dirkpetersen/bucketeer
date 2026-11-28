@@ -130,12 +130,17 @@ async def check_name(cloud: CloudAdmin, username: str) -> str:
     return name
 
 
-async def ensure_account(app, username: str) -> dict[str, Any]:
+async def ensure_account(app, username: str, *, actor: str | None = None,
+                         via: str | None = None) -> dict[str, Any]:
     """The person's `cloud_accounts` row, creating the IAM user (and its policy) on first use.
-    Raises CloudRefused (not ours, bad name) or CloudError (AWS trouble)."""
+    Raises CloudRefused (not ours, bad name) or CloudError (AWS trouble). `actor` is who the
+    audit names (default the person; the owner when a share made the account) and `via` a
+    detail for it (`share`)."""
     db: Database = app.state.db
     cloud: CloudAdmin = app.state.cloud
     u = username.lower()
+    who = actor or u
+    extra = {"via": via} if via else {}
     async with _lock(app, u):
         name = await check_name(cloud, u)
         row = await db.run(db.cloud_accounts.get, u)
@@ -155,25 +160,25 @@ async def ensure_account(app, username: str) -> dict[str, Any]:
                     # the name exists outside /bucketeer/ (we may not even read it): not ours
                     log.warning("cloud: refused %s: IAM user %s exists outside Bucketeer's "
                                 "path", u, name)
-                    await _audit(db, u, "cloud.user.refused", "cloud_user", name,
-                                 {"adUsername": u, "reason": "not_ours"})
+                    await _audit(db, who, "cloud.user.refused", "cloud_user", name,
+                                 {"adUsername": u, "reason": "not_ours", **extra})
                     raise CloudRefused("not_ours", ASK_ADMIN) from None
         if created:
             row = await db.run(db.cloud_accounts.record, u, name, "created")
             log.info("cloud: created IAM user %s for %s", name, u)
-            await _audit(db, u, "cloud.user.create", "cloud_user", name,
-                         {"adUsername": u, "source": "created"})
+            await _audit(db, who, "cloud.user.create", "cloud_user", name,
+                         {"adUsername": u, "source": "created", **extra})
         elif row is None:
             if not await cloud.is_ours(user, u):  # type: ignore[arg-type]
                 log.warning("cloud: refused %s: IAM user %s exists and was not made by "
                             "Bucketeer for this person", u, name)
-                await _audit(db, u, "cloud.user.refused", "cloud_user", name,
-                             {"adUsername": u, "reason": "not_ours"})
+                await _audit(db, who, "cloud.user.refused", "cloud_user", name,
+                             {"adUsername": u, "reason": "not_ours", **extra})
                 raise CloudRefused("not_ours", ASK_ADMIN)
             row = await db.run(db.cloud_accounts.record, u, name, "recovered")
             log.info("cloud: recorded existing IAM user %s for %s again", name, u)
-            await _audit(db, u, "cloud.user.create", "cloud_user", name,
-                         {"adUsername": u, "source": "recovered"})
+            await _audit(db, who, "cloud.user.create", "cloud_user", name,
+                         {"adUsername": u, "source": "recovered", **extra})
         if not row["policy_synced"]:  # written once; retried until it succeeds
             await cloud.put_user_policy(name)
             await db.run(db.cloud_accounts.set_policy_synced, u, True)
