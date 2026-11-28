@@ -1,6 +1,6 @@
-"""Share invitation email (CLAUDE.md "Sharing") and the monthly billing report with its
-.xlsx attachment (`send_with_attachment`, CLAUDE.md "Billing"). Optional: with `SMTP_FROM`
-empty nothing is sent.
+"""Share invitation email (CLAUDE.md "Sharing"), the monthly billing report with its
+.xlsx attachment (`send_with_attachment`, CLAUDE.md "Billing") and the admin alerts
+(`send_admin_alert`, `alerts.py`). Optional: with `SMTP_FROM` empty nothing is sent.
 
 With `SMTP_HOST` empty and `SMTP_FROM` set, the mail server is the recipient domain's MX record
 (lowest preference first, then the next ones; no MX = the domain's own address), port 25,
@@ -42,10 +42,11 @@ class Mailer:
         """One line for the startup log: is email on, and through which server."""
         s = self.s
         if not self.enabled:
-            return ("share invitation and billing report email is OFF (SMTP_FROM is empty)")
+            return ("share invitation, billing report and admin alert email is OFF "
+                    "(SMTP_FROM is empty)")
         via = (f"{s.smtp_host}:{s.smtp_port} security={s.smtp_security}" if s.smtp_host
                else "the recipient domain's MX, port 25")
-        return (f"share invitation and billing report email is ON, from {s.smtp_from} "
+        return (f"share invitation, billing report and admin alert email is ON, from {s.smtp_from} "
                 f"via {via}")
 
     def _build(self, to: str, owner_name: str, bucket: str, access: str) -> EmailMessage:
@@ -144,6 +145,40 @@ class Mailer:
                 failed.append(to)
                 continue
             log.info("%s email sent to %s", what, to)
+            sent.append(to)
+        return sent, failed
+
+    def _build_alert(self, to: str, subject: str, body: str) -> EmailMessage:
+        msg = EmailMessage()
+        msg["From"] = self.s.smtp_from
+        msg["To"] = to
+        msg["Subject"] = _clean(subject, 150)
+        msg.set_content(body)
+        return msg
+
+    async def send_admin_alert(self, recipients: list[str], subject: str, body: str
+                               ) -> tuple[list[str], list[str]] | None:
+        """An alert for the administrators (`alerts.py`): one plain-text message per
+        recipient. Returns (sent, failed) addresses, or None while email is off. Never
+        raises."""
+        if not self.enabled:
+            log.info("admin alert not sent: email is off (SMTP_FROM empty)")
+            return None
+        sent, failed = [], []
+        for to in recipients:
+            to = (to or "").strip()
+            if not to or any(c in to for c in "\r\n<>,;\" "):
+                log.info("admin alert not sent to an unusable address")
+                failed.append(to)
+                continue
+            try:
+                await asyncio.to_thread(self._send, self._build_alert(to, subject, body))
+            except Exception as e:  # noqa: BLE001  logged; the caller audits the outcome
+                log.warning("admin alert email to %s failed: %s: %s", to, type(e).__name__,
+                            _clean(str(e), 200))
+                failed.append(to)
+                continue
+            log.info("admin alert email sent to %s", to)
             sent.append(to)
         return sent, failed
 

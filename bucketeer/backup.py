@@ -48,26 +48,49 @@ crash), creates one key, uses it (retrying while IAM propagates it) and deletes 
 API (`/api/admin/backup`, admin, CSRF via the parent router):
 
 * `GET` -> `{configured, bucket, suggestedBucket (only while not configured), onpremBucket,
-  awsBucket (null unless cloud is configured), region, user, settings: {time, retentionDays},
-  destinations: [{kind onprem|cloud, bucket, user, state: {exists, objectLock, mode,
-  retentionDays, versioning, error, note} | null}], nextRun, running, lastRun, lastSuccess,
-  runs: [...]}`; never changes anything (no user or bucket is created by a GET).
-* `PUT /settings {time?, retentionDays?}` -> `{settings, warning?}`; time `HH:MM` (server local),
-  retentionDays 1..36500 and never below the current value (422); audit
-  `admin.settings.backup` (target_type `setting`) when changed; a longer retention is applied
-  to the bucket at once (created if needed; best effort, `warning` on failure, the next run
-  applies it).
+  awsBucket (null unless cloud is configured), region, user, settings: {time, retentionDays,
+  restoreTestDays}, destinations: [{kind onprem|cloud, bucket, user, state: {exists,
+  objectLock, mode, retentionDays, versioning, error, note} | null}], nextRun, running,
+  lastRun, lastSuccess, runs: [...], testing, restoreTests: [...], nextRestoreTest}`; never
+  changes anything (no user or bucket is created by a GET).
+* `PUT /settings {time?, retentionDays?, restoreTestDays?}` -> `{settings, warning?}`; time
+  `HH:MM` (server local), retentionDays 1..36500 and never below the current value,
+  restoreTestDays 0..365 (0 = no automatic restore test) (422); audit `admin.settings.backup`
+  (target_type `setting`) when changed; a longer retention is applied to the bucket at once
+  (created if needed; best effort, `warning` on failure, the next run applies it).
 * `POST /run` -> the finished run `{id, startedAt, finishedAt, trigger manual|schedule, actor,
   outcome ok|failed, key, bytes, sha256, schemaVersion, envIncluded, destinations: [{kind,
   bucket, outcome ok|failed, error, bucketCreated, retentionDays}], error}`; 409 while
   backups are off or a run is going. Audit `backup.run` / `backup.failed` once per
   destination (target_type `backup`, target that bucket; actor `system` for the schedule).
-  Runs are kept in the settings key `backup_runs` (newest first, the last 30).
+  Runs are kept in the settings key `backup_runs` (newest first, the last 30). A failed run
+  emails the alert contacts (`alerts.py`, kind `backup_failed`).
+* `POST /restore-test` -> the finished restore test `{id, startedAt, finishedAt, trigger
+  manual|schedule, actor, outcome ok|failed, error, destinations: [{kind, bucket, key, outcome
+  ok|failed, error, checkedAt, schemaVersion, tables {name: rows}, createdAt, envIncluded}]}`;
+  409 while backups are off, a backup runs or a test runs (one at a time, shielded like a run).
+
+Restore test (`restore_test`): proves that the NEWEST archive in each destination can be
+restored without touching the live database or `.env`: download into a temporary folder under
+`DATA_DIR`, `read_archive` (every SHA-256 listed in meta.json), open the database copy read-only,
+`PRAGMA integrity_check`, schema version not newer than this code (`len(db.MIGRATIONS)`) and
+equal to meta.json's, row counts equal to meta.json's; the folder is removed afterwards. It runs
+by hand or right after a successful SCHEDULED backup when the newest test is at least
+`restoreTestDays` calendar days old or failed. The last 12 tests are kept in the settings key
+`backup_restore_tests` (newest first). Audit `backup.restore_test` / `backup.restore_test_failed`
+once per destination (target_type `backup`, target the bucket; details trigger, destination, key,
+error, schemaVersion; actor `system` when automatic); a failed test emails the alert contacts
+(kind `restore_test_failed`). The schedule loop also emails them (kind `backup_stale`) when no
+backup succeeded for more than 48 hours, at most once per 24 hours (settings key
+`backup_stale_alert` `{at, since}`).
 
 Restore: `python3 app.py --restore-backup <object key|latest> [--from onprem|cloud]
-[--aws-bucket NAME] [--force]` (`restore_main`). Without `--from` the source is on premises.
-From the cloud the bucket is `--aws-bucket`, else `BACKUP_BUCKET`, else the one
-`<prefix>backup-*` bucket in the account; the download uses a temporary key exactly like a run.
+[--aws-bucket NAME] [--backup-bucket NAME] [--force]` (`restore_main`). Without `--from` the
+source is on premises: the bucket `--backup-bucket` (an older on-premises bucket, e.g. the one
+used before `BACKUP_BUCKET` was renamed; checked with `check_dns_name`, refused with
+`--from cloud`), else `BACKUP_BUCKET`. From the cloud the bucket is `--aws-bucket`, else
+`BACKUP_BUCKET`, else the one `<prefix>backup-*` bucket in the account; the download uses a
+temporary key exactly like a run.
 """
 
 import asyncio
@@ -96,13 +119,14 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
 
-from . import s3docs
+from . import alerts, s3docs
 from .auth import SessionUser, require_admin
 from .cloud import USER_PATH, CloudError, NotConfigured
 from .config import Settings
 from .credentials import generate_key_pair
 from .croit import BACKUP_UID, CroitError, CroitUnavailable
-from .db import DB_FILENAME, Database, get_db
+from .db import DB_FILENAME, MIGRATIONS, Database, get_db
+from .policy_settings import check_dns_name
 from .s3client import default_factory
 
 log = logging.getLogger("bucketeer.backup")
@@ -112,8 +136,14 @@ TICK = 60.0
 KEY = "backup"
 RUNS_KEY = "backup_runs"
 KEEP_RUNS = 30
-DEFAULTS = {"time": "03:00", "retentionDays": 30}
+TESTS_KEY = "backup_restore_tests"
+KEEP_TESTS = 12
+STALE_KEY = "backup_stale_alert"
+STALE_AFTER = timedelta(hours=48)  # no successful backup for longer: alert
+STALE_REPEAT = timedelta(hours=24)  # ... at most this often
+DEFAULTS = {"time": "03:00", "retentionDays": 30, "restoreTestDays": 30}
 MAX_RETENTION = 36500
+MAX_TEST_DAYS = 365
 PREFIX = "backup/"
 ARCHIVE_RE = re.compile(r"^backup/bucketeer-\d{4}-\d{2}-\d{2}T\d{4}Z\.tar\.gz\Z")
 DB_MEMBER, ENV_MEMBER, META_MEMBER = DB_FILENAME, ".env", "meta.json"
@@ -152,7 +182,18 @@ def load(db: Database) -> dict[str, Any]:
     days = saved.get("retentionDays")
     if isinstance(days, int) and not isinstance(days, bool) and 1 <= days <= MAX_RETENTION:
         out["retentionDays"] = days
+    every = saved.get("restoreTestDays")
+    if isinstance(every, int) and not isinstance(every, bool) and 0 <= every <= MAX_TEST_DAYS:
+        out["restoreTestDays"] = every
     return out
+
+
+def local_time(iso: Any) -> datetime | None:
+    """A stored ISO time as naive server-local time (what `now()` and `next_run` use)."""
+    try:
+        return datetime.fromisoformat(str(iso)).astimezone().replace(tzinfo=None)
+    except (TypeError, ValueError):
+        return None
 
 
 def next_run(now: datetime, hhmm: str) -> datetime:
@@ -301,10 +342,10 @@ class OnPremDestination:
     kind = "onprem"
 
     def __init__(self, client, settings: Settings, endpoints,
-                 factory: Callable[..., Any] = default_factory):
+                 factory: Callable[..., Any] = default_factory, bucket: str | None = None):
         self.client, self.settings, self.endpoints = client, settings, endpoints
         self.factory = factory
-        self.bucket = settings.backup_bucket
+        self.bucket = bucket or settings.backup_bucket  # `bucket`: restore --backup-bucket
 
     async def _key(self, create: bool) -> tuple[str, str] | None:
         """The backup user's first key (creating user and key when `create`)."""
@@ -647,6 +688,44 @@ def read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
     return meta, files
 
 
+def check_archive(path: Path, workdir: Path) -> dict[str, Any]:
+    """The restore test of one downloaded archive (sync; nothing outside `workdir` is
+    written): every SHA-256, then the database copy opened read-only must pass
+    `PRAGMA integrity_check`, have a schema this code can open and the row counts of
+    meta.json. Raises BackupError; returns {schemaVersion, tables, createdAt, envIncluded}."""
+    meta, files = read_archive(path)
+    env_included = ENV_MEMBER in files
+    copy = _unique(workdir / f"test-{DB_MEMBER}")
+    _write_private(copy, files.pop(DB_MEMBER))
+    files.clear()  # the .env copy is not needed: drop it from memory at once
+    try:
+        conn = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+        try:
+            ok = conn.execute("PRAGMA integrity_check").fetchone()[0]
+        except sqlite3.DatabaseError as e:
+            raise BackupError(f"The database in the archive can't be opened ({e}).") from None
+        finally:
+            conn.close()
+        if ok != "ok":
+            raise BackupError(f"The database in the archive fails the integrity check ({ok}).")
+        try:
+            version, tables = table_counts(copy)
+        except sqlite3.DatabaseError as e:
+            raise BackupError(f"The database in the archive can't be read ({e}).") from None
+    finally:
+        copy.unlink(missing_ok=True)
+    if version > len(MIGRATIONS):
+        raise BackupError(f"The database has schema v{version}, newer than this version of "
+                          f"Bucketeer (v{len(MIGRATIONS)}): it can't be restored here.")
+    if meta.get("schemaVersion") != version:
+        raise BackupError(f"meta.json says schema v{meta.get('schemaVersion')}, the database "
+                          f"is v{version}.")
+    if isinstance(meta.get("tables"), dict) and meta["tables"] != tables:
+        raise BackupError("The tables or row counts of the database differ from meta.json.")
+    return {"schemaVersion": version, "tables": tables, "createdAt": meta.get("createdAt"),
+            "envIncluded": env_included}
+
+
 # -- the service ----------------------------------------------------------------------------
 
 
@@ -677,11 +756,70 @@ async def _send(dest, entry: dict[str, Any], days: int, key: str, path: Path) ->
         log.warning("backup to %s (%s) failed: %s", dest.bucket, dest.kind, entry["error"])
 
 
+async def _test_one(dest, entry: dict[str, Any], data_dir: Path) -> None:
+    """Restore-test the newest archive of one destination; the result goes on `entry`."""
+    try:
+        key = await dest.latest()
+        if not key:
+            raise BackupError(f"No backup found in {dest.bucket}.")
+        entry["key"] = key
+        with tempfile.TemporaryDirectory(prefix=".restore-test-", dir=data_dir) as tmp:
+            path = Path(tmp) / "archive.tar.gz"
+            await dest.download(key, path)
+            entry.update(await asyncio.to_thread(check_archive, path, Path(tmp)))
+        entry["outcome"] = "ok"
+    except Exception as e:  # noqa: BLE001  recorded per destination
+        entry.update(outcome="failed", error=describe(e))
+        log.warning("restore test of %s (%s) failed: %s", dest.bucket, dest.kind,
+                    entry["error"])
+    finally:
+        entry["checkedAt"] = datetime.now(UTC).isoformat(timespec="seconds")
+
+
+PLACES = {"onprem": "on premises", "cloud": "AWS"}
+
+
+def _places(entries: list[dict[str, Any]]) -> str:
+    return ", ".join(PLACES.get(e["kind"], str(e["kind"])) for e in entries) or "no place"
+
+
+def _failure_lines(rec: dict[str, Any]) -> str:
+    failed = [e for e in rec["destinations"] if e["outcome"] != "ok"]
+    lines = [f"- {PLACES.get(e['kind'], e['kind'])}, bucket {e['bucket']}: {e['error']}"
+             for e in failed]
+    return "\n".join(lines) or f"- {rec.get('error') or 'it stopped before reaching a bucket'}"
+
+
+def _by(rec: dict[str, Any]) -> str:
+    return "the nightly schedule" if rec["trigger"] == "schedule" else rec["actor"]
+
+
+def run_alert(rec: dict[str, Any]) -> tuple[str, str]:
+    """Subject and body of the `backup_failed` alert (no secrets: errors are `describe`d)."""
+    failed = [e for e in rec["destinations"] if e["outcome"] != "ok"]
+    return (f"Backup failed ({_places(failed)})",
+            f"The backup run started {rec['startedAt']} by {_by(rec)} did not write the "
+            f"archive {rec['key']} everywhere:\n\n{_failure_lines(rec)}\n\n"
+            "A place where it worked keeps its copy. The Backup tab of the administration page "
+            "shows the run; the next scheduled run tries again.")
+
+
+def restore_alert(rec: dict[str, Any]) -> tuple[str, str]:
+    """Subject and body of the `restore_test_failed` alert."""
+    failed = [e for e in rec["destinations"] if e["outcome"] != "ok"]
+    return (f"Restore test failed ({_places(failed)})",
+            f"The restore test started {rec['startedAt']} by {_by(rec)} could not prove that "
+            f"the newest backup can be restored:\n\n{_failure_lines(rec)}\n\n"
+            "The live database was not touched. Check the Backup tab of the administration "
+            "page, then run \"Test restore now\" again.")
+
+
 class BackupService:
     def __init__(self, app, now: Callable[[], datetime] = datetime.now,
                  sleep: Callable[[float], Awaitable[None]] = asyncio.sleep):
         self.app, self.now, self.sleep = app, now, sleep
         self.running = False
+        self.testing = False  # a restore test is going
         prefix = getattr(app.state.settings, "cloud_bucket_prefix", "bucketeer-")
         self.suggestion = suggest_bucket(prefix)
         self._floor = datetime.min
@@ -710,6 +848,10 @@ class BackupService:
 
     def runs(self) -> list[dict[str, Any]]:
         return list(self.db.settings.get(RUNS_KEY) or [])
+
+    def tests(self) -> list[dict[str, Any]]:
+        """The restore tests, newest first."""
+        return list(self.db.settings.get(TESTS_KEY) or [])
 
     def describe_off(self) -> str:
         return (f"BACKUP_BUCKET is not set: backups are off. Suggested: "
@@ -774,6 +916,8 @@ class BackupService:
             with contextlib.suppress(Exception):
                 await db.run(self._save_run, rec)
         await self._audit(rec, trigger, actor)
+        if rec["outcome"] != "ok":
+            await alerts.send_alert(self.app, "backup_failed", *run_alert(rec))
         return rec
 
     async def _audit(self, rec: dict[str, Any], trigger: str, actor: str) -> None:
@@ -798,6 +942,150 @@ class BackupService:
                          ", ".join(f"{e['kind']} {e['bucket']}" for e in rec["destinations"]))
         except Exception:  # noqa: BLE001  the run itself is already recorded
             log.exception("could not write the audit entries of backup %s", rec["key"])
+
+    # -- restore test ---------------------------------------------------------------------
+
+    async def restore_test(self, trigger: str, actor: str) -> dict[str, Any]:
+        """Restore-test the newest archive in every destination; shielded like a run.
+        Raises BackupError (backups off) or AlreadyRunning (a backup or a test is going)."""
+        if not self.bucket:
+            raise BackupError("Backups are off: BACKUP_BUCKET is not set.")
+        if self.running:
+            raise AlreadyRunning("A backup is running: test the restore when it is done.")
+        if self.testing:
+            raise AlreadyRunning("A restore test is running already.")
+        self.testing = True
+        try:
+            task = asyncio.get_running_loop().create_task(self._restore_test(trigger, actor))
+        except BaseException:
+            self.testing = False
+            raise
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return await asyncio.shield(task)
+
+    def _save_test(self, rec: dict[str, Any]) -> None:
+        with self.db.tx():
+            tests = [t for t in self.tests() if t.get("id") != rec["id"]]
+            self.db.settings.set(TESTS_KEY, [rec, *tests][:KEEP_TESTS], rec["actor"])
+
+    async def _restore_test(self, trigger: str, actor: str) -> dict[str, Any]:
+        db = self.db
+        tests = await db.run(self.tests)
+        rec: dict[str, Any] = {
+            "id": max((t.get("id", 0) for t in tests), default=0) + 1,
+            "startedAt": datetime.now(UTC).isoformat(timespec="seconds"), "finishedAt": None,
+            "trigger": trigger, "actor": actor, "outcome": "running", "destinations": [],
+            "error": None,
+        }
+        try:
+            dests = self.destinations()
+            rec["destinations"] = [{
+                "kind": d.kind, "bucket": d.bucket, "key": None, "outcome": "running",
+                "error": None, "checkedAt": None, "schemaVersion": None, "tables": None}
+                for d in dests]
+            # under DATA_DIR (0700): the archive holds the database and .env
+            data_dir = Path(self.app.state.settings.data_dir)
+            await asyncio.to_thread(data_dir.mkdir, mode=0o700, parents=True, exist_ok=True)
+            for dest, entry in zip(dests, rec["destinations"], strict=True):
+                await _test_one(dest, entry, data_dir)
+        except asyncio.CancelledError:
+            _close_open(rec, "Stopped by a shutdown.")
+            raise
+        except Exception as e:  # noqa: BLE001  every failure is recorded and audited
+            _close_open(rec, describe(e))
+            log.warning("restore test failed: %s", describe(e))
+        finally:
+            self.testing = False
+            rec["finishedAt"] = datetime.now(UTC).isoformat(timespec="seconds")
+            _settle(rec)
+            with contextlib.suppress(Exception):
+                await db.run(self._save_test, rec)
+        await self._audit_test(rec)
+        if rec["outcome"] != "ok":
+            await alerts.send_alert(self.app, "restore_test_failed", *restore_alert(rec))
+        return rec
+
+    async def _audit_test(self, rec: dict[str, Any]) -> None:
+        db = self.db
+        try:
+            for e in rec["destinations"]:
+                ok = e["outcome"] == "ok"
+                await db.run(db.audit.add, rec["actor"],
+                             "backup.restore_test" if ok else "backup.restore_test_failed",
+                             "backup", e["bucket"] or "-", {
+                                 "trigger": rec["trigger"], "destination": e["kind"],
+                                 "key": e["key"], "error": e["error"],
+                                 "schemaVersion": e["schemaVersion"],
+                                 "rows": sum((e["tables"] or {}).values()) if ok else None})
+        except Exception:  # noqa: BLE001  the test itself is already recorded
+            log.exception("could not write the audit entries of restore test %s", rec["id"])
+
+    def restore_test_due(self) -> bool:
+        """After a successful scheduled backup: the newest test failed, or it is at least
+        `restoreTestDays` calendar days old (0 = never automatically)."""
+        days = self.settings()["restoreTestDays"]
+        if not days:
+            return False
+        tests = self.tests()
+        if not tests or tests[0].get("outcome") != "ok":
+            return True
+        last = local_time(tests[0].get("finishedAt") or tests[0].get("startedAt"))
+        return last is None or (self.now().date() - last.date()).days >= days
+
+    def next_restore_test(self) -> datetime | None:
+        """The scheduled backup after which the next automatic test runs (if it succeeds)."""
+        s = self.settings()
+        if not self.bucket or not s["restoreTestDays"]:
+            return None
+        base = max(self.now(), self._floor)
+        tests = self.tests()
+        if tests and tests[0].get("outcome") == "ok":
+            last = local_time(tests[0].get("finishedAt") or tests[0].get("startedAt"))
+            if last is not None:
+                due = datetime.combine(last.date() + timedelta(days=s["restoreTestDays"]),
+                                       datetime.min.time())
+                base = max(base, due - timedelta(microseconds=1))
+        return next_run(base, s["time"])
+
+    # -- no backup for too long ----------------------------------------------------------
+
+    async def check_stale(self, since_start: datetime) -> bool:
+        """Email the alert contacts when no backup succeeded for more than 48 hours (counted
+        from the last success, else from the oldest kept run or this process's start,
+        `since_start`), at most once per 24 hours. True when an alert went out."""
+        db, now = self.db, self.now()
+        runs = await db.run(self.runs)
+        good = next((r for r in runs if r.get("outcome") == "ok"), None)
+        if good:
+            since = local_time(good.get("finishedAt") or good.get("startedAt"))
+        else:
+            times = [t for r in runs if (t := local_time(r.get("startedAt")))]
+            since = min([since_start, *times])
+        if since is None or now - since <= STALE_AFTER:
+            return False
+        last = local_time(((await db.run(db.settings.get, STALE_KEY)) or {}).get("at"))
+        if last is not None and now - last < STALE_REPEAT:
+            return False
+        await db.run(db.settings.set, STALE_KEY,
+                     {"at": now.astimezone().isoformat(timespec="seconds"),
+                      "since": since.astimezone().isoformat(timespec="seconds")}, "system")
+        hours = int((now - since).total_seconds() // 3600)
+        what = (f"The last successful backup finished {since:%Y-%m-%d %H:%M} (server time)"
+                if good else "No backup run succeeded since "
+                             f"{since:%Y-%m-%d %H:%M} (server time)")
+        last_run = runs[0] if runs else None
+        detail = "No backup run is recorded."
+        if last_run:
+            detail = (f"The last run, started {last_run.get('startedAt')}, ended "
+                      f"{last_run.get('outcome')}"
+                      + (f": {last_run['error']}" if last_run.get("error") else "."))
+        await alerts.send_alert(
+            self.app, "backup_stale", f"No successful backup for {hours} hours",
+            f"{what}, {hours} hours ago, although backups are on (bucket {self.bucket}).\n\n"
+            f"{detail}\n\nCheck the Backup tab of the administration page and the server log. "
+            "This reminder is sent at most once a day until a backup succeeds.")
+        return True
 
     async def apply_retention(self) -> None:
         """Lengthen the lock and lifecycle of every destination's bucket. Raises with every
@@ -843,6 +1131,10 @@ class BackupService:
             "lastRun": runs[0] if runs else None,
             "lastSuccess": next((r for r in runs if r.get("outcome") == "ok"), None),
             "runs": runs,
+            "testing": self.testing,
+            "restoreTests": await self.db.run(self.tests),
+            "nextRestoreTest": (t.isoformat(timespec="minutes")
+                                if (t := await self.db.run(self.next_restore_test)) else None),
         }
 
     def note_settings_changed(self) -> None:
@@ -852,24 +1144,36 @@ class BackupService:
         return next_run(max(self.now(), self._floor), self.settings()["time"])
 
     async def schedule_loop(self) -> None:
-        """Back up daily at the configured time; re-reads the settings every `TICK`."""
+        """Back up daily at the configured time; re-reads the settings every `TICK`. After a
+        successful run, the automatic restore test when it is due; every tick, the check
+        for no successful backup in 48 hours."""
         if not self.bucket:  # the lifespan logged the suggestion
             return
-        after = self.now()
+        after = started = self.now()
         while True:
             target = None
             try:
+                try:
+                    await self.check_stale(started)
+                except Exception:  # noqa: BLE001  never in the way of the backup itself
+                    log.exception("backup stale check")
                 after = max(after, self._floor)
                 target = next_run(after, self.settings()["time"])
                 wait = (target - self.now()).total_seconds()
                 if wait > 0:
                     await self.sleep(min(wait, TICK))
                     continue
+                rec = None
                 try:
-                    await self.run("schedule", "system")
+                    rec = await self.run("schedule", "system")
                 except AlreadyRunning:
                     pass
                 after = max(self.now(), target)
+                if rec and rec["outcome"] == "ok" and await self.db.run(self.restore_test_due):
+                    try:
+                        await self.restore_test("schedule", "system")
+                    except (AlreadyRunning, BackupError):
+                        pass
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -907,6 +1211,7 @@ class SettingsBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     time: StrictStr | None = None
     retentionDays: StrictInt | None = None
+    restoreTestDays: StrictInt | None = None
 
 
 @router.put("/settings")
@@ -923,6 +1228,10 @@ async def put_settings(body: SettingsBody, admin: Admin, db: Db, svc: Svc):
             errors.append({"field": "retentionDays", "message": (
                 f"Retention can only be lengthened (it is {before['retentionDays']} days): "
                 "backups already written stay locked for their period.")})
+    if body.restoreTestDays is not None and not 0 <= body.restoreTestDays <= MAX_TEST_DAYS:
+        errors.append({"field": "restoreTestDays", "message": (
+            f"Enter a whole number of days from 0 to {MAX_TEST_DAYS} (0 = no automatic "
+            "restore test).")})
     if errors:
         return JSONResponse(status_code=422,
                             content={"detail": errors[0]["message"], "errors": errors})
@@ -931,6 +1240,8 @@ async def put_settings(body: SettingsBody, admin: Admin, db: Db, svc: Svc):
         after["time"] = body.time
     if body.retentionDays is not None:
         after["retentionDays"] = body.retentionDays
+    if body.restoreTestDays is not None:
+        after["restoreTestDays"] = body.restoreTestDays
     out: dict[str, Any] = {"settings": after}
     if after != before:
         await db.run(_save_settings, db, after, admin.username)
@@ -954,6 +1265,17 @@ async def run_now(admin: Admin, svc: Svc):
         return await svc.run("manual", admin.username)
     except AlreadyRunning:
         raise HTTPException(409, "A backup is running already.") from None
+
+
+@router.post("/restore-test")
+async def restore_test_now(admin: Admin, svc: Svc):
+    """Restore-test the newest archive in every destination now (nothing live is touched)."""
+    if not svc.bucket:
+        raise HTTPException(409, "Backups are off: set BACKUP_BUCKET in .env first.")
+    try:
+        return await svc.restore_test("manual", admin.username)
+    except AlreadyRunning as e:
+        raise HTTPException(409, str(e)) from None
 
 
 # -- restore (command line) -------------------------------------------------------------------
@@ -1084,13 +1406,24 @@ async def find_aws_bucket(cloud) -> str:
     return names[0]
 
 
+def check_backup_bucket(name: str, source: str | None) -> None:
+    """`--backup-bucket NAME`: an on-premises bucket name (DNS rules). Raises BackupError."""
+    if source == "cloud":
+        raise BackupError("--backup-bucket names an on-premises bucket; with --from cloud "
+                          "use --aws-bucket NAME.")
+    if errors := check_dns_name(name):
+        raise BackupError(f"--backup-bucket {name[:63]!r}: {' '.join(errors)}")
+
+
 async def restore(settings: Settings, which: str, *, force: bool = False,
                   source: str | None = None, aws_bucket: str | None = None,
+                  backup_bucket: str | None = None,
                   client=None, cloud_admin=None,
                   factory: Callable[..., Any] = default_factory,
                   out: Callable[[str], None] = print) -> dict[str, Any]:
     """Download, verify and install a backup. Raises BackupError with a clear message.
-    `source` onprem|cloud; None = on premises."""
+    `source` onprem|cloud; None = on premises. `backup_bucket` reads another on-premises
+    bucket than BACKUP_BUCKET (e.g. the one used before it was renamed)."""
     from .cloud import CloudAdmin
     from .credentials import EndpointResolver
     from .croit import CroitClient
@@ -1098,10 +1431,13 @@ async def restore(settings: Settings, which: str, *, force: bool = False,
 
     if source not in (None, *SOURCES):
         raise BackupError("--from must be onprem or cloud.")
+    if backup_bucket is not None:
+        check_backup_bucket(backup_bucket, source)
     data_dir = Path(settings.data_dir)
     source = source or "onprem"
-    if source == "onprem" and not settings.backup_bucket:
-        raise BackupError("BACKUP_BUCKET is not set in .env.")
+    if source == "onprem" and not (backup_bucket or settings.backup_bucket):
+        raise BackupError("BACKUP_BUCKET is not set in .env (or name the bucket with "
+                          "--backup-bucket NAME).")
     if source == "cloud" and cloud_admin is None:
         try:
             cloud_admin = CloudAdmin(settings)
@@ -1126,7 +1462,8 @@ async def restore(settings: Settings, which: str, *, force: bool = False,
             dest = AwsDestination(cloud_admin, bucket)
         else:
             dest = OnPremDestination(client, settings,
-                                     EndpointResolver(client, settings, time.time), factory)
+                                     EndpointResolver(client, settings, time.time), factory,
+                                     bucket=backup_bucket)
         bucket = dest.bucket
         where = f"{bucket} ({'AWS' if source == 'cloud' else 'on premises'})"
         key = which
@@ -1192,7 +1529,7 @@ async def restore(settings: Settings, which: str, *, force: bool = False,
 
 
 USAGE = ("usage: python3 app.py --restore-backup <object key|latest> [--from onprem|cloud] "
-         "[--aws-bucket NAME] [--force]")
+         "[--aws-bucket NAME] [--backup-bucket NAME] [--force]")
 
 
 def _option(args: list[str], name: str) -> str | None:
@@ -1207,7 +1544,7 @@ def _option(args: list[str], name: str) -> str | None:
 
 def restore_main(argv: list[str]) -> int:
     """`app.py --restore-backup <object key|latest> [--from onprem|cloud] [--aws-bucket NAME]
-    [--force]`."""
+    [--backup-bucket NAME] [--force]`."""
     from .config import load_settings
 
     args = list(argv)
@@ -1216,16 +1553,23 @@ def restore_main(argv: list[str]) -> int:
         which = _option(args, "--restore-backup")
         source = _option(args, "--from")
         aws_bucket = _option(args, "--aws-bucket")
+        backup_bucket = _option(args, "--backup-bucket")
     except ValueError:
         print(USAGE)
         return 2
     if which is None or source not in (None, *SOURCES):
         print(USAGE)
         return 2
+    if backup_bucket is not None:
+        try:
+            check_backup_bucket(backup_bucket, source)
+        except BackupError as e:
+            print(f"{e}\n{USAGE}")
+            return 2
     settings = load_settings()
     try:
         asyncio.run(restore(settings, which, force=force, source=source,
-                            aws_bucket=aws_bucket))
+                            aws_bucket=aws_bucket, backup_bucket=backup_bucket))
     except BackupError as e:
         print(f"Restore failed: {e}")
         return 1
